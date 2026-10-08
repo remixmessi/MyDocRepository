@@ -1,0 +1,11 @@
+import {Fragment,type Node as PMNode} from 'prosemirror-model';
+import {AllSelection,NodeSelection,TextSelection,type EditorState} from 'prosemirror-state';
+export interface DocumentBlock {node:PMNode;from:number;to:number;index:number}
+export function documentBlocks(doc:PMNode):DocumentBlock[]{const blocks:DocumentBlock[]=[];doc.forEach((node,from,index)=>blocks.push({node,from,to:from+node.nodeSize,index}));return blocks;}
+export function selectedBlocks(state:EditorState,index:number){const blocks=documentBlocks(state.doc),selection=state.selection;if(selection.empty)return {start:index,end:index+1};const chosen=blocks.filter(b=>selection.from<b.to&&selection.to>b.from);if(chosen.length>1&&chosen.some(b=>b.index===index))return {start:chosen[0].index,end:chosen.at(-1)!.index+1};return {start:index,end:index+1};}
+/** Slot is a boundary in the original document, before deleting the source. */
+export function reorderBlocks(state:EditorState,start:number,end:number,slot:number){const blocks=documentBlocks(state.doc);if(![start,end,slot].every(Number.isInteger)||start<0||end<=start||end>blocks.length||slot<0||slot>blocks.length||slot>=start&&slot<=end)return null;const from=blocks[start].from,to=blocks[end-1].to,size=to-from,target=slot===blocks.length?state.doc.content.size:blocks[slot].from,destination=target>to?target-size:target;
+ const relocate=(position:number,assoc=1)=>{if(position>from&&position<to||position===from&&assoc>0||position===to&&assoc<0)return destination+position-from;if(target<from&&position>=target&&position<=from)return position+size;if(target>to&&position>=to&&position<=target)return position-size;return position;};
+ const tr=state.tr.delete(from,to).insert(destination,Fragment.fromArray(blocks.slice(start,end).map(b=>b.node)));const selection=state.selection;
+ if(selection instanceof AllSelection)tr.setSelection(new AllSelection(tr.doc));else if(selection instanceof NodeSelection){const pos=relocate(selection.from);if(tr.doc.nodeAt(pos)&&NodeSelection.isSelectable(tr.doc.nodeAt(pos)!))tr.setSelection(NodeSelection.create(tr.doc,pos));}else if(selection instanceof TextSelection){tr.setSelection(TextSelection.between(tr.doc.resolve(relocate(selection.anchor,selection.anchor===selection.to?-1:1)),tr.doc.resolve(relocate(selection.head,selection.head===selection.to?-1:1))));}
+ return {tr,relocate,destination};}

@@ -1,0 +1,15 @@
+import {addMindNode,removeMindNode,rebuildMindmap,layoutMindmap,visibleMindNode,toggleMindNode,reparentMindNode,mindDescendants,type Mindmap,type MindDirection} from './mindmap';
+import {fills} from './model';
+interface Props {map:Mindmap;nodeId?:string;selectNode:(id:string)=>void;commit:(map:Mindmap)=>void;perform:(action:()=>void)=>void}
+export function MindmapProperties({map,nodeId,selectNode,commit,perform}:Props){const boxes=layoutMindmap(map.nodes,map.direction).boxes;const node=map.nodes.find(n=>n.id===visibleMindNode(map,nodeId))!;const hidden=boxes.find(n=>n.id===node.id)!.descendants;const excluded=mindDescendants(map,node.id);
+  const add=(sibling:boolean)=>perform(()=>{const result=addMindNode(map,node.id,sibling);commit(result.map);selectNode(result.id);});
+  return <div className="mindmap-properties" aria-label="思维导图主题编辑">
+    <label>当前主题<select aria-label="思维导图主题" value={node.id} onChange={e=>selectNode(e.target.value)}>{map.nodes.filter(n=>boxes.some(b=>b.id===n.id)).map(n=>{let depth=0,parent=n.parent;while(parent){depth++;parent=map.nodes.find(p=>p.id===parent)?.parent;}return <option key={n.id} value={n.id}>{'　'.repeat(depth)}{n.text||'未命名主题'}</option>;})}</select></label>
+    <label>主题文字<textarea aria-label="主题文字" maxLength={200} value={node.text} onChange={e=>commit(rebuildMindmap(map,map.nodes.map(n=>n.id===node.id?{...n,text:e.target.value}:n)))}/></label>
+    <label>父主题<select aria-label="主题父级" disabled={!node.parent} value={node.parent??''} onChange={e=>perform(()=>{const next=reparentMindNode(map,node.id,e.target.value);if(next!==map)commit(next);selectNode(node.id);})}><option value="" disabled>中心主题无父级</option>{map.nodes.filter(n=>!excluded.has(n.id)).map(n=><option key={n.id} value={n.id}>{n.text||'未命名主题'}</option>)}</select></label>
+    <label>布局<select aria-label="思维导图布局" value={map.direction} onChange={e=>commit(rebuildMindmap(map,map.nodes,e.target.value as MindDirection))}><option value="right">向右展开</option><option value="left">向左展开</option><option value="both">双侧展开</option></select></label>
+    <label>分支背景<select aria-label="思维导图背景" value={map.fill} onChange={e=>commit({...map,fill:e.target.value})}>{fills.map((c,i)=><option key={c} value={c}>{['白色','浅蓝','浅黄','浅绿'][i]}</option>)}</select></label>
+    <div role="toolbar" aria-label="主题操作"><button disabled={!hidden} aria-expanded={!node.collapsed} onClick={()=>commit(toggleMindNode(map,node.id))}>{node.collapsed?'展开分支':'折叠分支'}</button><button disabled={map.nodes.length>=200} onClick={()=>add(false)}>添加子主题</button><button disabled={!node.parent||map.nodes.length>=200} onClick={()=>add(true)}>添加同级主题</button><button disabled={!node.parent} onClick={()=>perform(()=>{commit(removeMindNode(map,node.id));selectNode(node.parent!);})}>删除分支</button></div>
+    <span aria-label="导图范围">{map.width} × {map.height}</span><span>{map.nodes.length} 个主题 · {boxes.length} 个可见 · {node.collapsed&&hidden>0?`当前分支隐藏 ${hidden} 个主题 · `:''} 拖动分支到主题上更换父级；中心主题或 Alt 拖动移动整张导图 · Tab 添加子主题 / Enter 添加同级主题（画布聚焦时） · 删除分支包含其后代</span>
+  </div>;
+}

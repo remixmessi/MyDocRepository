@@ -1,0 +1,30 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.yarn/
+*.tsbuildinfo
+
+# 系统文件
+.DS_Store
+
+# 测试代码、配置与验证脚本
+/tests/
+/playwright.config.ts
+/vitest.config.ts
+/scripts/benchmark-whiteboard.mjs
+
+# 验证截图、报告与临时文件
+/artifacts/
+/tmp/
+playwright-report/
+test-results/
+coverage/
+.nyc_output/
+
+# 本地数据库
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
+!docs/
+!docs/实现方案.md
+!docs/TODO-功能清单.md

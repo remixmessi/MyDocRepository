@@ -1,0 +1,31 @@
+import type MarkdownIt from 'markdown-it';
+import type {NodeSpec} from 'prosemirror-model';
+import type {MarkdownSerializerState} from 'prosemirror-markdown';
+import type {Node} from 'prosemirror-model';
+export const calloutKinds=['note','tip','important','warning','caution'] as const;
+export const calloutLabels={note:'信息',tip:'提示',important:'重要',warning:'警告',caution:'注意'};
+export const expressionLimit=(type:string)=>type==='mermaid'?20000:10000;
+export function validInlineSource(source:string){const slashes=/\\+$/.exec(source)?.[0].length??0;return !!source&&source.trim()===source&&!/[\n\r]/.test(source)&&!/(^|[^\\])(?:\\\\)*\$/.test(source)&&slashes%2===0;}
+export const validExpression=(type:string,attrs:Record<string,unknown>)=>type==='callout'?calloutKinds.includes(attrs.kind as typeof calloutKinds[number]):typeof attrs.source==='string'&&attrs.source.length<=expressionLimit(type)&&(type!=='math_inline'||validInlineSource(attrs.source));
+const atom=(inline:boolean):NodeSpec=>({group:inline?'inline':'block',inline,atom:true,attrs:{source:{default:''}},parseDOM:[{tag:`${inline?'span':'div'}[data-expression]`,getAttrs:el=>{const e=el as HTMLElement;return e.dataset.expression===(inline?'math_inline':'math_block')&&validExpression(inline?'math_inline':'math_block',{source:e.dataset.source})?{source:e.dataset.source}:false;}}],toDOM:node=>[inline?'span':'div',{'data-expression':inline?'math_inline':'math_block','data-source':node.attrs.source},node.attrs.source]});
+export const expressionNodes:Record<string,NodeSpec>={
+ callout:{group:'block',content:'block+',defining:true,attrs:{kind:{default:'note'}},parseDOM:[{tag:'aside[data-callout]',getAttrs:el=>({kind:calloutKinds.includes((el as HTMLElement).dataset.callout as 'note')?(el as HTMLElement).dataset.callout:'note'})}],toDOM:node=>['aside',{'data-callout':node.attrs.kind,class:'doc-callout',role:'note','aria-label':calloutLabels[node.attrs.kind as 'note'],'data-callout-label':calloutLabels[node.attrs.kind as 'note']},0]},
+ math_inline:atom(true),math_block:atom(false),
+ mermaid:{...atom(false),parseDOM:[{tag:'div[data-expression="mermaid"]',getAttrs:el=>{const source=(el as HTMLElement).dataset.source||'';return validExpression('mermaid',{source})?{source}:false;}}],toDOM:node=>['div',{'data-expression':'mermaid','data-source':node.attrs.source},node.attrs.source]},
+};
+export function expressionMarkdown(md:ReturnType<typeof MarkdownIt>){
+ md.inline.ruler.before('escape','math-inline',(state,silent)=>{const start=state.pos;if(state.src[start]!=='$'||state.src[start+1]==='$'||/\s/.test(state.src[start+1]||''))return false;let end=start+1;for(;end<state.posMax;end++){if(state.src[end]==='\n')return false;if(state.src[end]==='\\'){end++;continue;}if(state.src[end]==='$')break;}if(end>=state.posMax||end===start+1||/\s/.test(state.src[end-1])||/\d/.test(state.src[end+1]||''))return false;const source=state.src.slice(start+1,end);if(source.length>10000)return false;if(!silent){const token=state.push('math_inline','',0);token.meta={source};}state.pos=end+1;return true;});
+ md.block.ruler.before('fence','math-block',(state,start,end,silent)=>{const line=state.src.slice(state.bMarks[start]+state.tShift[start],state.eMarks[start]);if(state.sCount[start]>=4)return false;const single=/^\$\$(.*)\$\$$/.exec(line.trim());if(single){if(single[1].length>10000)return false;if(!silent){const token=state.push('math_block','',0);token.block=true;token.meta={source:single[1].trim()};token.map=[start,start+1];}state.line=start+1;return true;}if(line.trim()!=='$$')return false;let close=start+1;for(;close<end;close++)if(state.src.slice(state.bMarks[close]+state.tShift[close],state.eMarks[close]).trim()==='$$')break;if(close===end)return false;const source=state.getLines(start+1,close,state.blkIndent,false).replace(/\n$/,'');if(source.length>10000)return false;if(!silent){const token=state.push('math_block','',0);token.block=true;token.meta={source};token.map=[start,close+1];}state.line=close+1;return true;},{alt:['paragraph','reference','blockquote','list']});
+ md.core.ruler.after('inline','expression-blocks',state=>{
+  for(let i=0;i<state.tokens.length;i++){const token=state.tokens[i];if(token.type==='fence'&&['mermaid','math','latex'].includes(token.info.trim())&&token.content.length<=(token.info.trim()==='mermaid'?20001:10001)){token.type=token.info.trim()==='mermaid'?'mermaid':'math_block';token.meta={source:token.content.replace(/\n$/,'')};continue;}
+   if(token.type!=='blockquote_open')continue;const inline=state.tokens[i+2];if(state.tokens[i+1]?.type!=='paragraph_open'||inline?.type!=='inline')continue;const match=/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\n|$)/i.exec(inline.content);if(!match)continue;let depth=1,j=i+1;for(;j<state.tokens.length;j++){if(state.tokens[j].type==='blockquote_open')depth++;if(state.tokens[j].type==='blockquote_close'&&!--depth)break;}if(j>=state.tokens.length)continue;token.type='callout_open';token.attrSet('kind',match[1].toLowerCase());state.tokens[j].type='callout_close';inline.content=inline.content.slice(match[0].length);const children=inline.children??[];if(children[0]?.type==='text'){children[0].content=children[0].content.slice(match[0].trimEnd().length);if(!children[0].content)children.shift();if(children.at(0)?.type==='softbreak')children.shift();}inline.children=children;if(!inline.content&&j>i+4)state.tokens.splice(i+1,3);
+  }
+ });
+}
+const fence=(source:string,language:string)=>{const runs=source.match(/`+/g)??[];const marker='`'.repeat(Math.max(3,...runs.map(r=>r.length+1)));return marker+language+'\n'+source+'\n'+marker;};
+export const expressionSerializers={
+ callout(state:MarkdownSerializerState,node:Node){state.wrapBlock('> ',null,node,()=>{state.write(`[!${String(node.attrs.kind).toUpperCase()}]\n`);state.renderContent(node);});},
+ math_inline(state:MarkdownSerializerState,node:Node){state.write('$'+node.attrs.source+'$');},
+ math_block(state:MarkdownSerializerState,node:Node){state.text(/^\$\$$/m.test(node.attrs.source)?fence(node.attrs.source,'math'):'$$\n'+node.attrs.source+'\n$$',false);state.closeBlock(node);},
+ mermaid(state:MarkdownSerializerState,node:Node){state.text(fence(node.attrs.source,'mermaid'),false);state.closeBlock(node);},
+};

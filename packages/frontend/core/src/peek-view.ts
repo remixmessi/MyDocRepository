@@ -1,0 +1,8 @@
+import {Fragment,type Node} from 'prosemirror-model';
+export interface PeekTarget { docId:string;workspaceId:string;frameId?:string }
+export function peekTarget(href:string,base:string):PeekTarget|null {
+ try{const current=new URL(base),url=new URL(href,current);if(url.origin!==current.origin||url.pathname!==current.pathname)return null;const params=new URLSearchParams(url.hash.slice(1)),docId=params.get('doc');if(!docId||params.has('block'))return null;return {docId,workspaceId:params.get('workspace')||'local',...(params.get('frame')?{frameId:params.get('frame')!}:{})};}catch{return null;}
+}
+export function peekPosition(anchor:{left:number;top:number;bottom:number},viewport:{width:number;height:number},height=360){const width=Math.min(420,Math.max(0,viewport.width-24)),maxHeight=Math.max(0,Math.min(420,viewport.height-24));height=Math.min(height,maxHeight);if(viewport.width<640)return {left:12,top:Math.max(12,viewport.height-height-12),width:Math.max(0,viewport.width-24),maxHeight};const left=Math.max(12,Math.min(anchor.left,viewport.width-width-12)),below=anchor.bottom+8;return {left,top:Math.max(12,Math.min(below+height<=viewport.height-12?below:anchor.top-height-8,viewport.height-height-12)),width,maxHeight};}
+// Remote images stay text-only until the user opens the full document.
+export function peekDocument(node:Node):Node {if(node.type.name==='image'&&!String(node.attrs.src).startsWith('asset:'))return node.type.schema.text(`[远程图片：${node.attrs.alt||'图片'}]`);if(node.isLeaf)return node;const children:Node[]=[];node.forEach(child=>children.push(peekDocument(child)));return node.copy(Fragment.fromArray(children));}

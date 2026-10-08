@@ -1,0 +1,9 @@
+{
+  "name": "@mydoc/crdt",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "yjs": "^13.6.27"
+  }
+}

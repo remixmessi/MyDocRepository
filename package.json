@@ -1,0 +1,34 @@
+{
+  "name": "my-doc-repository",
+  "private": true,
+  "packageManager": "yarn@4.9.2",
+  "workspaces": [
+    "packages/common/*",
+    "packages/editor/*",
+    "packages/frontend/core",
+    "packages/frontend/apps/*"
+  ],
+  "scripts": {
+    "dev": "yarn workspace @mydoc/web dev",
+    "build": "yarn workspace @mydoc/web build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "preview": "yarn workspace @mydoc/web preview"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/markdown-it": "^14.2.0",
+    "@types/node": "^22.15.0",
+    "@types/prismjs": "^1.26.6",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.6",
+    "@vitejs/plugin-react": "^4.4.1",
+    "fake-indexeddb": "^6.0.1",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
+  },
+  "type": "module"
+}

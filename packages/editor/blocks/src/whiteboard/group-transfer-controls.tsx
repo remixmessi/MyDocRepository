@@ -1,0 +1,4 @@
+import {useState} from 'react';
+import {groupChain} from './groups';
+import type {SurfaceElement} from './model';
+export function GroupTransferControls({elements,ids,move}:{elements:SurfaceElement[];ids:string[];move:(target?:string)=>void}){const [target,setTarget]=useState('');const groups=new Map<string,string>();for(const s of elements)for(const id of groupChain(s))groups.set(id,s.groupInfo?.find(g=>g.id===id)?.name||'未命名分组 '+id.slice(0,6));return <div className="board-control-row" aria-label="跨组移动"><label>目标分组<select aria-label="移动到分组" value={groups.has(target)?target:''} onChange={e=>setTarget(e.target.value)}><option value="">画布最外层</option>{[...groups].map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label><button disabled={!ids.length} onClick={()=>move(target||undefined)}>移动到目标分组</button><span>也可按住 Ctrl / ⌘ 拖动到另一分组的成员上；完整组保留内部层级。</span></div>;}

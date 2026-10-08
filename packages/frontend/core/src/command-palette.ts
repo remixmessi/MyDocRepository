@@ -1,0 +1,5 @@
+export interface PaletteCommand { id:string; label:string; keywords:string; disabled?:string; run:()=>void|Promise<void> }
+export function commandMatches(command:Pick<PaletteCommand,'label'|'keywords'>,query:string){const words=query.replace(/^\s*>\s*/,'').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);return words.every(word=>(command.label+' '+command.keywords).toLocaleLowerCase().includes(word));}
+export function paletteHistory(value:unknown){return Array.isArray(value)?[...new Set(value.filter((id):id is string=>typeof id==='string'&&id.length<200&&/^(doc|command):.+/.test(id)))].slice(0,20):[];}
+export function rememberPalette(value:unknown,id:string){return [id,...paletteHistory(value).filter(entry=>entry!==id)].slice(0,20);}
+export function nextPaletteIndex(disabled:boolean[],current:number,direction:1|-1){for(let step=1;step<=disabled.length;step++){const index=(current+direction*step+disabled.length*2)%disabled.length;if(!disabled[index])return index;}return current;}

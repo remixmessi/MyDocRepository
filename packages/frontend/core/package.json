@@ -1,0 +1,24 @@
+{
+  "name": "@mydoc/frontend-core",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": "./src/index.tsx",
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@mydoc/crdt": "workspace:*",
+    "@mydoc/editor-blocks": "workspace:*",
+    "@mydoc/editor-framework": "workspace:*",
+    "@mydoc/nbstore": "workspace:*",
+    "dompurify": "^3.4.16",
+    "fflate": "^0.8.3",
+    "lucide-react": "^0.468.0",
+    "minisearch": "^7.2.0",
+    "prosemirror-model": "^1.25.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18"
+  }
+}

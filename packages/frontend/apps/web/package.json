@@ -1,0 +1,17 @@
+{
+  "name": "@mydoc/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5173"
+  },
+  "dependencies": {
+    "@mydoc/frontend-core": "workspace:*",
+    "better-sqlite3": "12.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
