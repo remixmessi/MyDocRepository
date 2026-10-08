@@ -25,6 +25,7 @@ coverage/
 data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
+data/*.sqlite-journal
 !docs/
 !docs/实现方案.md
 !docs/TODO-功能清单.md

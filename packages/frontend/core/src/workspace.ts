@@ -66,7 +66,7 @@ export class LocalWorkspace {
     if(imported?.properties?.webClip&&!validWebClip(imported.properties.webClip))throw new Error('剪藏来源无效');
     if(imported?.properties?.tagIds?.some(id=>!this.organization.tags.has(id)))throw new Error('标签不存在');
     if (folderId && !this.folders.has(folderId)) throw new Error('文件夹不存在');
-    const id = crypto.randomUUID(); const item = await this.openDocument(id);
+    const id = crypto.randomUUID(); const item = await this.openDocument(id, { create: true });
     try { if(imported)writeDocument(item.store,imported.content);else if (markdown !== undefined) writeMarkdown(item.store, markdown); item.store.rename(title);
     await item.persistence.flush();
     this.doc.transact(() => this.documents.set(id, { id, title, createdAt: Date.now(), folderId, ...imported?.properties, ...(journalDate?{journalDate}:{}) }), LOCAL_ORIGIN);
@@ -82,13 +82,14 @@ export class LocalWorkspace {
     const opened = this.opened.get(id); if (opened) { try { const item = await opened; item.store.destroy(); await item.persistence.destroy(); } catch { /* failed opens dispose themselves */ } this.opened.delete(id); }
     await this.storage.remove(`doc:${id}`).catch(() => {});
   }
-  openDocument(id: string): Promise<OpenDocument> {
+  openDocument(id: string, options: { create?: boolean } = {}): Promise<OpenDocument> {
     let promise = this.opened.get(id);
     if (!promise) {
       promise = (async () => {
         const doc = new Y.Doc(); const persistence = new PersistentDocument(`doc:${id}`, doc, this.storage);
         try {
-          await persistence.open(); const store = new BlockStore(doc); store.initialize(); store.ensureNote();
+          // A freshly generated ID has no stored content to read yet.
+          await persistence.open({ load: !options.create }); const store = new BlockStore(doc); store.initialize(); store.ensureNote();
           const item = { store, persistence };
           const syncTitle = () => { const entry = this.documents.get(id); const title = store.meta.get('title') ?? '无标题文档'; if (entry && entry.title !== title) { this.doc.transact(() => this.documents.set(id, { ...entry, title }), LOCAL_ORIGIN); for (const link of this.references.backlinks(id, this.id)) void this.opened.get(link.sourceId)?.then(source => this.scheduleIndex(link.sourceId, source)); } };
           store.meta.observe(syncTitle); syncTitle(); store.doc.on('update', () => this.scheduleIndex(id, item)); return item;

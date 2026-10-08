@@ -64,9 +64,9 @@ export class PersistentDocument {
   constructor(readonly id: string, readonly doc: Y.Doc, private storage: DocumentStorage) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify() { this.listeners.forEach(listener => listener()); }
-  async open() {
+  async open(options: { load?: boolean } = {}) {
     try {
-      const update = await this.storage.load(this.id);
+      const update = options.load === false ? null : await this.storage.load(this.id);
       if (this.disposed) return;
       if (update) Y.applyUpdate(this.doc, update);
       this.doc.on('update', this.onUpdate);
