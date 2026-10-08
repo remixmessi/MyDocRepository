@@ -14,7 +14,14 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "preview": "yarn workspace @mydoc/web preview"
+    "preview": "yarn workspace @mydoc/web preview",
+    "desktop:build": "yarn build && yarn workspace @mydoc/desktop build",
+    "desktop:dev": "yarn desktop:build && yarn workspace @mydoc/desktop start",
+    "desktop:start": "yarn workspace @mydoc/desktop start",
+    "desktop:pack": "yarn desktop:build && yarn workspace @mydoc/desktop run package:dir",
+    "desktop:dist:mac": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac",
+    "desktop:dist:win": "yarn desktop:build && yarn workspace @mydoc/desktop dist:win",
+    "test:desktop": "playwright test --config playwright.desktop.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.1",
@@ -25,6 +32,9 @@
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.6",
     "@vitejs/plugin-react": "^4.4.1",
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.12",
     "fake-indexeddb": "^6.0.1",
     "typescript": "~5.8.3",
     "vite": "^6.3.5",

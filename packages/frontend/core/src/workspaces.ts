@@ -44,5 +44,6 @@ export class WorkspaceRegistry {
       this.doc.transact(() => { this.entries.set(id, { id, name: `${backup.name}（恢复）`, createdAt: Date.now() }); this.preferences.set('active', id); }, LOCAL_ORIGIN); await this.persistence.flush(); this.opened.set(id, Promise.resolve(ws)); return ws;
     } catch (error) { this.doc.transact(() => { this.entries.delete(id); this.preferences.set('active', previousActive); }, LOCAL_ORIGIN); await ws.purgeAllDocuments().catch(() => {}); await ws.assets.clear().catch(() => {}); await ws.destroy(); await this.storage.remove(`workspace:${id}`).catch(() => {}); throw error; }
   }
+  async flush() { for(const promise of this.opened.values()){const ws=await promise;if(ws.assets.saving)throw new Error('附件正在上传，请完成后再关闭。');await ws.flush();}await this.persistence.flush(); }
   async destroy() { for (const promise of this.opened.values()) { try { await (await promise).destroy(); } catch { /* failed opens are disposed */ } } await this.persistence.destroy(); this.storage.close(); this.assets.close(); }
 }

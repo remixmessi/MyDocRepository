@@ -1,0 +1,37 @@
+{
+  "appId": "com.mydoc.repository",
+  "productName": "MyDoc",
+  "directories": {
+    "output": "../../../../release/desktop"
+  },
+  "files": [
+    "dist/**/*",
+    "package.json"
+  ],
+  "asar": true,
+  "npmRebuild": false,
+  "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+  "mac": {
+    "category": "public.app-category.productivity",
+    "target": [
+      "dmg",
+      "zip"
+    ]
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false
+  }
+}

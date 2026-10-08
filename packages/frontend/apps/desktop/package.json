@@ -1,0 +1,20 @@
+{
+  "name": "@mydoc/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MyDoc local-first document and whiteboard desktop app",
+  "author": "MyDoc",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node ../../../../scripts/build-desktop.mjs",
+    "start": "electron .",
+    "dist:mac": "electron-builder --config electron-builder.json --mac",
+    "dist:win": "electron-builder --config electron-builder.json --win",
+    "package:dir": "electron-builder --config electron-builder.json --dir"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  }
+}

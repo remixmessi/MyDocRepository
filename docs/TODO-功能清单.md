@@ -96,8 +96,8 @@
 
 ### 2.1 应用目标（多平台入口）
 - [x] Web 应用（浏览器端，Vite）
-- [ ] 桌面客户端主进程（Electron main + helper）
-- [ ] 桌面客户端渲染进程
+- [~] 桌面客户端主进程（Electron 窗口／菜单／单实例／关闭保存／主进程 SQLite 完成，helper 与自动更新待扩展）
+- [x] 桌面客户端渲染进程（复用现有编辑器／白板，sandbox + contextIsolation，白名单 IPC）
 - [ ] 安卓 App（Capacitor 封装）
 - [ ] iOS App（Capacitor 封装）
 - [ ] 原生鸿蒙 App（HarmonyOS NEXT，ArkTS/ArkUI 原生开发）
@@ -151,7 +151,7 @@
 - [x] 导出（Markdown、独立 HTML、PDF 打印；正文静态预览、纸张/方向/页边距、本地文件与公式字体内嵌）
 
 ### 2.7 桌面 / 系统集成
-- [ ] 桌面 API 桥接（渲染进程 ↔ 主进程 IPC）
+- [x] 桌面 API 桥接（SQLite 存储与关闭前保存白名单 IPC，来源与请求校验）
 - [ ] 在客户端中打开 open-in-app
 - [ ] 系统字体读取 system-font-family
 - [x] 悬浮预览 peek-view（正文 @／内部链接及双向链接悬停摘要、本地图片、打开／另一侧打开、键盘与手机点击、失效／错误重试、关闭清理及明暗主题）
@@ -247,8 +247,8 @@
 
 ### 6.1 平台构建
 - [x] Web（Vite 打包）
-- [ ] 桌面 macOS（Electron + 原生模块，打包安装器）
-- [ ] 桌面 Windows（Electron + 原生模块，打包安装器）
+- [~] 桌面 macOS（Electron 基础及 arm64 打包完成；Intel 构建配置完成，签名／公证及正式发行待实现）
+- [~] 桌面 Windows（Electron 基础及 x64 NSIS 交叉打包完成，Windows 运行／安装验收与签名待完成）
 - [ ] 桌面 Linux（Electron + 原生模块）
 - [ ] iOS（Capacitor + 原生绑定，Xcode 工程）
 - [ ] Android（Capacitor + 原生绑定）
@@ -296,7 +296,7 @@
 - [x] 双向链接 + @提及 + 大纲（正文及白板笔记文档提及完成，搜索/跳转/重命名/失效/历史/Markdown/备份与双向链接共用）
 
 **阶段三（桌面 + 移动）**
-- [ ] Electron 桌面版（Mac / Win / Linux）
+- [~] Electron 桌面版（Mac / Windows 基础、SQLite IPC、运行及打包配置完成；Linux／签名／更新待扩展）
 - [ ] Capacitor 移动版（iOS / Android）
 - [ ] 原生鸿蒙版（HarmonyOS，ArkTS/ArkUI）
 - [x] 本地优先存储引擎（SQLite，项目 Web 本地服务已完成；桌面原生桥接另列）
@@ -311,3 +311,10 @@
 - [ ] AI Copilot + RAG + 联网搜索
 - [ ] 多视图数据库
 - [ ] 订阅付费 + 管理后台
+
+### 工作台 UI 优化
+
+- [x] 统一侧栏、标签栏、编辑工具和弹窗视觉层级。
+- [x] 桌面侧栏列表滚动、短屏入口可达与长标题省略。
+- [x] 手机导航折叠与文档辅助工具折叠。
+- [x] 浅色／深色／手机截图与相关操作回归。

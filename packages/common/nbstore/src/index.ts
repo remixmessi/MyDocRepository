@@ -107,3 +107,5 @@ export class PersistentDocument {
 export { IndexedDBAssetStorage, WorkspaceAssets, MAX_ASSET_SIZE, imageMime } from './assets';
 export type { AssetStorage, AssetRecord } from './assets';
 export {SQLiteStorage,SQLiteAssetStorage,projectPreferences,initializeProjectStorage} from './sqlite';
+
+export type {DesktopBridge} from './desktop';

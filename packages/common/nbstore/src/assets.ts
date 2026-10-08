@@ -34,6 +34,7 @@ export function imageMime(bytes: Uint8Array): string | null {
 export class WorkspaceAssets {
   private pending = new Set<Promise<AssetRecord>>(); private cleared = false;
   constructor(private storage: AssetStorage, readonly workspace: string) {}
+  get saving() { return this.pending.size>0; }
   get(id: string) { return this.storage.get(this.workspace, id); }
   put(asset: AssetRecord) { return this.storage.put(this.workspace, asset); }
   remove(id:string) { return this.storage.remove?.(this.workspace,id)??Promise.resolve(); }

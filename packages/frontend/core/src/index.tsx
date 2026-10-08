@@ -1,3 +1,4 @@
+import {projectPreferences} from '@mydoc/nbstore';
 import {DocumentPeekScope} from './peek-view-ui';
 import {WebClipperDialog} from './web-clipper-ui';
 import {JournalDialog} from './journal-ui';
@@ -24,6 +25,7 @@ import { Workbench } from './workbench-ui';
 import { activeTab, closeTab, navigateHistory, changeTabMode, emptyWorkbench, mergePanes, openTab, reconcileWorkbench, restoreWorkbench, type PaneId, type WorkbenchTab } from './workbench';
 import { TrashDialog } from './trash-ui';
 import './styles.css';
+import './workbench-styles.css';
 
 function useChanges(subscribe: (listener: () => void) => () => void) {
   const [, rerender] = useReducer(value => value + 1, 0);
@@ -40,7 +42,7 @@ function DocumentEditor({ item, meta, workspace, onDelete, busy, name, onMove, o
   loadWorkspace:(id:string)=>Promise<LocalWorkspace>;onCommandHandled:()=>void; commandRequest?: {kind:'find'|'export'|'markdown';tick:number}; onSaveTemplate: () => void; item: OpenDocument; meta: DocumentMeta; workspace: LocalWorkspace; onDelete: () => void; busy: boolean; name: string; onMove: (folderId: string) => void; onNavigate: (id: string, workspaceId: string, frameId?:string, other?:boolean) => void;boardRequest?:{frameId:string;tick:number}; tab: WorkbenchTab; active: boolean; onMode: (mode: 'page'|'board') => void;
 }) {
   const { store } = item;
-  const [settingsOpen,setSettingsOpen]=useState(false);const settings=readEditorSettings(workspace.uiPreferences.get('editorSettings'));
+  const [settingsOpen,setSettingsOpen]=useState(false); const [toolsOpen,setToolsOpen]=useState(false);const settings=readEditorSettings(workspace.uiPreferences.get('editorSettings'));
   useChanges(workspace.subscribe);
   const saveSettings=async(value:typeof settings)=>{const previous=workspace.uiPreferences.get('editorSettings');if(workspace.persistence.state==='error')await workspace.persistence.retry();workspace.uiPreferences.set('editorSettings',value);try{await workspace.persistence.flush();}catch(error){if(previous===undefined)workspace.uiPreferences.delete('editorSettings');else workspace.uiPreferences.set('editorSettings',previous);throw error;}};
   const [, refresh] = useReducer(value => value + 1, 0);
@@ -50,7 +52,7 @@ function DocumentEditor({ item, meta, workspace, onDelete, busy, name, onMove, o
   const outline = documentOutline(readDocument(store), (id, ws) => ws === workspace.id ? workspace.documents.get(id)?.title : undefined);
   return <DocumentPeekScope workspace={workspace} loadWorkspace={loadWorkspace} onNavigate={onNavigate} active={active} mode={mode}>
     {settingsOpen&&<EditorSettingsDialog initial={settings} onSave={saveSettings} onClose={()=>{setSettingsOpen(false);requestAnimationFrame(()=>{if(active)(document.getElementById(titleId)?.closest('article')?.querySelector('.document-editor:not([hidden]) .ProseMirror') as HTMLElement|null)?.focus();});}}/>}
-    <header className="editor-header"><span>{name} / 文档</span><div className="header-actions"><div className="editor-mode" role="group" aria-label="编辑模式"><button aria-pressed={mode === 'page'} onClick={() => setMode('page')}>页面</button><button aria-pressed={mode === 'board'} onClick={() => { readDocument(store); store.history.stopCapturing(); setMode('board'); }}>白板</button></div><label className="sr-only" htmlFor={`${titleId}-reference`}>引用打开位置</label><select id={`${titleId}-reference`} aria-label="引用打开位置" value={referenceSide} onChange={event=>setReferenceSide(event.target.value)}><option value="tab">引用打开新标签</option><option value="other">引用在另一侧打开</option></select><button disabled={busy || mode === 'board'} onClick={() => setReferenceRequest(value => value + 1)}>插入引用</button><button disabled={mode === 'board'} aria-expanded={outlineOpen} onClick={() => setOutlineOpen(value => !value)}>大纲</button><FolderSelect workspace={workspace} value={meta.folderId} label="文档所在文件夹" disabled={busy} onChange={onMove} /><DocumentOrganizationControls workspace={workspace} meta={meta} busy={busy} /><button disabled={busy} onClick={onSaveTemplate}>保存为模板</button><SaveStatus persistence={item.persistence} /><button aria-label="撤销" disabled={!history.canUndo()} onClick={() => { history.undo(); refresh(); }}><Undo2 size={17} /></button><button aria-label="重做" disabled={!history.canRedo()} onClick={() => { history.redo(); refresh(); }}><Redo2 size={17} /></button><button aria-label="删除文档" disabled={busy} onClick={onDelete}><Trash2 size={17} /></button></div></header>
+    <header className="editor-header"><span>{name} / 文档</span><div className="header-actions"><div className="editor-mode" role="group" aria-label="编辑模式"><button aria-pressed={mode === 'page'} onClick={() => setMode('page')}>页面</button><button aria-pressed={mode === 'board'} onClick={() => { readDocument(store); store.history.stopCapturing(); setMode('board'); }}>白板</button></div><button className="editor-tools-toggle" aria-expanded={toolsOpen} aria-controls={`${titleId}-tools`} onClick={()=>setToolsOpen(value=>!value)}>文档工具</button><div id={`${titleId}-tools`} className={`editor-secondary ${toolsOpen ? 'tools-open' : ''}`}><label className="sr-only" htmlFor={`${titleId}-reference`}>引用打开位置</label><select id={`${titleId}-reference`} aria-label="引用打开位置" value={referenceSide} onChange={event=>setReferenceSide(event.target.value)}><option value="tab">引用打开新标签</option><option value="other">引用在另一侧打开</option></select><button disabled={busy || mode === 'board'} onClick={() => setReferenceRequest(value => value + 1)}>插入引用</button><button disabled={mode === 'board'} aria-expanded={outlineOpen} onClick={() => setOutlineOpen(value => !value)}>大纲</button><FolderSelect workspace={workspace} value={meta.folderId} label="文档所在文件夹" disabled={busy} onChange={onMove} /><DocumentOrganizationControls workspace={workspace} meta={meta} busy={busy} /><button disabled={busy} onClick={onSaveTemplate}>保存为模板</button></div><SaveStatus persistence={item.persistence} /><button aria-label="撤销" disabled={!history.canUndo()} onClick={() => { history.undo(); refresh(); }}><Undo2 size={17} /></button><button aria-label="重做" disabled={!history.canRedo()} onClick={() => { history.redo(); refresh(); }}><Redo2 size={17} /></button><button aria-label="删除文档" disabled={busy} onClick={onDelete}><Trash2 size={17} /></button></div></header>
     {mode === 'board' ? <><div className="whiteboard-title"><label className="sr-only" htmlFor={titleId}>文档标题</label><input id={titleId} aria-label="文档标题" value={store.meta.get('title') ?? meta.title} disabled={busy} onChange={event => workspace.rename(meta.id,event.target.value,store)} /></div><Whiteboard assets={workspace.assets} frameRequest={boardRequest} store={store} documentId={meta.id} workspaceId={workspace.id} documents={workspace.list()} embedSource={workspace.embedSource} onNavigate={navigate} /><Backlinks workspace={workspace} documentId={meta.id} onNavigate={navigate} /></> : <div className="document-layout"><article className="document" style={{'--document-width':settings.width==='full'?'none':settings.width==='wide'?'1280px':'1000px','--document-font-size':`${settings.fontSize}px`,'--document-line-height':settings.lineHeight} as CSSProperties}>
       <label className="sr-only" htmlFor={titleId}>文档标题</label>
       <input id={titleId} className="title-input" disabled={busy} value={store.meta.get('title') ?? meta.title} placeholder="无标题文档" onChange={event => workspace.rename(meta.id, event.target.value, store)} />
@@ -82,9 +84,17 @@ export function App() {
     void manager.open().then(async () => { const params = new URLSearchParams(location.hash.slice(1)); const requested = params.get('workspace'); let ws = await manager.select(manager.list().some(entry => entry.id === requested) ? requested! : manager.activeId);
       if (!requested && params.get('doc') && !ws.documents.has(params.get('doc')!) && manager.entries.has('local')) { const legacy = await manager.get('local'); if (legacy.documents.has(params.get('doc')!)) ws = await manager.select('local'); }
       if (active) { setRegistry(manager); activate(ws, params.get('doc')); setError(''); }
-    }).catch(() => { if (active) setError('无法打开本地数据库。请检查浏览器是否允许存储数据。'); });
+    }).catch(() => { if (active) setError('无法打开本地数据库，请检查存储服务后重试。'); });
     return () => { active = false; void manager.destroy(); };
   }, [retry]);
+  useEffect(()=>window.mydocDesktop?.onPrepareClose(async()=>{
+    if(busy)throw new Error('正在处理导入或其他操作，请完成后再关闭。');
+    if(!registry)throw new Error('工作区尚未打开，请重试打开后再关闭。');
+    document.activeElement instanceof HTMLElement&&document.activeElement.blur();
+    window.dispatchEvent(new Event('mydoc-before-close'));
+    await registry.flush();
+    await projectPreferences.flush();
+  }),[registry,busy]);
   useEffect(() => registry?.subscribe(refresh), [registry]); useEffect(() => workspace?.subscribe(refresh), [workspace]);
   const run = async (action: () => Promise<void>) => { setBusy(true); setError(''); setNotice(''); try { await action(); } catch (error) { setError(error instanceof Error ? error.message : '操作失败，请重试'); } finally { setBusy(false); } };
   useEffect(() => { const navigate = () => { if (!registry || !workspace) return; const params = new URLSearchParams(location.hash.slice(1)); const id = params.get('doc'); const ws = params.get('workspace');

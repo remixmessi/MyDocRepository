@@ -29,3 +29,6 @@ data/*.sqlite-journal
 !docs/
 !docs/实现方案.md
 !docs/TODO-功能清单.md
+
+# 桌面发布产物
+/release/

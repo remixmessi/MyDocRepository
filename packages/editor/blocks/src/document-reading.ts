@@ -137,7 +137,7 @@ export function documentReading(store: BlockStore, workspaceId: string, document
     root.addEventListener('wheel', intent, { passive: true });
     root.addEventListener('touchstart', intent, { passive: true });
     root.addEventListener('pointerdown', intent); root.addEventListener('keydown', intent);
-    window.addEventListener('resize', resize); window.addEventListener('pagehide', save);
+    window.addEventListener('resize', resize); window.addEventListener('pagehide', save);window.addEventListener('mydoc-before-close',save);
     document.addEventListener('visibilitychange', save);
     schedule();
     return {
@@ -152,7 +152,7 @@ export function documentReading(store: BlockStore, workspaceId: string, document
         root.removeEventListener('mydoc-reading-jump', jump);
         root.removeEventListener('wheel', intent); root.removeEventListener('touchstart', intent);
         root.removeEventListener('pointerdown', intent); root.removeEventListener('keydown', intent);
-        window.removeEventListener('resize', resize); window.removeEventListener('pagehide', save);
+        window.removeEventListener('resize', resize); window.removeEventListener('pagehide', save);window.removeEventListener('mydoc-before-close',save);
         document.removeEventListener('visibilitychange', save);
         root.style.overflowAnchor = rootOverflow; view.dom.style.overflowAnchor = bodyOverflow;
       },

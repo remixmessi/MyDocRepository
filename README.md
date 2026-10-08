@@ -290,3 +290,41 @@ corepack yarn test:e2e
 SQLite 运行时可能产生同目录 `.sqlite-wal` 和 `.sqlite-shm` 文件。需要直接复制数据库时，先正常停止服务，再复制 `mydoc.sqlite`；运行期间可使用现有工作区 JSON 备份功能。数据库文件已加入 Git 忽略规则，构建和测试不删除正式数据。浏览器测试使用独立 `data/e2e.sqlite` 与每条测试独立 scope，`MYDOC_DB_PATH` 可为本地服务显式指定其他数据库路径。
 
 分发或复制项目给其他使用者时不要携带 `data/*.sqlite`、`data/*.sqlite-wal`、`data/*.sqlite-shm`，这些运行数据已被 Git 忽略。仅复制源代码，新使用者首次启动会创建自己的空数据库。同一个服务连接同一个数据库，当前尚无多账号数据隔离。
+
+## macOS / Windows 桌面基础
+
+```sh
+corepack yarn desktop:dev        # 构建并打开桌面应用，无需另启 Vite
+corepack yarn desktop:start      # 使用已构建的应用
+corepack yarn desktop:build      # 源码改动后重新构建 Web 页面与 Electron
+corepack yarn test:desktop       # 先 desktop:build，再运行真实 Electron 测试
+```
+
+**本机打包优先复用已安装的 Electron**，避免 electron-builder 再次从网络获取运行时。以下命令均在项目根目录执行；首次安装后若缺少 `node_modules/electron/dist`，先执行 `node node_modules/electron/install.js`，完成一次运行时下载。
+
+macOS（终端 / zsh，生成本机架构 DMG 和 ZIP）：
+
+```sh
+corepack yarn desktop:build
+corepack yarn workspace @mydoc/desktop dist:mac --config.electronDist="$PWD/node_modules/electron/dist" --publish never
+```
+
+Windows x64（PowerShell，生成 NSIS EXE）：
+
+```powershell
+corepack yarn desktop:build
+$mydocElectronRuntime = (Resolve-Path "node_modules/electron/dist").Path
+corepack yarn workspace @mydoc/desktop dist:win --config.electronDist="$mydocElectronRuntime" --publish never
+```
+
+仅重新打包、源码未改动时可跳过 `desktop:build`。本地 Electron 必须与目标平台、CPU 架构及项目 Electron 版本一致；**不要把 Mac 运行时用于 Windows，或把 arm64 运行时用于 x64／双架构包**。双架构、跨平台和下载排查见 [桌面打包说明](docs/桌面打包.md)。原有 `desktop:dist:mac` / `desktop:dist:win` / `desktop:pack` 简写仍可用，但会重新构建并采用构建器默认运行时下载／缓存流程，不是上述复用方式。
+
+桌面版复用全部现有编辑器、白板、主题和工作台。SQLite 在主进程中运行，渲染进程通过 preload 白名单 IPC 访问；启用 contextIsolation、sandbox，关闭 nodeIntegration。应用内页面由仅监听回环地址、随机端口的内部服务加载，静态资源需要会话认证，数据库接口需要主进程专用令牌，无需开放外部服务。
+
+源码开发运行沿用项目 `data/mydoc.sqlite`。安装后的应用使用当前用户的 `userData/data/mydoc.sqlite`：macOS 一般为 `~/Library/Application Support/MyDoc/data/mydoc.sqlite`，Windows 一般为 `%APPDATA%/MyDoc/data/mydoc.sqlite`。可从「文件 → 打开数据目录」查看实际位置。首次只初始化空表，重启跳过，不携带开发数据库，也不自动导入浏览器数据。安装后需要原 Web 内容时，先导出工作区备份再手动导入。
+
+关闭／退出／重新载入前等待文档、工作区和阅读位置保存；附件上传、导入或保存失败时保留窗口并提示。macOS 关闭窗口后应用保留，可从 Dock 重开；Windows 关闭最后窗口即退出。菜单提供编辑、缩放、全屏和数据目录入口，网页外链在系统浏览器打开。
+
+构建产物在 `release/desktop/`，数据库不包含在安装包中。已提供 `.github/workflows/desktop.yml` 在 macOS / Windows 分别运行真实桌面测试并打包。当前打包为未签名开发版本；正式分发所需的 Apple 签名／公证与 Windows 签名证书、自动更新、深链及系统文件关联另列后续任务。跨平台配置不代表已在本机验证 Windows 运行。
+
+macOS 双架构构建由 CI 或《桌面打包说明》中的独立命令执行，按架构下载／缓存运行时，不使用单架构的本地 `electronDist`。首次下载和安装包压缩仍可能耗时；安装包是否生成以命令成功退出为准。

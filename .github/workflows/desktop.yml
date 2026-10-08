@@ -1,0 +1,60 @@
+name: Desktop builds
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'packages/**'
+      - 'scripts/build-desktop.mjs'
+      - 'tests/desktop/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'scripts/build-desktop.mjs'
+      - 'tests/desktop/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.github/workflows/desktop.yml'
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: corepack yarn install --immutable
+      - run: node node_modules/electron/install.js
+      - run: corepack yarn typecheck
+      - run: corepack yarn test
+      - run: corepack yarn desktop:build
+      - run: corepack yarn test:desktop
+      - if: runner.os == 'macOS'
+        run: corepack yarn workspace @mydoc/desktop dist:mac --arm64 --x64 --publish never
+      - if: runner.os == 'Windows'
+        run: corepack yarn workspace @mydoc/desktop dist:win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyDoc-${{ runner.os }}
+          path: |
+            release/desktop/*.dmg
+            release/desktop/*.zip
+            release/desktop/*.exe
+            release/desktop/*.blockmap
+          if-no-files-found: error
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-test-results-${{ runner.os }}
+          path: test-results/
