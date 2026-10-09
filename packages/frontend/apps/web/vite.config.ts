@@ -1,10 +1,11 @@
+import {cloudPlugin} from './cloud-plugin';
 import {sqliteServer} from './sqlite-server';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import {clipperServer} from './clipper-server';
 import { pdfAssets } from './pdf-assets';
 export default defineConfig({
-  plugins: [react(), pdfAssets(), clipperServer(), sqliteServer()],
+  plugins: [react(), pdfAssets(), clipperServer(), cloudPlugin(), sqliteServer()],
   optimizeDeps: { include: ['pdfjs-dist'] },
   build: {
     rollupOptions: {

@@ -1,3 +1,4 @@
+import {shareDocumentLink} from '../../../common/nbstore/src/deep-link';
 import type { Node as PMNode } from 'prosemirror-model';
 import { TextSelection } from 'prosemirror-state';
 import type { EditorView, NodeView } from 'prosemirror-view';
@@ -58,7 +59,7 @@ export function codeBlockView(node: PMNode, view: EditorView, getPos: () => numb
     const wrap = row('自动换行', 'wrap', () => { patch({ wrap: !node.attrs.wrap }); wrap.setAttribute('aria-checked', String(node.attrs.wrap)); }, node.attrs.wrap);
     const numbers = row('显示行号', 'numbers', () => { patch({ lineNumbers: !node.attrs.lineNumbers }); numbers.setAttribute('aria-checked', String(node.attrs.lineNumbers)); }, node.attrs.lineNumbers);
     const separator = () => { const line = document.createElement('hr'); panel.append(line); }; separator();
-    row('复制代码块链接', 'link', () => { patch({}); const url = new URL(location.href); const params = new URLSearchParams(location.hash.slice(1)); params.set('doc', documentId); params.set('block', localId); url.hash = params.toString(); void copyText(url.href); closePopup(); });
+    row('复制代码块链接', 'link', () => { patch({}); const url = new URL(location.href); const params = new URLSearchParams(location.hash.slice(1)); params.set('doc', documentId); params.set('block', localId); url.hash = params.toString(); void copyText(shareDocumentLink({workspace:params.get('workspace')||'local',doc:documentId,mode:'page',block:localId})); closePopup(); });
     row('复制代码块', 'duplicate', () => { const pos = getPos(); if (pos === undefined) return; closePopup(); store.history.stopCapturing(); const duplicate = node.type.create({ ...node.attrs, id: crypto.randomUUID(), comments: [] }, node.content); const tr = view.state.tr.insert(pos + node.nodeSize, duplicate); tr.setSelection(TextSelection.create(tr.doc, pos + node.nodeSize + 1)); view.dispatch(tr.scrollIntoView()); store.history.stopCapturing(); view.focus(); });
     separator(); row('删除代码块', 'delete', () => { const pos = getPos(); if (pos === undefined) return; closePopup(); store.history.stopCapturing(); view.dispatch(view.state.tr.delete(pos, pos + node.nodeSize).scrollIntoView()); store.history.stopCapturing(); view.focus(); });
     positionPopup(); panel.querySelector<HTMLButtonElement>('button')?.focus();

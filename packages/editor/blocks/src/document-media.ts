@@ -33,7 +33,7 @@ export function documentMedia(assets: WorkspaceAssets, store: BlockStore, notify
   }, view(view) { editor = view; return { update(view) { editor = view;if(view.dom.closest('[hidden]'))for(const player of players)player.pause(); }, destroy() { disposed = true;for(const player of players)player.pause(); } }; }, state: { init: () => null, apply(tr) { if (bookmark) bookmark = bookmark.map(tr.mapping); return null; } } });
   function nodeView(node: PMNode): NodeView {
     const image = node.type.name === 'image'; const local = image && String(node.attrs.src).startsWith('asset:');
-    const dom = document.createElement('span'); dom.contentEditable = 'false'; dom.className = image ? 'media-image' : 'media-attachment'; let url: string | null = null; let removed = false; let generation = 0; let loaded: AssetRecord | null = null;let player:AttachmentPlayer|null=null;
+    const dom = document.createElement('span'); dom.contentEditable = 'false'; dom.className = image ? 'media-image' : 'media-attachment';dom.dataset.readonlyAction='true'; let url: string | null = null; let removed = false; let generation = 0; let loaded: AssetRecord | null = null;let player:AttachmentPlayer|null=null;
     const id = () => image ? String(node.attrs.src).slice(6) : node.attrs.assetId;
     const revoke = () => {if(player){players.delete(player);player.destroy();player=null;} if (url) URL.revokeObjectURL(url); url = null; };
     const download = () => { if (!loaded) return; const link = document.createElement('a'); const temporary = URL.createObjectURL(new Blob([loaded.bytes], { type: loaded.mime })); link.href = temporary; link.download = loaded.name; link.click(); setTimeout(() => URL.revokeObjectURL(temporary), 1000); };

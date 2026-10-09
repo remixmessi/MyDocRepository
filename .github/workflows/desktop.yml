@@ -5,7 +5,14 @@ on:
     paths:
       - 'packages/**'
       - 'scripts/build-desktop.mjs'
+      - 'scripts/desktop/**'
       - 'tests/desktop/**'
+      - 'tests/*desktop*.test.ts'
+      - 'tests/database-backups.test.ts'
+      - 'tests/sqlite-storage.test.ts'
+      - 'tests/fixtures/pdf-preview.pdf'
+      - 'vitest.config.ts'
+      - 'playwright.desktop.config.ts'
       - 'package.json'
       - 'yarn.lock'
       - '.github/workflows/desktop.yml'
@@ -13,7 +20,14 @@ on:
     paths:
       - 'packages/**'
       - 'scripts/build-desktop.mjs'
+      - 'scripts/desktop/**'
       - 'tests/desktop/**'
+      - 'tests/*desktop*.test.ts'
+      - 'tests/database-backups.test.ts'
+      - 'tests/sqlite-storage.test.ts'
+      - 'tests/fixtures/pdf-preview.pdf'
+      - 'vitest.config.ts'
+      - 'playwright.desktop.config.ts'
       - 'package.json'
       - 'yarn.lock'
       - '.github/workflows/desktop.yml'
@@ -24,7 +38,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+          - os: windows-latest
+            arch: x64
     runs-on: ${{ matrix.os }}
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -38,15 +58,16 @@ jobs:
       - run: node node_modules/electron/install.js
       - run: corepack yarn typecheck
       - run: corepack yarn test
+      - run: node --test scripts/desktop/mac-architecture.test.mjs
       - run: corepack yarn desktop:build
       - run: corepack yarn test:desktop
       - if: runner.os == 'macOS'
-        run: corepack yarn workspace @mydoc/desktop dist:mac --arm64 --x64 --publish never
+        run: corepack yarn workspace @mydoc/desktop dist:mac --${{ matrix.arch }} --publish never
       - if: runner.os == 'Windows'
         run: corepack yarn workspace @mydoc/desktop dist:win --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: MyDoc-${{ runner.os }}
+          name: MyDoc-${{ runner.os }}-${{ matrix.arch }}
           path: |
             release/desktop/*.dmg
             release/desktop/*.zip
@@ -56,5 +77,5 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-test-results-${{ runner.os }}
+          name: desktop-test-results-${{ runner.os }}-${{ matrix.arch }}
           path: test-results/

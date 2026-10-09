@@ -1,0 +1,29 @@
+import {useEffect,useState} from 'react';
+import {storageRequest} from '../../../common/nbstore/src/sqlite';
+import type {BackupStatus,DatabaseBackup} from '../../../common/nbstore/src/backups';
+import {Modal} from './dialogs';
+const reason=(entry:DatabaseBackup)=>({'automatic':'自动备份','manual':'手动备份','before-restore':'恢复前保护备份','before-update':'更新前保护备份'}[entry.reason]);
+const size=(bytes:number)=>bytes<1024*1024?`${Math.ceil(bytes/1024)} KB`:`${(bytes/1024/1024).toFixed(1)} MB`;
+export function DatabaseBackupDialog({onClose,prepare,onBusyChange}:{onClose:()=>void;prepare:()=>Promise<void>;onBusyChange:(busy:boolean)=>void}){
+ const [status,setStatus]=useState<BackupStatus>(),[working,setWorking]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[preview,setPreview]=useState<DatabaseBackup>(),[confirmed,setConfirmed]=useState(false);
+ const [enabled,setEnabled]=useState(true),[hours,setHours]=useState(24),[keep,setKeep]=useState(7);
+ const apply=(value:BackupStatus)=>{setStatus(value);setEnabled(value.settings.enabled);setHours(value.settings.intervalHours);setKeep(value.settings.keep);};
+ const refresh=async()=>apply(await (await storageRequest('/backups')).json());
+ useEffect(()=>{let alive=true;void storageRequest('/backups').then(r=>r.json()).then(value=>{if(alive)apply(value);}).catch(e=>{if(alive)setError(e.message);});return()=>{alive=false;};},[]);
+ useEffect(()=>{let alive=true;const timer=setInterval(()=>{if(!working)void storageRequest('/backups').then(r=>r.json()).then(value=>{if(alive)setStatus(value);}).catch(()=>{});},3000);return()=>{alive=false;clearInterval(timer);};},[working]);
+ useEffect(()=>{onBusyChange(working);return()=>onBusyChange(false);},[working]);
+ const run=async(action:()=>Promise<void>)=>{if(working)return;setWorking(true);setError('');setNotice('');try{await action();}catch(e){setError(e instanceof Error?e.message:'备份操作失败，请重试');}finally{setWorking(false);}};
+ return <Modal title="自动备份与恢复" wide onClose={()=>{if(!working)onClose();}}><div className="database-backup">
+  <p className="organization-help">备份全部工作区、文档、回收站、设置与附件。恢复会用所选备份替换当前数据库，并重新载入应用。</p>
+  {error&&<p role="alert" className="form-error">{error}</p>}{notice&&<p role="status">{notice}</p>}{working&&<p role="status">正在处理，请稍候…</p>}
+  {status&&<><p className="backup-directory">备份目录 <code>{status.settings.directory}</code></p>{(status.error||status.settings.lastError)&&<p role="alert" className="form-error">{status.error||status.settings.lastError}</p>}
+  {window.mydocDesktop&&<div className="backup-actions"><button disabled={working} onClick={()=>void run(async()=>{const value=await window.mydocDesktop!.chooseBackupDirectory();if(value){apply(value);setPreview(undefined);setNotice('备份目录已更新，原目录中的备份仍保留。');}})}>选择备份目录</button><button disabled={working} onClick={()=>void run(()=>window.mydocDesktop!.openBackupDirectory())}>打开备份目录</button></div>}
+  <form className="backup-settings" onSubmit={e=>{e.preventDefault();void run(async()=>{apply(await (await storageRequest('/backups/settings',{method:'PUT',body:JSON.stringify({enabled,intervalHours:hours,keep})})).json());setNotice('备份设置已保存');});}}>
+   <label><input type="checkbox" checked={enabled} disabled={working} onChange={e=>setEnabled(e.target.checked)}/>自动备份</label><label>备份间隔<select aria-label="备份间隔" value={hours} disabled={working} onChange={e=>setHours(Number(e.target.value))}>{[[1,'每小时'],[6,'每 6 小时'],[12,'每 12 小时'],[24,'每天'],[168,'每周']].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>保留备份数量<input aria-label="保留备份数量" type="number" min={1} max={100} required value={keep} disabled={working} onChange={e=>setKeep(Number(e.target.value))}/></label><button disabled={working} type="submit">保存备份设置</button>
+  </form><p className="organization-help">服务运行时按间隔备份，启动后补做到期备份；设置的保留数量包含自动和手动备份，另保留最近 3 份恢复／更新前保护备份。降低保留数量将在下次备份后清理。</p>
+  <div className="backup-actions"><button className="primary" disabled={working||status.running} onClick={()=>void run(async()=>{await prepare();await storageRequest('/backups/create',{method:'POST'});await refresh();setNotice('完整数据库备份已完成');})}>立即备份</button><button disabled={working} onClick={()=>void run(refresh)}>刷新备份列表</button></div>
+  <div className="backup-list" aria-label="数据库备份列表">{status.entries.map(entry=><div className="backup-row" key={entry.id}><div><strong>{new Date(entry.createdAt).toLocaleString()}</strong><span>{reason(entry)} · {entry.documents} 篇文档 · {entry.assets} 个附件 · {size(entry.bytes)}</span></div><button disabled={working||status.running} onClick={()=>void run(async()=>{setPreview(undefined);setConfirmed(false);setPreview(await (await storageRequest('/backups/preview?id='+encodeURIComponent(entry.id))).json());})}>预览恢复<span className="sr-only"> {entry.id}</span></button></div>)}{!status.entries.length&&<p className="panel-empty">还没有备份，点击“立即备份”保存当前数据。</p>}</div>
+  {preview&&<section className="backup-preview" aria-label="恢复预览"><h3>恢复预览</h3><p>{new Date(preview.createdAt).toLocaleString()} · {reason(preview)}</p><p>{preview.workspaces} 个工作区、{preview.documents} 篇文档（含回收站）、{preview.assets} 个附件。校验已通过。</p><p>恢复前会自动保存当前数据库；恢复失败会保留当前数据，成功后可用保护备份回退。</p><label><input type="checkbox" disabled={working} checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>我确认用此备份替换当前全部数据</label><div className="backup-actions"><button className="danger" disabled={working||!confirmed} onClick={()=>void run(async()=>{await prepare();await storageRequest('/backups/restore?id='+encodeURIComponent(preview.id),{method:'POST'});location.reload();})}>确认恢复并重新载入</button><button disabled={working} onClick={()=>setPreview(undefined)}>取消恢复</button></div></section>}
+  </>}
+ </div><div className="dialog-actions"><button disabled={working} onClick={onClose}>关闭</button></div></Modal>;
+}

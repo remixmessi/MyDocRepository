@@ -1,0 +1,83 @@
+name: Signed desktop artifacts
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+          - os: windows-latest
+            target: win
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+      MYDOC_UPDATE_URL: ${{ vars.MYDOC_UPDATE_URL }}
+      MYDOC_WIN_PUBLISHER_NAME: ${{ vars.MYDOC_WIN_PUBLISHER_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: corepack yarn install --immutable
+      - run: node node_modules/electron/install.js
+      - run: corepack yarn typecheck
+      - run: corepack yarn test
+      - run: node --test scripts/desktop/mac-architecture.test.mjs
+      - run: corepack yarn desktop:build
+      - run: corepack yarn test:desktop
+      - name: Build signed and notarized macOS artifacts
+        if: runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        shell: bash
+        run: |
+          test -n "$APPLE_API_KEY_BASE64" || { echo 'Missing APPLE_API_KEY_BASE64'; exit 1; }
+          export APPLE_API_KEY="$RUNNER_TEMP/mydoc-notary.p8"
+          trap 'rm -f "$APPLE_API_KEY"' EXIT
+          node --input-type=module -e 'import {writeFileSync} from "node:fs"; writeFileSync(process.env.APPLE_API_KEY, Buffer.from(process.env.APPLE_API_KEY_BASE64,"base64"),{mode:0o600})'
+          corepack yarn desktop:release:mac
+          for app in release/desktop/mac*/MyDoc.app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+          done
+      - name: Build signed Windows artifacts
+        if: runner.os == 'Windows'
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: corepack yarn desktop:release:win
+      - name: Verify Windows signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = @(Get-Item 'release/desktop/win-unpacked/MyDoc.exe') + @(Get-ChildItem 'release/desktop/*.exe')
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid signature: $($file.Name)" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyDoc-signed-${{ matrix.target }}
+          path: |
+            release/desktop/*.dmg
+            release/desktop/*.zip
+            release/desktop/*.exe
+            release/desktop/*.yml
+            release/desktop/*.blockmap
+          if-no-files-found: error
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-test-results-${{ matrix.target }}
+          path: test-results/

@@ -2,6 +2,7 @@
   "appId": "com.mydoc.repository",
   "productName": "MyDoc",
   "directories": {
+    "buildResources": "resources",
     "output": "../../../../release/desktop"
   },
   "files": [
@@ -12,13 +13,18 @@
   "npmRebuild": false,
   "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
   "mac": {
+    "icon": "resources/icon.icns",
     "category": "public.app-category.productivity",
     "target": [
       "dmg",
       "zip"
-    ]
+    ],
+    "hardenedRuntime": false,
+    "notarize": false,
+    "minimumSystemVersion": "13.0"
   },
   "win": {
+    "icon": "resources/icon.ico",
     "target": [
       {
         "target": "nsis",
@@ -33,5 +39,28 @@
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false
-  }
+  },
+  "fileAssociations": [
+    {
+      "ext": [
+        "md",
+        "markdown"
+      ],
+      "name": "Markdown \u6587\u6863",
+      "description": "Markdown \u6587\u6863",
+      "mimeType": "text/markdown",
+      "role": "Editor"
+    }
+  ],
+  "protocols": [
+    {
+      "name": "MyDoc \u6587\u6863\u94fe\u63a5",
+      "schemes": [
+        "mydoc"
+      ],
+      "role": "Viewer"
+    }
+  ],
+  "publish": null,
+  "afterPack": "../../../../scripts/desktop/verify-mac-architecture.cjs"
 }

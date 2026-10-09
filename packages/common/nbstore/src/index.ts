@@ -1,10 +1,12 @@
 import { Y } from '@mydoc/crdt';
+import {CLOUD_ORIGIN} from './cloud';
 
 /** 存储层只处理 Yjs 二进制，平台实现不依赖 React 或编辑器。 */
 export interface DocumentStorage {
   load(id: string): Promise<Uint8Array | null>;
   append(id: string, update: Uint8Array): Promise<void>;
   remove(id: string): Promise<void>;
+  connect?(id:string,doc:Y.Doc,onError:(error:unknown)=>void):()=>void;
   close(): void;
 }
 export class IndexedDBStorage implements DocumentStorage {
@@ -61,6 +63,9 @@ export class PersistentDocument {
   private listeners = new Set<() => void>();
   private pending = 0;
   private disposed = false;
+  private disconnect?:()=>void;
+  private connectionError:unknown;
+  get remote(){return !!this.storage.connect;}
   constructor(readonly id: string, readonly doc: Y.Doc, private storage: DocumentStorage) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private notify() { this.listeners.forEach(listener => listener()); }
@@ -71,10 +76,12 @@ export class PersistentDocument {
       if (update) Y.applyUpdate(this.doc, update);
       this.doc.on('update', this.onUpdate);
       this.state = 'saved';
+      this.disconnect=this.storage.connect?.(this.id,this.doc,error=>{const previous=this.connectionError;this.connectionError=error;if(error===undefined||this.error===previous||!this.error)this.error=error;this.state=this.error?'error':this.pending?'saving':'saved';this.notify();});
       this.notify();
     } catch (error) { this.error = error; this.state = 'error'; this.notify(); throw error; }
   }
-  private onUpdate = (update: Uint8Array) => {
+  private onUpdate = (update: Uint8Array,origin:unknown) => {
+    if(origin===CLOUD_ORIGIN)return;
     this.pending++;
     this.state = 'saving';
     this.notify();
@@ -92,12 +99,13 @@ export class PersistentDocument {
   async retry() {
     await this.queue;
     this.error = undefined;
-    this.onUpdate(Y.encodeStateAsUpdate(this.doc));
+    this.onUpdate(Y.encodeStateAsUpdate(this.doc),null);
     await this.flush();
   }
   async flush() { await this.queue; if (this.error) throw this.error; }
   async destroy() {
     this.disposed = true;
+    this.disconnect?.();
     this.doc.off('update', this.onUpdate);
     await this.queue;
     this.listeners.clear();

@@ -18,6 +18,7 @@ dist/
 /tmp/
 playwright-report/
 test-results/
+test-results-*/
 coverage/
 .nyc_output/
 
@@ -26,9 +27,35 @@ data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 data/*.sqlite-journal
+data/backups/
+data/backup-settings.json
+data/backup-settings.json.tmp
 !docs/
 !docs/实现方案.md
 !docs/TODO-功能清单.md
 
 # 桌面发布产物
 /release/
+
+# 桌面发布流水线所需的测试与锁文件
+!/yarn.lock
+!/vitest.config.ts
+!/tests/
+/tests/*
+!/tests/desktop/
+!/tests/desktop/**
+!/tests/desktop.test.ts
+!/tests/desktop-deep-links.test.ts
+!/tests/desktop-updates.test.ts
+!/tests/database-backups.test.ts
+!/tests/sqlite-storage.test.ts
+!/tests/fixtures/
+/tests/fixtures/*
+!/tests/fixtures/pdf-preview.pdf
+/packages/frontend/apps/web/server-dist/
+!/tests/cloud-server.test.ts
+!/tests/e2e/
+/tests/e2e/*
+!/tests/e2e/cloud.spec.ts
+
+!/tests/e2e/comments.spec.ts

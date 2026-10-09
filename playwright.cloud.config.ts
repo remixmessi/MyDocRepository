@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'./tests/e2e',testMatch:'cloud.spec.ts',timeout:90000,workers:1,use:{channel:'chromium'},webServer:{command:'MYDOC_CLOUD_DB_PATH=data/cloud-e2e.sqlite MYDOC_PORT=4180 node packages/frontend/apps/web/server-dist/main.cjs',url:'http://127.0.0.1:4180/api/hosting',reuseExistingServer:false},reporter:'list'});

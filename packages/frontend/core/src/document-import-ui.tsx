@@ -4,13 +4,14 @@ import {FolderSelect} from './sidebar';
 import type {LocalWorkspace} from './workspace';
 import {prepareImport,executeImport,importDuplicate,type ImportPlan,type ImportResult} from './document-import';
 import type {ImportKind} from './import-source';
-export function DocumentImportDialog({workspace,initialKind,initialFiles,onClose,onFinish}:{workspace:LocalWorkspace;initialKind:ImportKind;initialFiles?:File[];onClose:()=>void;onFinish:(id?:string)=>void}){
+export function DocumentImportDialog({workspace,initialKind,initialFiles,onClose,onFinish,onBusyChange}:{workspace:LocalWorkspace;initialKind:ImportKind;initialFiles?:File[];onBusyChange?:(busy:boolean)=>void;onClose:()=>void;onFinish:(id?:string)=>void}){
  const [kind,setKind]=useState(initialKind),[files,setFiles]=useState(initialFiles??[]),[plan,setPlan]=useState<ImportPlan>(),[selected,setSelected]=useState(new Set<string>()),[preparing,setPreparing]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[progress,setProgress]=useState(''),[results,setResults]=useState<ImportResult[]>();
  const [folderId,setFolderId]=useState(''),[hierarchy,setHierarchy]=useState(true),[duplicates,setDuplicates]=useState<'skip'|'copy'>('skip');
  const [dragging,setDragging]=useState(false);const dragDepth=useRef(0);
  const picker=useRef<HTMLInputElement>(null),directory=useRef<HTMLInputElement|null>(null),cancel=useRef(false),alive=useRef(true),finished=useRef(false);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;cancel.current=true;};},[]);
  useEffect(()=>{const controller=new AbortController();setPlan(undefined);setResults(undefined);setError('');if(!files.length){setPreparing(false);return;}setPreparing(true);void prepareImport(files,kind,controller.signal).then(value=>{if(!controller.signal.aborted){setPlan(value);setSelected(new Set(value.pages.filter(page=>!page.error).map(page=>page.path)));}}).catch(e=>{if(!controller.signal.aborted)setError(e instanceof Error?e.message:'无法读取文件');}).finally(()=>{if(!controller.signal.aborted)setPreparing(false);});return()=>controller.abort();},[files,kind]);
+ useEffect(()=>{onBusyChange?.(busy||preparing);return()=>onBusyChange?.(false);},[busy,preparing,onBusyChange]);
  // Prevent file drops outside the target from navigating away from the import dialog.
  useEffect(()=>{const reset=()=>{dragDepth.current=0;setDragging(false);};const prevent=(event:globalThis.DragEvent)=>{if(event.dataTransfer?.types.includes('Files')){event.preventDefault();if(event.type==='drop')reset();}};document.addEventListener('dragover',prevent);document.addEventListener('drop',prevent);window.addEventListener('dragend',reset);window.addEventListener('blur',reset);return()=>{document.removeEventListener('dragover',prevent);document.removeEventListener('drop',prevent);window.removeEventListener('dragend',reset);window.removeEventListener('blur',reset);};},[]);
  const dropDisabled=busy||preparing||!!results;

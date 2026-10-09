@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
 import {dirname} from 'node:path';
 import * as Y from 'yjs';
@@ -9,10 +10,13 @@ export interface SQLiteConnection {
  close():void;
 }
 export class SQLiteProjectDatabase {
+ restoring=false;
+ get generation(){let row=this.db.prepare("SELECT value FROM preferences WHERE scope='__system' AND key='restore-generation'").get() as {value:string}|undefined;if(!row){this.db.prepare("INSERT OR IGNORE INTO preferences VALUES ('__system','restore-generation',?)").run(randomUUID());row=this.db.prepare("SELECT value FROM preferences WHERE scope='__system' AND key='restore-generation'").get() as {value:string};}return row.value;}
+ set generation(value:string){this.db.prepare("INSERT INTO preferences VALUES ('__system','restore-generation',?) ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value").run(value);}
  readonly db:SQLiteConnection;
  readonly initializedThisStart:boolean;
  readonly schemaVersion=1;
- constructor(readonly path:string,connect:(path:string)=>SQLiteConnection){
+ constructor(readonly path:string,readonly connect:(path:string)=>SQLiteConnection){
   mkdirSync(dirname(path),{recursive:true});this.db=connect(path);
   try {
    this.db.pragma('busy_timeout = 5000');

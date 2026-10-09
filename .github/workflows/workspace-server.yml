@@ -1,0 +1,29 @@
+name: Workspace server
+on:
+  workflow_dispatch:
+  push:
+    paths: ['packages/**', 'scripts/build-server.mjs', 'tests/cloud-server.test.ts', 'tests/e2e/cloud.spec.ts', 'playwright.cloud.config.ts', 'package.json', 'yarn.lock', '.github/workflows/workspace-server.yml']
+  pull_request:
+    paths: ['packages/**', 'scripts/build-server.mjs', 'tests/cloud-server.test.ts', 'tests/e2e/cloud.spec.ts', 'playwright.cloud.config.ts', 'package.json', 'yarn.lock', '.github/workflows/workspace-server.yml']
+permissions:
+  contents: read
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: corepack yarn install --immutable
+      - run: corepack yarn playwright install --with-deps chromium
+      - run: corepack yarn typecheck
+      - run: corepack yarn test
+      - run: corepack yarn server:build
+      - run: corepack yarn test:cloud
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-results
+          path: test-results/
