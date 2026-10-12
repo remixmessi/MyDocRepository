@@ -1,5 +1,5 @@
 import { Y } from '@mydoc/crdt';
-import {CLOUD_ORIGIN} from './cloud';
+import {CLOUD_ORIGIN,CloudStorage} from './cloud';
 
 /** 存储层只处理 Yjs 二进制，平台实现不依赖 React 或编辑器。 */
 export interface DocumentStorage {
@@ -76,7 +76,7 @@ export class PersistentDocument {
       if (update) Y.applyUpdate(this.doc, update);
       this.doc.on('update', this.onUpdate);
       this.state = 'saved';
-      this.disconnect=this.storage.connect?.(this.id,this.doc,error=>{const previous=this.connectionError;this.connectionError=error;if(error===undefined||this.error===previous||!this.error)this.error=error;this.state=this.error?'error':this.pending?'saving':'saved';this.notify();});
+      this.disconnect=this.storage.connect?.(this.id,this.doc,error=>{const previous=this.connectionError;this.connectionError=error;if(error===undefined&&this.storage instanceof CloudStorage){if(!this.storage.memoryOnly)this.error=undefined;}else if(error===undefined||this.error===previous||!this.error)this.error=error;this.state=this.error?'error':this.pending?'saving':'saved';this.notify();});
       this.notify();
     } catch (error) { this.error = error; this.state = 'error'; this.notify(); throw error; }
   }

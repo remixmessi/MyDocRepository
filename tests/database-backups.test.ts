@@ -15,4 +15,29 @@ it('恢复前已进入的慢请求不能在恢复后追加旧文档内容',async
  try{write(f.db,'快照');const backup=await f.manager.create();write(f.db,'恢复前');const old=new Y.Doc();Y.applyUpdate(old,f.db.load('main','doc:a')!);old.getMap('body').set('text','慢请求');const bytes=Buffer.from(Y.encodeStateAsUpdate(old));const {request}=await import('node:http');const reply=new Promise<string>((resolve,reject)=>{pending=request({host:'127.0.0.1',port:(server.address() as {port:number}).port,path:'/document?id=doc:a',method:'POST',headers:{'Content-Length':bytes.length,'X-Mydoc-Generation':f.db.generation}},response=>{let text='';response.on('data',part=>text+=part);response.on('end',()=>resolve(text));});pending.on('error',reject);pending.write(bytes.subarray(0,1));});await received;await f.manager.restore(backup.id);pending!.end(bytes.subarray(1));expect(await reply).toContain('重新载入');expect(text(f.db)).toBe('快照');old.destroy();
  }finally{pending?.destroy();await new Promise<void>(r=>server.close(()=>r()));f.close();}
 });
+it('恢复只替换业务表，保留本机待提交队列与草稿；版本 1 旧备份仍可校验恢复',async()=>{
+ const f=fixture();
+ try{
+  write(f.db,'备份正文');const backup=await f.manager.create();
+  expect(backup.schemaVersion).toBe(2);
+  write(f.db,'恢复前正文');
+  // 本机未提交状态：恢复不得删除或覆盖。
+  f.db.db.prepare('INSERT INTO pending_updates(scope,server,workspace,doc,data,created,generation) VALUES (?,?,?,?,?,?,?)').run('user:a','https://one.example','ws-1','doc:a',Buffer.from([7]),1,f.db.generation);
+  f.db.db.prepare('INSERT INTO drafts(id,scope,server,workspace,doc,title,summary,data,missingAssets,created,generation) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('draft-1','user:a','https://one.example','ws-1','doc:a','待恢复草稿','摘要',Buffer.from([8]),0,2,f.db.generation);
+  await f.manager.restore(backup.id);
+  expect(text(f.db)).toBe('备份正文');
+  expect(f.db.db.prepare('SELECT data FROM pending_updates').get()).toEqual({data:Buffer.from([7])});
+  expect(f.db.db.prepare('SELECT title FROM drafts').get()).toEqual({title:'待恢复草稿'});
+  // 版本 1 旧备份：结构只有三张业务表，校验与恢复仍需通过。
+  const legacy=await f.manager.create();const legacyPath=join(f.manager.settings.directory,legacy.id+'.sqlite');
+  const raw=new Database(legacyPath);raw.exec('DROP TABLE pending_updates;DROP TABLE drafts;');raw.pragma('user_version = 1');raw.close();
+  const {createHash}=await import('node:crypto');const bytes=readFileSync(legacyPath);
+  writeFileSync(join(f.manager.settings.directory,legacy.id+'.json'),JSON.stringify({...legacy,schemaVersion:1,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')}));
+  write(f.db,'旧备份恢复前');
+  const preview=await f.manager.preview(legacy.id);expect(preview.schemaVersion).toBe(1);
+  await f.manager.restore(legacy.id);
+  expect(text(f.db)).toBe('备份正文');
+  expect(f.db.db.prepare('SELECT title FROM drafts').get()).toEqual({title:'待恢复草稿'});
+ }finally{f.close();}
+});
 it('更新前保护快照可恢复，恢复／更新保护合计保留最近三份',async()=>{const f=fixture();try{f.manager.configure({enabled:false,intervalHours:24,keep:1});write(f.db,'更新前正文');const first=await f.manager.create('before-update');expect(first.reason).toBe('before-update');write(f.db,'更新后正文');await f.manager.restore(first.id);expect(text(f.db)).toBe('更新前正文');await f.manager.create('before-update');await f.manager.create('before-update');await f.manager.create('before-update');await f.manager.create();await f.manager.create();const entries=f.manager.status().entries;expect(entries.filter(e=>e.reason==='before-update'||e.reason==='before-restore')).toHaveLength(3);expect(entries.filter(e=>e.reason==='manual')).toHaveLength(1);}finally{f.close();}});

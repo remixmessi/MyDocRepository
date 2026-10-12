@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
 import {dirname} from 'node:path';
 import * as Y from 'yjs';
+import {SCHEMA_VERSION,SCHEMA_MIGRATIONS} from '../src/schema';
 export interface SQLiteConnection {
  exec(sql:string):unknown;
  pragma(sql:string,options?:{simple?:boolean}):unknown;
@@ -15,18 +16,24 @@ export class SQLiteProjectDatabase {
  set generation(value:string){this.db.prepare("INSERT INTO preferences VALUES ('__system','restore-generation',?) ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value").run(value);}
  readonly db:SQLiteConnection;
  readonly initializedThisStart:boolean;
- readonly schemaVersion=1;
+ readonly schemaVersion=SCHEMA_VERSION;
  constructor(readonly path:string,readonly connect:(path:string)=>SQLiteConnection){
   mkdirSync(dirname(path),{recursive:true});this.db=connect(path);
   try {
    this.db.pragma('busy_timeout = 5000');
    // Recheck under the write lock: concurrent starts must not initialize twice.
+   // 逐版本迁移：已有库只补做缺少的步骤，整体在一个写事务内，失败回滚且 user_version 不前进。
    this.initializedThisStart=this.db.transaction(()=>{
     const version=this.db.pragma('user_version',{simple:true}) as number;
     if(version>this.schemaVersion)throw new Error('数据库版本高于当前程序，请升级程序后再启动');
     if(version===this.schemaVersion)return false;
-    this.db.exec(`CREATE TABLE IF NOT EXISTS documents(scope TEXT NOT NULL,id TEXT NOT NULL,data BLOB NOT NULL,PRIMARY KEY(scope,id));CREATE TABLE IF NOT EXISTS assets(scope TEXT NOT NULL,workspace TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,mime TEXT NOT NULL,data BLOB NOT NULL,PRIMARY KEY(scope,workspace,id));CREATE TABLE IF NOT EXISTS preferences(scope TEXT NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(scope,key));PRAGMA user_version=1;`);
-    return true;
+    for(let next=version+1;next<=this.schemaVersion;next++){
+     const migration=SCHEMA_MIGRATIONS[next];
+     if(!migration)throw new Error('缺少数据库结构迁移步骤 '+next);
+     this.db.exec(migration);
+    }
+    this.db.exec('PRAGMA user_version='+this.schemaVersion+';');
+    return version===0;
    }).immediate();
    this.db.pragma('journal_mode = WAL');this.db.pragma('synchronous = FULL');
   }catch(error){this.db.close();throw error;}

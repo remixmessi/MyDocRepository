@@ -59,3 +59,9 @@ data/backup-settings.json.tmp
 !/tests/e2e/cloud.spec.ts
 
 !/tests/e2e/comments.spec.ts
+!/tests/draft-restore.test.ts
+!/tests/sync-queue.test.ts
+!/tests/e2e/sync-queue.spec.ts
+!/tests/cloud-settings.test.ts
+!/tests/cloud-account.test.ts
+!/tests/e2e/account.spec.ts
