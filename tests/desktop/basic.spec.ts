@@ -2,6 +2,7 @@ import {test,expect,_electron as electron,type ElectronApplication} from '@playw
 import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import {Y} from '@mydoc/crdt';
 let directory:string;
 async function launch(){return electron.launch({executablePath:process.env.MYDOC_TEST_ELECTRON_PATH,args:[resolve('packages/frontend/apps/desktop')],env:{...process.env,MYDOC_DESKTOP_DB_PATH:join(directory,'data','mydoc.sqlite'),MYDOC_DESKTOP_PROFILE:join(directory,'profile')},timeout:30000});}
 test.beforeEach(async()=>{directory=await mkdtemp(join(tmpdir(),'mydoc-electron-'));});
@@ -16,5 +17,24 @@ test('真实桌面首次空库、沙箱与 IPC、编辑附件主题、关闭保�
  }finally{await app?.close();}
 });
 test('保存失败阻止退出，恢复后可正常关闭；macOS 关闭窗口后可重新打开',async()=>{const app=await launch();try{const page=await app.firstWindow();await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();await page.getByRole('button',{name:'新建文档',exact:true}).first().click();await expect(page.getByRole('textbox',{name:'文档正文'})).toBeVisible();await app.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:0,checkboxChecked:false});});await page.evaluate(()=>{(window as unknown as {cancelClose:()=>void}).cancelClose=window.mydocDesktop!.onPrepareClose(async()=>{throw new Error('模拟保存失败');});});await app.evaluate(({app})=>app.quit());await page.waitForTimeout(300);expect(app.windows()).toHaveLength(1);await expect(page.getByRole('textbox',{name:'文档正文'})).toBeVisible();await page.evaluate(()=>(window as unknown as {cancelClose:()=>void}).cancelClose());if(process.platform==='darwin'){await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());await expect.poll(()=>app.windows().length).toBe(0);await app.evaluate(({app})=>app.emit('activate'));const reopened=await app.firstWindow();await expect(reopened.getByRole('textbox',{name:'文档正文'})).toBeVisible();}}finally{await app.close();}});
+
+test('桌面 SQLite 待提交队列在真实进程重启后保留并按序确认清理',async()=>{
+ let app:ElectronApplication|undefined;
+ const stop=async()=>{if(!app)return;app.process().kill('SIGKILL');app=undefined;};
+ const doc=new Y.Doc();doc.getText('body').insert(0,'进程重启后仍待提交');
+ const update=Buffer.from(Y.encodeStateAsUpdate(doc));doc.destroy();
+ const base64=update.toString('base64');
+ const request=async(page:import('@playwright/test').Page,path:string,method='GET',body?:unknown)=>page.evaluate(async({path,method,body})=>{
+   const reply=await window.mydocDesktop!.storage({path,method,contentType:body===undefined?undefined:'application/json',body:body===undefined?undefined:new TextEncoder().encode(JSON.stringify(body))});
+   return {status:reply.status,text:new TextDecoder().decode(reply.body)};
+ },{path,method,body});
+ try{
+  app=await launch();let page=await app.firstWindow();await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();
+  const path='/sync-queue?'+new URLSearchParams({server:'http://127.0.0.1:4180',workspace:'desktop-restart',id:'doc:restart'}).toString();
+  const queued=await request(page,path,'POST',{update:base64,snapshot:base64});expect(queued.status).toBe(200);const seq=JSON.parse(queued.text).seq;expect(seq).toBeGreaterThan(0);
+  await stop();app=await launch();page=await app.firstWindow();const restored=await request(page,path);expect(restored.status).toBe(200);const snapshot=JSON.parse(restored.text);expect(snapshot.rows).toHaveLength(1);expect(snapshot.rows[0].seq).toBe(seq);expect(snapshot.rows[0].attempts).toBe(0);
+  const ack=await request(page,path,'DELETE',{seq});expect(ack.status).toBe(200);await stop();app=await launch();page=await app.firstWindow();const empty=await request(page,path);expect(JSON.parse(empty.text).rows).toEqual([]);
+ }finally{await stop();}
+});
 
 test('桌面 PDF worker 和独立无权限预览、白板编辑与重新载入恢复',async()=>{const app=await launch();try{const page=await app.firstWindow();await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();await page.getByRole('button',{name:'新建文档',exact:true}).first().click();await page.getByLabel('添加本地附件').setInputFiles({name:'报告.pdf',mimeType:'application/pdf',buffer:await readFile('tests/fixtures/pdf-preview.pdf')});await page.getByRole('button',{name:'预览 PDF 报告.pdf',exact:true}).click();const preview=page.getByRole('dialog',{name:'PDF 附件预览'});await expect(preview.getByRole('img',{name:'PDF 第 1 页',exact:true})).toBeVisible();const viewerEvent=app.waitForEvent('window');await preview.getByRole('button',{name:'新窗口打开',exact:true}).click();const viewer=await viewerEvent;expect(await viewer.evaluate(()=>({bridge:!!window.mydocDesktop,node:typeof (window as unknown as {require?:unknown}).require}))).toEqual({bridge:false,node:'undefined'});await viewer.close();await page.getByLabel('关闭 PDF 预览').click();await page.getByRole('button',{name:'白板',exact:true}).click();await page.getByRole('button',{name:'矩形',exact:true}).click();const canvas=page.getByLabel('白板画布',{exact:true}),box=(await canvas.boundingBox())!;await page.mouse.move(box.x+120,box.y+120);await page.mouse.down();await page.mouse.move(box.x+320,box.y+240,{steps:5});await page.mouse.up();await page.getByLabel('元素文字').fill('桌面白板');await expect(page.getByText('正在保存…')).toHaveCount(0);await page.reload();await page.getByRole('button',{name:'白板',exact:true}).click();await page.getByLabel('白板元素',{exact:true}).selectOption({label:'1. 桌面白板'});await expect(page.getByLabel('元素文字')).toHaveValue('桌面白板');}finally{await app.close();}});

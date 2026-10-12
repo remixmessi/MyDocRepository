@@ -31,7 +31,7 @@ ipcMain.handle('mydoc:update-action',(event,action:unknown)=>{if(!trusted(event)
 ipcMain.handle('mydoc:update-settings',(event,value:unknown)=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.updates.configure(value);});
 ipcMain.handle('mydoc:storage',async(event,input):Promise<DesktopStorageReply>=>{
  if(!trusted(event)||!validStorageRequest(input)||!server)throw new Error('桌面存储请求无效');
- const response=await fetch(server.origin+'/api/storage'+input.path,{method:input.method,headers:{Authorization:'Bearer '+server.token,...(input.generation?{'X-Mydoc-Generation':input.generation}:{})},body:input.body?.slice().buffer});
+ const response=await fetch(server.origin+'/api/storage'+input.path,{method:input.method,headers:{Authorization:'Bearer '+server.token,...(input.generation?{'X-Mydoc-Generation':input.generation}:{}),...(input.contentType?{'Content-Type':input.contentType}:{})},body:input.body?.slice().buffer});
  return {status:response.status,contentType:response.headers.get('content-type')??'application/octet-stream',body:new Uint8Array(await response.arrayBuffer())};
 });
 ipcMain.handle('mydoc:choose-backup-directory',async event=>{if(!trusted(event)||!server||!window)throw new Error('备份目录请求无效');const result=await dialog.showOpenDialog(window,{title:'选择备份目录',properties:['openDirectory','createDirectory']});return result.canceled?undefined:server.backups.setDirectory(result.filePaths[0]);});
