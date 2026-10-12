@@ -94,8 +94,8 @@ export class LocalWorkspace {
     this.doc.transact(() => this.documents.set(id, { id, title, createdAt: Date.now(), folderId, ...imported?.properties, ...(journalDate?{journalDate}:{}) }), LOCAL_ORIGIN);
     await this.persistence.flush(); item.store.history.clear(); this.indexDocument(id, item); return id; } catch (error) { await this.discardUnpublished(id); throw error; }
   }
-  async createSnapshot(title: string, createdAt: number, folderId: string | null, update: Uint8Array, recycled?: { deletedAt: number; collectionIds: string[] }, transform?: (store: BlockStore, id: string) => void) { this.assertWritable();
-    const id = crypto.randomUUID(); try { await this.storage.append(`doc:${id}`, update); const item = await this.openDocument(id);
+  async createSnapshot(title: string, createdAt: number, folderId: string | null, update: Uint8Array, recycled?: { deletedAt: number; collectionIds: string[] }, transform?: (store: BlockStore, id: string) => void, forcedId?: string) { this.assertWritable();
+    const id = forcedId ?? crypto.randomUUID(); try { await this.storage.append(`doc:${id}`, update); const item = await this.openDocument(id);
     readDocument(item.store); transform?.(item.store,id); item.store.rename(title); await item.persistence.flush();
     this.doc.transact(() => { const meta={ id, title, createdAt, folderId }; if(recycled)this.trash.set(id,{meta,...recycled});else this.documents.set(id,meta); }, LOCAL_ORIGIN); await this.persistence.flush(); item.store.history.clear(); this.indexDocument(id, item); return id; } catch (error) { await this.discardUnpublished(id); throw error; }
   }

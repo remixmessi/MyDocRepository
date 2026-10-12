@@ -19,7 +19,7 @@
     "desktop:dev": "yarn desktop:build && yarn workspace @mydoc/desktop start",
     "desktop:start": "yarn workspace @mydoc/desktop start",
     "desktop:pack": "yarn desktop:build && yarn workspace @mydoc/desktop run package:dir",
-    "desktop:dist:mac": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac --arm64 --x64 --publish never",
+    "desktop:dist:mac": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac --arm64 --config.electronDist=\"$PWD/node_modules/electron/dist\" --publish never && yarn workspace @mydoc/desktop dist:mac --x64 --publish never",
     "desktop:dist:win": "yarn desktop:build && yarn workspace @mydoc/desktop dist:win",
     "test:desktop": "playwright test --config playwright.desktop.config.ts",
     "desktop:release:mac": "node scripts/desktop/release.mjs mac",
@@ -28,7 +28,7 @@
     "server:start": "node packages/frontend/apps/web/server-dist/main.cjs",
     "test:cloud": "playwright test --config playwright.cloud.config.ts",
     "desktop:dist:mac:x64": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac --x64 --publish never",
-    "desktop:dist:mac:arm64": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac --arm64 --publish never"
+    "desktop:dist:mac:arm64": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac --arm64 --config.electronDist=\"$PWD/node_modules/electron/dist\" --publish never"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.1",

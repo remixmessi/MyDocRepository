@@ -11,6 +11,7 @@
   ],
   "asar": true,
   "npmRebuild": false,
+  "beforePack": "../../../../scripts/desktop/verify-electron-runtime.cjs",
   "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
   "mac": {
     "icon": "resources/icon.icns",

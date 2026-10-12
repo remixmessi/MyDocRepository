@@ -1,9 +1,9 @@
 import {CloudStorage,CloudAssets,cloudJson,type CloudWorkspace,type CloudAccount} from '../../../common/nbstore/src/cloud';
-import { templateStore, disposeTemplate } from './document-templates';
+import { templateStore, disposeTemplate, snapshotAssets } from './document-templates';
 import { encodeBinary } from './backup';
 import { Y, LOCAL_ORIGIN } from '@mydoc/crdt';
 import { PersistentDocument, IndexedDBAssetStorage, type AssetStorage, type DocumentStorage } from '@mydoc/nbstore';
-import { remapReferences } from '@mydoc/editor-blocks';
+import { remapReferences, remapAssets } from '@mydoc/editor-blocks';
 import { LocalWorkspace } from './workspace';
 import { decodeBinary, type WorkspaceBackup } from './backup';
 export interface WorkspaceMeta { id: string; name: string; createdAt: number; cloud?:boolean; userId?:string;role?:CloudWorkspace['role'] }
@@ -32,10 +32,11 @@ export class WorkspaceRegistry {
       for (const asset of backup.assets ?? []) await ws.assets.put({ ...asset, bytes: asset.data ? decodeBinary(asset.data) : new Uint8Array() });
       ws.folders.doc!.transact(() => backup.folders.forEach(folder => ws.folders.set(folderIds.get(folder.id)!, { ...folder, id: folderIds.get(folder.id)!, parentId: folder.parentId ? folderIds.get(folder.parentId)! : null })), LOCAL_ORIGIN);
       const collectionIds = new Map((backup.collections??[]).map(c=>[c.id,crypto.randomUUID()]));
-      const entries=[...backup.documents,...(backup.trash??[])];
+      const entries=[...backup.documents,...(backup.trash??[])];const backupAssets=new Map((backup.assets??[]).map(asset=>[asset.id,asset]));
       const docIds = new Map<string,string>();
-      for(const entry of backup.documents)docIds.set(entry.meta.id,await ws.createSnapshot(entry.meta.title,entry.meta.createdAt,entry.meta.folderId?folderIds.get(entry.meta.folderId)!:null,decodeBinary(entry.update)));
-      for(const entry of backup.trash??[])docIds.set(entry.meta.id,await ws.createSnapshot(entry.meta.title,entry.meta.createdAt,entry.meta.folderId?folderIds.get(entry.meta.folderId)!:null,decodeBinary(entry.update),{deletedAt:entry.deletedAt,collectionIds:entry.collectionIds.map(key=>collectionIds.get(key)!)}));
+      const restoreEntry=async(entry:typeof backup.documents[number],recycled?:{deletedAt:number;collectionIds:string[]})=>{const target=crypto.randomUUID(),store=templateStore({id:entry.meta.id,name:entry.meta.title,createdAt:entry.meta.createdAt,sourceDocId:entry.meta.id,sourceWorkspaceId:backup.workspaceId??'local',update:entry.update});try{const remap=new Map<string,string>();for(const assetId of snapshotAssets(store)){const asset=backupAssets.get(assetId);if(!asset)throw new Error('备份附件缺失');const next=crypto.randomUUID();await ws.documentAssets(target).put({...asset,id:next,bytes:asset.data?decodeBinary(asset.data):new Uint8Array()});remap.set(assetId,next);}if(remap.size)remapAssets(store,remap);const result=await ws.createSnapshot(entry.meta.title,entry.meta.createdAt,entry.meta.folderId?folderIds.get(entry.meta.folderId)!:null,Y.encodeStateAsUpdate(store.doc),recycled,undefined,target);return result;}finally{disposeTemplate(store);}};
+      for(const entry of backup.documents)docIds.set(entry.meta.id,await restoreEntry(entry));
+      for(const entry of backup.trash??[])docIds.set(entry.meta.id,await restoreEntry(entry,{deletedAt:entry.deletedAt,collectionIds:entry.collectionIds.map(key=>collectionIds.get(key)!)}));
       const tagIds = new Map((backup.tags ?? []).map(tag => [tag.id, crypto.randomUUID()]));
       ws.documents.doc!.transact(() => {
         for (const tag of backup.tags ?? []) ws.organization.tags.set(tagIds.get(tag.id)!, { ...tag, id: tagIds.get(tag.id)! });
