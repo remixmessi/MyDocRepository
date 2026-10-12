@@ -5,6 +5,7 @@
  * 权限变化后刷新概览与列表，避免用过期权限显示可用操作。
  */
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
+import {ArrowLeft,HardDrive,Mail,Settings2,ShieldCheck,Users} from 'lucide-react';
 import {cloudJson,type CloudAccount,type CloudWorkspace} from '../../../common/nbstore/src/cloud';
 
 export interface Member {id:string;email:string;name:string;role:CloudWorkspace['role']}
@@ -43,6 +44,7 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
  const [overview,setOverview]=useState<Overview>(),[members,setMembers]=useState<Member[]>([]),[invites,setInvites]=useState<Invite[]>([]);
  const [search,setSearch]=useState(''),[roleFilter,setRoleFilter]=useState(''),[page,setPage]=useState(0);
  const [pending,setPending]=useState<Pending|null>(null),[token,setToken]=useState(''),[notice,setNotice]=useState('');
+ const [section,setSection]=useState<'overview'|'members'|'invites'|'maintenance'>('overview');
  const alive=useRef(true);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
  const path=useCallback((route:string)=>route+'?workspace='+encodeURIComponent(workspace.id),[workspace.id]);
@@ -74,11 +76,19 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
  // 管理员不能操作所有者或其他管理员；界面与服务端校验保持一致。
  const canModify=(member:Member)=>canManage&&member.id!==account.id&&member.role!=='owner'&&(isOwner||member.role!=='admin');
  const act=(work:()=>Promise<void>,message:string)=>run(async()=>{await work();await refresh();if(alive.current){setPending(null);setNotice(message);}});
- return <section className="cloud-settings" aria-label="工作空间设置">
-  <div className="cloud-settings-head"><button disabled={busy} onClick={onBack}>返回工作空间列表</button><h3>{overview?.name??workspace.name}</h3></div>
+ return <section className="cloud-settings workspace-settings-shell" aria-label="工作空间设置">
+  <header className="workspace-settings-hero"><button className="workspace-back" disabled={busy} onClick={onBack}><ArrowLeft size={16}/>返回工作空间列表</button><div className="workspace-title-row"><div><p className="workspace-eyebrow">团队工作空间</p><h2>{overview?.name??workspace.name}</h2><p className="workspace-subtitle">成员、邀请与空间策略</p></div><span className={`workspace-role workspace-role-${overview?.role??workspace.role}`}>{roleLabels[overview?.role??workspace.role]}</span></div></header>
   {notice&&<p role="status" className="cloud-settings-notice">{notice}<button aria-label="关闭提示" onClick={()=>setNotice('')}>×</button></p>}
   {!overview?<p role="status">正在读取工作空间信息…</p>:<>
-   <dl className="cloud-overview" aria-label="工作空间概览">
+   <nav className="workspace-settings-nav" aria-label="工作区管理分区">{([{id:'overview',label:'概览',icon:ShieldCheck},{id:'members',label:'成员',icon:Users},...(canManage?[{id:'invites',label:'邀请',icon:Mail}]:[]),{id:'maintenance',label:'维护',icon:Settings2}] as const).map(({id,label,icon:Icon})=><button key={id} aria-pressed={section===id} disabled={busy} onClick={()=>setSection(id as typeof section)}><Icon size={15}/>{label}</button>)}</nav>
+   {section==='overview'&&<>
+   <dl id="workspace-overview" className="cloud-overview workspace-metric-strip" aria-label="工作空间概览">
+    <div><dt><Users size={15}/>成员</dt><dd>{overview.members.total}<small>人</small></dd></div>
+    <div><dt><ShieldCheck size={15}/>我的角色</dt><dd>{roleLabels[overview.role]}</dd></div>
+    <div><dt><HardDrive size={15}/>存储</dt><dd>{formatBytes(overview.storage.total)}</dd></div>
+    <div><dt>文档</dt><dd>{overview.documents}<small>篇</small></dd></div>
+   </dl>
+   <dl className="workspace-detail-list">
     <div><dt>名称</dt><dd>{overview.name}</dd></div>
     <div><dt>所有者</dt><dd>{overview.owner?`${overview.owner.name} · ${overview.owner.email}`:'未知'}</dd></div>
     <div><dt>我的角色</dt><dd>{roleLabels[overview.role]}</dd></div>
@@ -91,8 +101,9 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
     <label className="form-field">工作空间名称<input name="name" defaultValue={overview.name} required maxLength={160} disabled={busy}/></label>
     <button disabled={busy}>保存名称</button>
    </form>}
+   </>}
 
-   <h3>成员</h3>
+   {section==='members'&&<div id="workspace-members" className="workspace-panel"><div className="workspace-section-heading"><div><h3>成员</h3></div><span>{members.length} 位成员</span></div>
    <div className="cloud-filters">
     <label className="form-field">搜索成员<input type="search" value={search} placeholder="姓名或邮箱" disabled={busy} onChange={event=>setSearch(event.target.value)}/></label>
     <label className="form-field">角色筛选<select aria-label="角色筛选" value={roleFilter} disabled={busy} onChange={event=>setRoleFilter(event.target.value)}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
@@ -115,9 +126,9 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
      <button disabled={busy||current>=pages-1} onClick={()=>setPage(current+1)}>下一页</button>
     </div>}
    </>}
+   </div>}
 
-   {canManage&&<>
-    <h3>邀请</h3>
+   {section==='invites'&&canManage&&<div id="workspace-invites" className="workspace-panel"><div className="workspace-section-heading"><div><h3>邀请</h3></div><span>{invites.length} 条邀请</span></div>
     {!invites.length?<p className="panel-empty">没有待接受的邀请。</p>:<ul className="cloud-members" aria-label="邀请列表">{invites.map(invite=><li key={invite.id}>
      <div><strong>{invite.email}</strong><small>{roleLabels[invite.role]??invite.role} · {invite.expired?'已过期，需重新生成':`有效至 ${new Date(invite.expiresAt).toLocaleString()}`}</small></div>
      <span>{invite.expired?'已过期':'待接受'}</span>
@@ -129,12 +140,13 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
      <button disabled={busy}>生成邀请口令</button>
      {token&&<label className="form-field">邀请口令（7 天有效，仅指定邮箱可接受）<input readOnly value={token} onFocus={event=>event.currentTarget.select()}/></label>}
     </form>
-   </>}
+   </div>}
 
-   <h3>空间维护</h3>
+   {section==='maintenance'&&<div id="workspace-maintenance" className="workspace-panel workspace-maintenance"><div className="workspace-section-heading"><div><h3>空间维护</h3></div></div>
    {!isOwner&&<button disabled={busy} onClick={()=>setPending({kind:'leave'})}>退出此工作空间</button>}
    {isOwner&&overview.members.total<2&&<p className="organization-help">只有你一个成员时无法转移所有权。先邀请成员，或直接删除工作空间。</p>}
    {isOwner&&<button className="danger" disabled={busy} onClick={()=>setPending({kind:'delete'})}>删除工作空间</button>}
+   </div>}
 
    {pending&&<div className="cloud-confirm" role="alertdialog" aria-label="确认操作">
     {pending.kind==='role'&&<><p>将“{pending.member.name}”的角色改为{roleLabels[pending.role]}？该成员的当前连接会断开并按新权限重新载入。</p>

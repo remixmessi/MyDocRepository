@@ -2,6 +2,9 @@ export interface AssetRecord { id: string; name: string; mime: string; size: num
 export interface AssetStorage {
   get(workspace: string, id: string): Promise<AssetRecord | null>;
   put(workspace: string, asset: AssetRecord): Promise<void>;
+  getForDocument?(workspace:string,id:string,doc:string):Promise<AssetRecord|null>;
+  putForDocument?(workspace:string,asset:AssetRecord,doc:string):Promise<void>;
+  removeForDocument?(workspace:string,id:string,doc:string):Promise<void>;
   remove?(workspace:string,id:string):Promise<void>;
   removeWorkspace(workspace: string): Promise<void>;
   close(): void;

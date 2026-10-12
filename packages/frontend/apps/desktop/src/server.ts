@@ -22,7 +22,7 @@ export async function startDesktopServer(root:string,database:SQLiteProjectDatab
    if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);res.end();return;}
    const file=staticFile(root,req.url??'/');if(!file){res.writeHead(403);res.end();return;}
    const bytes=await readFile(file);res.setHeader('Content-Type',types[extname(file)]??'application/octet-stream');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
-   res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https: http:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob:; font-src 'self' data: blob:; frame-src https: http:; object-src 'none'; base-uri 'none'");
+   res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https: http:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: https: http:; font-src 'self' data: blob:; frame-src https: http:; object-src 'none'; base-uri 'none'");
    res.end(req.method==='HEAD'?undefined:bytes);
   }catch{if(!res.headersSent){res.writeHead(404);res.end();}}
  });

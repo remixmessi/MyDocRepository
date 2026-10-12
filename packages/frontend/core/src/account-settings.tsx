@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
-import {cloudJson,cloudRequest,type CloudAccount,type CloudMailStatus} from '../../../common/nbstore/src/cloud';
+import {ArrowLeft} from 'lucide-react';
+import {cloudJson,cloudRequest,cloudServerUrl,type CloudAccount,type CloudMailStatus} from '../../../common/nbstore/src/cloud';
 
 /**
  * 账户设置：显示名称与头像、修改密码、登录设备、邮箱验证与更改邮箱。
@@ -26,7 +27,7 @@ export function AccountSettings({account,mail,busy,run,onBack,onChanged,onSigned
  const act=(work:()=>Promise<void>,message:string)=>run(async()=>{await work();if(alive.current){setNotice(message);setConfirm(null);}});
 
  return <section className="account-settings">
-  <header className="cloud-settings-head"><button disabled={busy} onClick={onBack}>返回工作空间列表</button><h3>账户设置</h3></header>
+  <header className="cloud-settings-head"><button className="workspace-back" disabled={busy} onClick={onBack}><ArrowLeft size={16}/>返回工作空间列表</button><h3>账户设置</h3></header>
   {notice&&<p role="status" className="form-notice">{notice}</p>}
   {!mail.configured&&<p className="organization-help">邮件服务未配置（{mail.reason??'缺少 SMTP 设置'}）。验证与更改邮箱的一次性口令会直接显示在此页面；找回密码的口令只写入服务端日志，需要联系运维获取。</p>}
 
@@ -43,7 +44,7 @@ export function AccountSettings({account,mail,busy,run,onBack,onChanged,onSigned
 
   <h4>头像</h4>
   <div className="account-avatar">
-   {account.hasAvatar?<img src={'/api/cloud/avatar?user='+encodeURIComponent(account.id)+'&v='+avatarTick} width={64} height={64} alt={account.name+' 的头像'}/>:<span className="account-avatar-empty" aria-hidden="true">{account.name.slice(0,1)}</span>}
+   {account.hasAvatar?<img src={(cloudServerUrl()||'')+'/api/cloud/avatar?user='+encodeURIComponent(account.id)+'&v='+avatarTick} width={64} height={64} alt={account.name+' 的头像'}/>:<span className="account-avatar-empty" aria-hidden="true">{account.name.slice(0,1)}</span>}
    <div>
     <label className="form-field">上传头像（PNG／JPEG／WebP，不超过 256 KiB）
      <input type="file" accept={AVATAR_TYPES} disabled={busy} onChange={event=>{

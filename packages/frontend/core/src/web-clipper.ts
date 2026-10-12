@@ -1,7 +1,7 @@
 import {Readability} from '@mozilla/readability';
 import DOMPurify from 'dompurify';
 import {DOMParser as DocumentParser,Fragment,type Node} from 'prosemirror-model';
-import {documentSchema,markdownParser,markdownSerializer} from '@mydoc/editor-blocks';
+import {documentSchema,markdownParser,markdownSerializer,writeDocument} from '@mydoc/editor-blocks';
 import {imageMime,type AssetRecord} from '@mydoc/nbstore';
 import {clipUrl,type WebClipSource} from './clip-source';
 import type {LocalWorkspace} from './workspace';
@@ -36,12 +36,12 @@ function mapImages(node:Node,assets:Map<string,AssetRecord>):Node {
 export async function saveClip(workspace:LocalWorkspace,article:ClipArticle,options:{title:string;markdown:string;folderId:string|null;tagIds:string[];localImages:boolean;copy:boolean},signal:AbortSignal,progress:(message:string)=>void) {
  if(!options.title.trim()||options.title.length>500)throw new Error('请输入 1–500 字的标题');if(options.markdown.length>1024*1024)throw new Error('正文不能超过 1 MB');
  if(!options.copy&&clipDuplicate(workspace,article.source))throw new Error('相同来源已剪藏，请打开原文档或选择创建副本');
- let node=markdownParser.parse(options.markdown);if(!node.textContent.trim())throw new Error('正文不能为空');const downloaded=new Map<string,AssetRecord>(),stored:string[]=[];
- try{if(options.localImages){const urls=new Set<string>();node.descendants(n=>{if(n.type.name==='image'&&n.attrs.src)urls.add(clipUrl(n.attrs.src));});if(urls.size>30)throw new Error('本地图片最多 30 张，请减少图片或使用远程链接');let total=0;
+ let node=markdownParser.parse(options.markdown);if(!node.textContent.trim())throw new Error('正文不能为空');const downloaded=new Map<string,AssetRecord>(),stored:string[]=[];const title=options.title.trim();let documentId='';
+ try{documentId=await workspace.create(title,undefined,options.folderId);if(options.localImages){const urls=new Set<string>();node.descendants(n=>{if(n.type.name==='image'&&n.attrs.src)urls.add(clipUrl(n.attrs.src));});if(urls.size>30)throw new Error('本地图片最多 30 张，请减少图片或使用远程链接');let total=0;
  for(const url of urls){if(signal.aborted)throw new DOMException('已取消','AbortError');progress(`正在保存图片 ${downloaded.size+1}/${urls.size}…`);const response=await clipFetch(url,'image',signal),bytes=new Uint8Array(await response.arrayBuffer());const mime=imageMime(bytes);if(!mime||bytes.length>20*1024*1024)throw new Error('图片格式或大小无效，请使用远程链接');total+=bytes.length;if(total>50*1024*1024)throw new Error('图片总大小超过 50 MB，请使用远程链接');downloaded.set(url,{id:crypto.randomUUID(),name:(new URL(url).pathname.split('/').pop()||'网页图片').slice(0,200),mime,size:bytes.length,bytes});}
- for(const asset of downloaded.values()){if(signal.aborted)throw new DOMException('已取消','AbortError');await workspace.assets.put(asset);stored.push(asset.id);}node=mapImages(node,downloaded);}
+ for(const asset of downloaded.values()){if(signal.aborted)throw new DOMException('已取消','AbortError');await workspace.documentAssets(documentId).put(asset);stored.push(asset.id);}node=mapImages(node,downloaded);}
  if(signal.aborted)throw new DOMException('已取消','AbortError');if(!options.copy&&clipDuplicate(workspace,article.source))throw new Error('相同来源已剪藏，请选择创建副本');
  const footer=Fragment.fromArray([documentSchema.nodes.horizontal_rule.create(),documentSchema.nodes.paragraph.create(null,[documentSchema.text('来源：'),documentSchema.text(new URL(article.source.url).hostname,[documentSchema.marks.link.create({href:article.source.url})]),documentSchema.text(' · 剪藏于 '+new Date(article.source.clippedAt).toLocaleString('zh-CN'))])]);node=node.copy(node.content.append(footer));progress('正在创建文档…');
- return await workspace.create(options.title.trim(),undefined,options.folderId,{content:node,properties:{webClip:article.source,tagIds:options.tagIds}});
- }catch(error){await Promise.allSettled(stored.map(id=>workspace.assets.remove(id)));throw error;}
+ const item=await workspace.openDocument(documentId);writeDocument(item.store,node);await item.persistence.flush();const meta=workspace.documents.get(documentId);if(meta){workspace.documents.set(documentId,{...meta,webClip:article.source,tagIds:options.tagIds});await workspace.persistence.flush();}return documentId;
+ }catch(error){if(documentId){await Promise.allSettled(stored.map(id=>workspace.documentAssets(documentId).remove(id)));await workspace.delete(documentId).catch(()=>{});}else await Promise.allSettled(stored.map(id=>workspace.assets.remove(id)));throw error;}
 }

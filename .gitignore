@@ -54,9 +54,12 @@ data/backup-settings.json.tmp
 !/tests/fixtures/pdf-preview.pdf
 /packages/frontend/apps/web/server-dist/
 !/tests/cloud-server.test.ts
+!/tests/document-permissions.test.ts
+!/tests/default-admin.test.ts
 !/tests/e2e/
 /tests/e2e/*
 !/tests/e2e/cloud.spec.ts
+!/tests/e2e/document-permissions.spec.ts
 
 !/tests/e2e/comments.spec.ts
 !/tests/draft-restore.test.ts

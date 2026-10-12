@@ -94,7 +94,7 @@ it('远端已确认但本地确认失败，重复发送幂等；服务器完全�
 
 it.each([401,403,410])('会话失效、权限撤销或永久删除（%s）暂停且保留队列，不自动复活文档',async(status)=>{
  const f=await fixture();try{const client=f.client();f.state.syncDown=false;f.state.deny=status;
-  await client.append(target.doc,update('被阻止草稿'));expect(client.status).toBe('blocked');expect(client.pendingCount).toBe(1);
+  await client.append(target.doc,update('被阻止草稿'));expect(client.status).toBe(status===403?'offline':'blocked');expect(client.isReadOnly(target.doc)).toBe(true);expect(client.pendingCount).toBe(1);
   await expect(client.append(target.doc,update('不允许编辑'))).rejects.toThrow();expect(f.queue().list(target)).toHaveLength(1);
   expect(f.db.load('remote',target.doc)).toBeNull();expect(f.db.db.prepare('SELECT count(*) n FROM drafts').get()).toEqual({n:1});
  }finally{await f.close();}
@@ -106,6 +106,15 @@ it('降权、账号切换、旧代际恢复均保留队列且停止重放',async
   setStorageAccount('b');await expect(client.append(target.doc,update('不转投乙'))).rejects.toThrow('账户已变更');expect(client.status).toBe('blocked');expect(f.queue().list(target)).toHaveLength(1);
   setStorageAccount('a');f.state.viewer=false;f.state.syncDown=false;f.db.generation='restored';setStorageGeneration('restored');
   const restored=f.client();await restored.load(target.doc);await restored.reconnect();expect(restored.status).toBe('blocked');expect(f.state.posts).toBe(posts);expect(f.queue().list(target)).toHaveLength(1);
+ }finally{await f.close();}
+});
+
+it('文档只读只暂停该文档队列，不影响其他文档，重新授权后重放草稿',async()=>{
+ const f=await fixture();try{const client=f.client();f.state.syncDown=false;f.state.deny=403;
+  await client.append(target.doc,update('只读草稿'));expect(client.isReadOnly(target.doc)).toBe(true);expect(client.readOnly).toBe(false);expect(client.pendingCount).toBe(1);
+  const posts=f.state.posts;await expect(client.append(target.doc,update('不能续写'))).rejects.toThrow();expect(f.state.posts).toBe(posts);
+  f.state.deny=0;await client.append('doc:other',update('其他文档'));expect(client.isReadOnly('doc:other')).toBe(false);expect(client.pendingCount).toBe(1);
+  await client.reconnect();expect(client.isReadOnly(target.doc)).toBe(false);expect(client.pendingCount).toBe(0);expect(read(f.db.load('remote',target.doc)!)).toContain('只读草稿');
  }finally{await f.close();}
 });
 
