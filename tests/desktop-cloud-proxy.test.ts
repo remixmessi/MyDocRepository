@@ -38,6 +38,7 @@ it('桌面代理隔离服务器 Cookie，转发二进制和实时流，支持会
       const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({arch:req.headers['x-mydoc-arch'],version:req.headers['x-mydoc-version'],filename:req.headers['x-mydoc-filename'],bytes:[...Buffer.concat(chunks)]}));return;
     }
+    if(path.endsWith('/admin/users')||path.endsWith('/admin/user')){res.setHeader('Content-Type','application/json');res.end('{"ok":true}');return;}
     if(path.endsWith('/admin/releases')||path.endsWith('/releases/latest')){res.setHeader('Content-Type','application/json');res.end('[]');return;}
     if(path.endsWith('/releases/download')){res.setHeader('Content-Disposition',"attachment; filename=MyDoc.dmg; filename*=UTF-8''MyDoc.dmg");res.end('installer');return;}
     if(path.endsWith('/events')){res.setHeader('Content-Type','text/event-stream');res.write('data: {"id":"doc:test"}\n\n');return;}
@@ -74,6 +75,7 @@ it('桌面代理隔离服务器 Cookie，转发二进制和实时流，支持会
     expect(await publication.json()).toEqual({arch:'arm64',version:'1.2.3',filename:'MyDoc-arm64.dmg',bytes:[...bytes]});
     expect((await call('/admin/releases')).status).toBe(200);expect((await call('/releases/latest?platform=darwin&arch=arm64')).status).toBe(200);
     expect(requests.at(-1)!.url).toBe('/docs/api/cloud/releases/latest?platform=darwin&arch=arm64');
+    expect((await call('/admin/users?workspace=test')).status).toBe(200);expect((await call('/admin/user',{method:'PATCH',body:'{}'})).status).toBe(200);
     const installer=await call('/releases/download?id=release');expect(installer.headers.get('content-disposition')).toContain('filename*=UTF-8');expect(await installer.text()).toBe('installer');
     const events=await call('/events?workspace=test');
     expect(events.headers.get('content-type')).toBe('text/event-stream');

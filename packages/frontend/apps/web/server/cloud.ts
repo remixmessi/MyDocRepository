@@ -130,8 +130,11 @@ export class CloudServer {
   if(!user.serverAdmin)throw new RequestError('需要服务器管理员权限',403);
   const offset=Number(url.searchParams.get('offset')??0);if(!Number.isSafeInteger(offset)||offset<0)throw new RequestError('分页参数无效');
   const query=(url.searchParams.get('q')??'').trim().toLowerCase();if(query.length>254)throw new RequestError('搜索内容过长');
-  const users=this.database.db.prepare("SELECT id,email,name,verified,created AS createdAt,server_admin AS serverAdmin,EXISTS(SELECT 1 FROM cloud_bootstrap b WHERE b.user=cloud_users.id AND b.key='default-admin') AS defaultAdmin FROM cloud_users WHERE instr(lower(email),?)>0 OR instr(lower(name),?)>0 ORDER BY created,id LIMIT 100 OFFSET ?").all(query,query,offset);
-  const total=(this.database.db.prepare('SELECT count(*) total FROM cloud_users WHERE instr(lower(email),?)>0 OR instr(lower(name),?)>0').get(query,query) as {total:number}).total;
+  const workspace=url.searchParams.get('workspace');if(workspace)this.authorize(workspace,user.id);
+  const filter="(instr(lower(email),?)>0 OR instr(lower(name),?)>0)"+(workspace?' AND EXISTS(SELECT 1 FROM cloud_members m WHERE m.workspace=? AND m.user=cloud_users.id)':'');
+  const params=workspace?[query,query,workspace]:[query,query];
+  const users=this.database.db.prepare("SELECT id,email,name,verified,created AS createdAt,server_admin AS serverAdmin,EXISTS(SELECT 1 FROM cloud_bootstrap b WHERE b.user=cloud_users.id AND b.key='default-admin') AS defaultAdmin FROM cloud_users WHERE "+filter+" ORDER BY created,id LIMIT 100 OFFSET ?").all(...params,offset);
+  const total=(this.database.db.prepare('SELECT count(*) total FROM cloud_users WHERE '+filter).get(...params) as {total:number}).total;
   json({users,total,offset,limit:100});return;
  }
  if(route==='/admin/user'&&req.method==='PATCH'){

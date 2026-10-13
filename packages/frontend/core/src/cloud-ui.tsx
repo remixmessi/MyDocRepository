@@ -9,7 +9,7 @@ import {ArrowUpRight,Building2,Plus,Settings2,Users} from 'lucide-react';
  * 登录／注册与找回密码。
  * 找回密码不显示邮箱是否存在；未配置邮件服务时明确说明口令只写入服务端日志。
  */
-export function CloudLogin({onLogin,beforeSession}:{onLogin:()=>void;beforeSession?:()=>Promise<void>}){
+export function CloudLogin({onLogin,beforeSession,requestJson=cloudJson}:{onLogin:()=>void;beforeSession?:()=>Promise<void>;requestJson?:typeof cloudJson}){
  const [mode,setMode]=useState<'login'|'register'|'forgot'|'reset'>('login'),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const register=mode==='register';
  const run=(work:()=>Promise<void>)=>{setBusy(true);setError('');void (async()=>{try{await work();}catch(error){setError(error instanceof Error?error.message:'操作失败，请重试');}finally{setBusy(false);}})();};
@@ -17,13 +17,13 @@ export function CloudLogin({onLogin,beforeSession}:{onLogin:()=>void;beforeSessi
   <p className="organization-help">{mode==='forgot'?'输入账户邮箱获取一次性重置口令。为避免暴露账户是否存在，无论邮箱是否注册都会返回相同结果。':'输入收到的重置口令与新密码。口令 1 小时内有效、只能使用一次；重置后全部设备都需要重新登录。'}</p>
   {notice&&<p role="status" className="form-notice">{notice}</p>}
   {mode==='forgot'?<form onSubmit={event=>{event.preventDefault();const data=new FormData(event.currentTarget);
-   run(async()=>{const result=await cloudJson<{mailConfigured:boolean;notice?:string}>('/forgot','POST',{email:data.get('email')});
+   run(async()=>{const result=await requestJson<{mailConfigured:boolean;notice?:string}>('/forgot','POST',{email:data.get('email')});
     setNotice(result.notice??'如果该邮箱已注册，重置口令已发送，请查收。');setMode('reset');});}}>
    <label className="form-field">账户邮箱<input type="email" name="email" autoComplete="email" required maxLength={254} disabled={busy}/></label>
    {error&&<p role="alert" className="form-error">{error}</p>}
    <div className="dialog-actions"><button type="button" disabled={busy} onClick={()=>{setMode('login');setError('');setNotice('');}}>返回登录</button><button className="primary" disabled={busy}>获取重置口令</button></div>
   </form>:<form onSubmit={event=>{event.preventDefault();const data=new FormData(event.currentTarget);
-   run(async()=>{await cloudJson('/reset','POST',{token:data.get('token'),password:data.get('password')});setNotice('密码已重置，请用新密码登录。');setMode('login');});}}>
+   run(async()=>{await requestJson('/reset','POST',{token:data.get('token'),password:data.get('password')});setNotice('密码已重置，请用新密码登录。');setMode('login');});}}>
    <label className="form-field">重置口令<input name="token" required maxLength={128} disabled={busy}/></label>
    <label className="form-field">新密码（至少 10 位）<input type="password" name="password" autoComplete="new-password" required minLength={10} maxLength={256} disabled={busy}/></label>
    {error&&<p role="alert" className="form-error">{error}</p>}
@@ -31,7 +31,7 @@ export function CloudLogin({onLogin,beforeSession}:{onLogin:()=>void;beforeSessi
   </form>}
  </div>;
  return <form onSubmit={event=>{event.preventDefault();const data=new FormData(event.currentTarget);
-  run(async()=>{await (beforeSession?.()??Promise.resolve());await cloudJson(register?'/register':'/login','POST',{email:data.get('email'),password:data.get('password'),name:data.get('name')});onLogin();});}}>
+  run(async()=>{await (beforeSession?.()??Promise.resolve());await requestJson(register?'/register':'/login','POST',{email:data.get('email'),password:data.get('password'),name:data.get('name')});onLogin();});}}>
   <p className="organization-help">登录后可创建或加入团队工作空间，与成员共同编辑文档。个人工作区仍保存在本机，不会上传。</p>
   {notice&&<p role="status" className="form-notice">{notice}</p>}
   {register&&<label className="form-field">显示名称<input name="name" required maxLength={160} disabled={busy}/></label>}

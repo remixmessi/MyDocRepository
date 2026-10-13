@@ -17,6 +17,22 @@ async function fixture(config?:DefaultAdminConfig){
  return {call,get cloud(){return cloud;},restart(config?:DefaultAdminConfig){cloud.close();cloud=new CloudServer(path,{defaultAdmin:config});},async close(){server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));cloud.close();rmSync(dir,{recursive:true,force:true});}};
 }
 
+it('管理员用户列表按所选空间筛选，搜索仍受成员范围限制',async()=>{
+ const f=await fixture(admin);try{
+  const login=await f.call('/login',{email:admin.email,password:admin.password}),cookie=login.headers.get('set-cookie')!.split(';')[0];
+  const a=await (await f.call('/workspaces',{name:'空间 A'},cookie)).json(),b=await (await f.call('/workspaces',{name:'空间 B'},cookie)).json();
+  const registered=await f.call('/register',{email:'member@example.com',name:'A 成员',password:'member-password-123'}),memberCookie=registered.headers.get('set-cookie')!.split(';')[0];
+  const invite=await (await f.call('/invite?workspace='+a.id,{email:'member@example.com',role:'member'},cookie)).json();
+  await f.call('/accept',{token:invite.token},memberCookie);
+  const listA=await (await f.call('/admin/users?workspace='+a.id,undefined,cookie)).json();
+  expect(listA.total).toBe(2);expect(listA.users.map((user:{email:string})=>user.email)).toContain('member@example.com');
+  const listB=await (await f.call('/admin/users?workspace='+b.id+'&q=member',undefined,cookie)).json();
+  expect(listB).toMatchObject({users:[],total:0});
+  expect((await f.call('/admin/users?workspace='+a.id,undefined,memberCookie)).status).toBe(403);
+  expect((await f.call('/admin/users?workspace=missing',undefined,cookie)).ok).toBe(false);
+ }finally{await f.close();}
+});
+
 it('默认管理员配置可选，邮箱规范化，拒绝不完整或无效配置',()=>{
  expect(defaultAdminConfig({})).toBeUndefined();expect(defaultAdminConfig({MYDOC_ADMIN_EMAIL:' Admin@Example.com ',MYDOC_ADMIN_PASSWORD:admin.password})).toEqual({...admin,name:'管理员'});
  for(const env of [{MYDOC_ADMIN_EMAIL:admin.email},{MYDOC_ADMIN_PASSWORD:admin.password},{MYDOC_ADMIN_EMAIL:'invalid',MYDOC_ADMIN_PASSWORD:admin.password},{MYDOC_ADMIN_EMAIL:admin.email,MYDOC_ADMIN_PASSWORD:'short'},{MYDOC_ADMIN_EMAIL:admin.email,MYDOC_ADMIN_PASSWORD:' password-with-space '}])expect(()=>defaultAdminConfig(env)).toThrow();

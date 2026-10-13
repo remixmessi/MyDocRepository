@@ -1,6 +1,7 @@
 import {useEffect,useId,useRef,useState} from 'react';
 import {CheckCircle2,Download,RefreshCw,Server} from 'lucide-react';
 import {projectPreferences} from '@mydoc/nbstore';
+import {cloudUrl} from '../../../common/nbstore/src/cloud';
 import {compareReleaseVersions,releaseTarget,validReleaseVersion,type DesktopRelease} from '../../../common/nbstore/src/releases';
 import {formatBytes} from './cloud-settings';
 import './release-styles.css';
@@ -18,7 +19,7 @@ export function ClientReleaseCheck({current,locked}:{current?:string;locked:bool
   setBusy(true);setError('');setNotice('');setRelease(undefined);const controller=new AbortController();request.current=controller;
   const timer=setTimeout(()=>controller.abort(new Error('连接超时，请检查服务器地址和网络')),15000);
   try{
-   const response=await fetch(server+'/api/cloud/releases/latest?'+new URLSearchParams({platform,arch:arch!}),{headers:{Accept:'application/json'},signal:controller.signal});
+   const response=await fetch(cloudUrl('/releases/latest?'+new URLSearchParams({platform,arch:arch!}),server),{headers:{Accept:'application/json'},signal:controller.signal});
    if(!response.ok)throw new Error('更新服务器返回错误（'+response.status+'）');const value=await response.json() as DesktopRelease|null;
    if(value&&(!validReleaseVersion(value.version)||value.platform!==platform||value.arch!==arch&&!(platform!=='darwin'&&value.arch==='')||!/^\/api\/cloud\/releases\/download\?id=[a-f0-9-]+$/.test(value.downloadPath)))throw new Error('服务器返回的安装包与当前系统或架构不匹配');
    if(alive.current){setRelease(value);setCheckedAt(Date.now());}
@@ -39,6 +40,6 @@ export function ClientReleaseCheck({current,locked}:{current?:string;locked:bool
   {notice&&<p className="release-feedback" role="status">{notice}</p>}{error&&<p className="release-feedback error" role="alert">{error}</p>}
   <div className="client-check-actions"><button className="primary" disabled={busy||locked||!server||changed||!current} onClick={()=>void check()}><RefreshCw size={15}/>{busy?'正在处理…':error?'重新检查':'检查服务器版本'}</button><small>{changed?'先保存地址，再检查版本':checkedAt?'上次检查：'+new Date(checkedAt).toLocaleTimeString('zh-CN',{hour12:false}):server?'已配置服务器':'填写并保存地址后即可检查'}</small></div>
   {release===null&&<div className="client-release-result" role="status"><strong>暂无匹配的安装包</strong><p>服务器尚未发布 {target} 版本。</p></div>}
-  {release&&<div className="client-release-result"><div className="release-section-head"><div><strong role="status">{newer?'发现新版本':same?'当前已是最新版本':'服务器可用版本'}</strong><h4>{release.version}</h4></div><CheckCircle2 size={22}/></div><div className="client-release-meta"><span>{releaseTarget(release.platform,release.arch)}</span><span>{formatBytes(release.bytes)} · {new Date(release.created).toLocaleDateString('zh-CN')}</span></div>{release.notes&&<p className="client-release-notes">{release.notes}</p>}<details className="release-details"><summary>文件与校验信息</summary><div><p>{release.filename}</p><code>{release.sha256}</code></div></details><a className="release-secondary" href={server+release.downloadPath} download><Download size={15}/>下载安装包</a><small className="release-muted">下载后手动安装，此方式不会自动重启应用。</small></div>}
+  {release&&<div className="client-release-result"><div className="release-section-head"><div><strong role="status">{newer?'发现新版本':same?'当前已是最新版本':'服务器可用版本'}</strong><h4>{release.version}</h4></div><CheckCircle2 size={22}/></div><div className="client-release-meta"><span>{releaseTarget(release.platform,release.arch)}</span><span>{formatBytes(release.bytes)} · {new Date(release.created).toLocaleDateString('zh-CN')}</span></div>{release.notes&&<p className="client-release-notes">{release.notes}</p>}<details className="release-details"><summary>文件与校验信息</summary><div><p>{release.filename}</p><code>{release.sha256}</code></div></details><a className="release-secondary" href={cloudUrl(release.downloadPath.replace(/^\/api\/cloud/,''),server)} download><Download size={15}/>下载安装包</a><small className="release-muted">下载后手动安装，此方式不会自动重启应用。</small></div>}
  </section>;
 }

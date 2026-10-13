@@ -4,9 +4,9 @@ import {FolderSelect} from './sidebar';
 import type {LocalWorkspace} from './workspace';
 import {prepareImport,executeImport,importDuplicate,type ImportPlan,type ImportResult} from './document-import';
 import type {ImportKind} from './import-source';
-export function DocumentImportDialog({workspace,initialKind,initialFiles,onClose,onFinish,onBusyChange}:{workspace:LocalWorkspace;initialKind:ImportKind;initialFiles?:File[];onBusyChange?:(busy:boolean)=>void;onClose:()=>void;onFinish:(id?:string)=>void}){
+export function DocumentImportDialog({workspace,initialKind,initialFiles,initialFolderId,onClose,onFinish,onBusyChange}:{workspace:LocalWorkspace;initialKind:ImportKind;initialFiles?:File[];initialFolderId?:string;onBusyChange?:(busy:boolean)=>void;onClose:()=>void;onFinish:(id?:string)=>void}){
  const [kind,setKind]=useState(initialKind),[files,setFiles]=useState(initialFiles??[]),[plan,setPlan]=useState<ImportPlan>(),[selected,setSelected]=useState(new Set<string>()),[preparing,setPreparing]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[progress,setProgress]=useState(''),[results,setResults]=useState<ImportResult[]>();
- const [folderId,setFolderId]=useState(''),[hierarchy,setHierarchy]=useState(true),[duplicates,setDuplicates]=useState<'skip'|'copy'>('skip');
+ const [folderId,setFolderId]=useState(initialFolderId??''),[hierarchy,setHierarchy]=useState(true),[duplicates,setDuplicates]=useState<'skip'|'copy'>('skip');
  const [dragging,setDragging]=useState(false);const dragDepth=useRef(0);
  const picker=useRef<HTMLInputElement>(null),directory=useRef<HTMLInputElement|null>(null),cancel=useRef(false),alive=useRef(true),finished=useRef(false);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;cancel.current=true;};},[]);

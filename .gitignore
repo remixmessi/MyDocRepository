@@ -60,6 +60,7 @@ data/server-config.json
 !/tests/default-admin.test.ts
 !/tests/e2e/
 /tests/e2e/*
+!/tests/e2e/fixtures.ts
 !/tests/e2e/cloud.spec.ts
 !/tests/e2e/document-permissions.spec.ts
 
@@ -75,3 +76,6 @@ data/server-config.json
 data/releases/
 !/tests/e2e/import-crypto.spec.ts
 !/tests/server-connections.test.ts
+!/tests/e2e/cloud-discovery.spec.ts
+
+!/tests/e2e/folder-actions.spec.ts

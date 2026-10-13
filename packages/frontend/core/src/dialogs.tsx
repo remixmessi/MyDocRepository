@@ -10,11 +10,11 @@ export function Modal({ title, onClose, children, wide = false, className = '', 
     <div className="dialog-heading"><h2>{title}</h2><button type="button" aria-label="关闭弹窗" onClick={onClose}><X size={18} /></button></div>{children}
   </dialog>;
 }
-export function ResourceDialog({ title, initialName = '', nameLabel = '名称', children, action, onClose, destructive = false, confirm = false }: { title: string; initialName?: string; nameLabel?: string; children?: ReactNode; action: (name: string, form: FormData) => Promise<void>; onClose: () => void; destructive?: boolean; confirm?: boolean }) {
+export function ResourceDialog({ title, initialName = '', nameLabel = '名称', children, action, onClose, destructive = false, confirm = false, hideName = false }: { title: string; initialName?: string; nameLabel?: string; children?: ReactNode; action: (name: string, form: FormData) => Promise<void>; onClose: () => void; destructive?: boolean; confirm?: boolean; hideName?: boolean }) {
   const [name, setName] = useState(initialName); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   return <Modal title={title} onClose={() => { if (!busy) onClose(); }}><form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); setBusy(true); setError(''); void action(name, data).then(onClose).catch(error => setError(error instanceof Error ? error.message : '操作失败，请重试')).finally(() => setBusy(false)); }}>
-    {!confirm && <label className="form-field">{nameLabel}<input name="name" autoFocus value={name} disabled={busy} maxLength={160} required onChange={event => setName(event.target.value)} /></label>}
-    {children}{error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" disabled={busy} onClick={onClose}>取消</button><button className={destructive ? 'danger' : 'primary'} disabled={busy || (!confirm && !name.trim())}>{busy ? '正在保存…' : confirm ? '确认删除' : '保存'}</button></div>
+    {!confirm && !hideName && <label className="form-field">{nameLabel}<input name="name" autoFocus value={name} disabled={busy} maxLength={160} required onChange={event => setName(event.target.value)} /></label>}
+    {children}{error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" disabled={busy} onClick={onClose}>取消</button><button className={destructive ? 'danger' : 'primary'} disabled={busy || (!confirm && !hideName && !name.trim())}>{busy ? '正在保存…' : confirm ? '确认删除' : '保存'}</button></div>
   </form></Modal>;
 }
 export function QuickSearch({ workspace, onClose, onSelect, commands = [] }: { workspace: LocalWorkspace; onClose: () => void; onSelect: (id: string) => void; commands?: PaletteCommand[] }) {

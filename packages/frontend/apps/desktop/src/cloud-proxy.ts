@@ -22,7 +22,7 @@ export function cloudConnectionError(error:NodeJS.ErrnoException,server:string,p
 
 export function proxyCloudRequest(req:IncomingMessage,res:ServerResponse,origin:string,requestCloud:CloudRequestFactory=nodeCloudRequest){
   const url=new URL(req.url??'/',origin);
-  const match=/^\/api\/cloud-proxy\/([^/]+)(\/api\/cloud\/(?:[^/]+|admin\/(?:release|releases)|releases\/(?:latest|download)))$/.exec(url.pathname);
+  const match=/^\/api\/cloud-proxy\/([^/]+)(\/api\/cloud\/(?:[^/]+|admin\/(?:user|users|release|releases)|releases\/(?:latest|download)))$/.exec(url.pathname);
   let base:URL;
   try{
     if(!match)throw new Error();

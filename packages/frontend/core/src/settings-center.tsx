@@ -1,20 +1,21 @@
 import {useCallback,useEffect,useState} from 'react';
 import {ChevronDown,Palette,UserRound,Users,Package} from 'lucide-react';
-import {cloudJson,type CloudAccount,type CloudMailStatus} from '../../../common/nbstore/src/cloud';
+import {cloudJson,cloudServerUrl,type CloudAccount,type CloudMailStatus,type CloudWorkspace} from '../../../common/nbstore/src/cloud';
 import {Modal} from './dialogs';
 import {ServerConnections} from './server-connections';
 import {LocalAccountPanel} from './local-account-ui';
 import {CloudLogin} from './cloud-ui';
 import {AccountSettings} from './account-settings';
 import {ServerAdminSettings} from './server-admin-settings';
-import {ReleaseManagement} from './release-management';
+import {WebReleaseSettings,DesktopVersionSettings} from './version-settings';
 import type {ThemeMode} from './theme';
 
 type Tab='local'|'server'|'appearance'|'users'|'releases';
-export function SettingsDialog({onClose,onRefresh,theme,onThemeSave}:{onClose:()=>void;onRefresh:()=>Promise<void>;theme:ThemeMode;onThemeSave:(mode:ThemeMode)=>Promise<void>}){
+export function SettingsDialog({onClose,onRefresh,theme,onThemeSave,workspaces,activeWorkspaceId}:{onClose:()=>void;onRefresh:()=>Promise<void>;theme:ThemeMode;onThemeSave:(mode:ThemeMode)=>Promise<void>;workspaces:CloudWorkspace[];activeWorkspaceId?:string}){
  const [tab,setTab]=useState<Tab>('local'),[expanded,setExpanded]=useState(true),[user,setUser]=useState<CloudAccount|null>(),[mail,setMail]=useState<CloudMailStatus>({configured:false}),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const load=useCallback(async()=>{const result=await cloudJson<{user:CloudAccount|null;mail:CloudMailStatus}>('/session');setUser(result.user);setMail(result.mail??{configured:false});},[]);
- useEffect(()=>{let alive=true;void cloudJson<{user:CloudAccount|null;mail:CloudMailStatus}>('/session').then(result=>{if(alive){setUser(result.user);setMail(result.mail??{configured:false});}}).catch(()=>{if(alive)setUser(null);});return()=>{alive=false;};},[]);
+ const [sessionError,setSessionError]=useState('');
+ const load=useCallback(async()=>{setSessionError('');try{const result=await cloudJson<{user:CloudAccount|null;mail:CloudMailStatus}>('/session');setUser(result.user);setMail(result.mail??{configured:false});}catch(e){setSessionError(e instanceof Error?e.message:'服务器会话读取失败');}},[]);
+ useEffect(()=>{let alive=true;void cloudJson<{user:CloudAccount|null;mail:CloudMailStatus}>('/session').then(result=>{if(alive){setUser(result.user);setMail(result.mail??{configured:false});}}).catch(e=>{if(alive)setSessionError(e instanceof Error?e.message:'服务器会话读取失败');});return()=>{alive=false;};},[]);
  const run=(work:()=>Promise<void>)=>{setBusy(true);setError('');void work().catch(e=>setError(e instanceof Error?e.message:'操作失败，请重试')).finally(()=>setBusy(false));};
  const select=(value:Tab)=>{if(!busy){setTab(value);setError('');}};
  return <Modal title="设置" className="workspace-settings-dialog unified-settings" onClose={()=>{if(!busy)onClose();}}><div className="settings-layout">
@@ -25,7 +26,7 @@ export function SettingsDialog({onClose,onRefresh,theme,onThemeSave}:{onClose:()
    <button aria-current={tab==='appearance'?'page':undefined} disabled={busy} onClick={()=>select('appearance')}><Palette size={17}/><span>外观</span></button>
    <p className="settings-nav-label">管理</p>
    <button aria-current={tab==='users'?'page':undefined} disabled={busy} onClick={()=>select('users')}><Users size={17}/><span>用户管理</span></button>
-   <button aria-current={tab==='releases'?'page':undefined} disabled={busy} onClick={()=>select('releases')}><Package size={17}/><span>版本维护</span></button>
+   <button aria-current={tab==='releases'?'page':undefined} disabled={busy} onClick={()=>select('releases')}><Package size={17}/><span>{window.mydocDesktop?'版本与更新':'版本维护'}</span></button>
    <p className="settings-nav-note">团队空间的成员与邀请，请在工作区菜单中管理。</p>
   </nav>
   <div className="settings-body" aria-busy={busy}>
@@ -35,9 +36,10 @@ export function SettingsDialog({onClose,onRefresh,theme,onThemeSave}:{onClose:()
    {tab==='server'&&<>
     <h2>服务器账号</h2><p className="organization-help">连接服务器，登录并管理账号资料。</p>
     <ServerConnections busy={busy} prepare={onRefresh}/>
-    {user===undefined?<p role="status">正在读取服务器账号…</p>:user?<><AccountSettings key={user.id} account={user} mail={mail} busy={busy} run={run} onBack={()=>select('local')} onChanged={load} onSignedOut={()=>location.reload()}/><button disabled={busy} onClick={()=>run(async()=>{await onRefresh();await cloudJson('/logout','POST');location.reload();})}>退出服务器账号</button></>:<CloudLogin beforeSession={onRefresh} onLogin={()=>location.reload()}/>}
+    {sessionError?<p role="alert">{sessionError}<button disabled={busy} onClick={()=>run(load)}>重试读取账号</button></p>:user===undefined?<p role="status">正在读取服务器账号…</p>:user?<><AccountSettings key={user.id} account={user} mail={mail} busy={busy} run={run} onBack={()=>select('local')} onChanged={load} onSignedOut={()=>location.reload()}/><button disabled={busy} onClick={()=>run(async()=>{await onRefresh();await cloudJson('/logout','POST');location.reload();})}>退出服务器账号</button></>:<CloudLogin beforeSession={onRefresh} onLogin={()=>location.reload()}/>}
    </>}
-   {(tab==='users'||tab==='releases')&&(user===undefined?<p role="status">正在读取管理权限…</p>:!user?.serverAdmin?<section><h2>{tab==='users'?'用户管理':'版本维护'}</h2><p className="organization-help">登录服务器管理员账号后可使用此功能。</p><button onClick={()=>{setExpanded(true);select('server');}}>登录服务器账号</button></section>:tab==='users'?<ServerAdminSettings accountId={user.id} busy={busy} run={run} onBack={()=>select('server')}/>:<ReleaseManagement accountId={user.id} busy={busy} run={run} onBack={()=>select('server')}/>)}
+   {tab==='users'&&<><p className="organization-help">当前团队服务器：{cloudServerUrl()||location.origin}</p>{sessionError?<p role="alert">账号读取失败：{sessionError}<button disabled={busy} onClick={()=>run(load)}>重试读取账号</button></p>:user===undefined?<p role="status">正在读取管理权限…</p>:!user?<section><h2>用户管理</h2><p className="organization-help">服务器地址已选定，请登录该服务器账号。</p><button onClick={()=>{setExpanded(true);select('server');}}>登录服务器账号</button></section>:!user.serverAdmin?<section><h2>用户管理</h2><p role="status">已登录 {user.email}，当前账号没有服务器用户管理权限。请联系该服务器管理员授权。</p></section>:<ServerAdminSettings accountId={user.id} busy={busy} run={run} workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} onBack={()=>select('server')}/>}</>}
+   {tab==='releases'&&(window.mydocDesktop?<DesktopVersionSettings busy={busy}/>:<WebReleaseSettings busy={busy} run={run}/>)}
   </div>
  </div></Modal>;
 }

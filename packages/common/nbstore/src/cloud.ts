@@ -15,9 +15,9 @@ export interface CloudAccount {id:string;email:string;name:string;serverAdmin?:b
 export interface CloudMailStatus {configured:boolean;reason?:string;}
 export interface CloudWorkspace {id:string;name:string;createdAt:number;role:'owner'|'admin'|'member'|'viewer';}
 export class CloudError extends Error {constructor(message:string,readonly status:number){super(message);}}
-export function cloudUrl(path:string){const base=configuredCloudServer;return base&&globalThis.window?.mydocDesktop?'/api/cloud-proxy/'+encodeURIComponent(base)+'/api/cloud'+path:base+'/api/cloud'+path;}
-export async function cloudRequest(path:string,init?:RequestInit){const response=await fetch(cloudUrl(path),{...init,credentials:'include',headers:{...Object.fromEntries(new Headers(init?.headers)),...(!configuredCloudServer&&getStorageAccount()?{'X-Mydoc-Account':getStorageAccount()!}:{})}});if(!response.ok){let message='工作空间服务不可用';try{message=(await response.json()).error??message;}catch{}throw new CloudError(message,response.status);}return response;}
-export async function cloudJson<T>(path:string,method='GET',value?:unknown):Promise<T>{return (await cloudRequest(path,{method,...(value===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})})).json();}
+export function cloudUrl(path:string,base=configuredCloudServer){return base&&globalThis.window?.mydocDesktop?'/api/cloud-proxy/'+encodeURIComponent(base)+'/api/cloud'+path:base+'/api/cloud'+path;}
+export async function cloudRequest(path:string,init?:RequestInit,server=configuredCloudServer){const response=await fetch(cloudUrl(path,server),{...init,credentials:'include',headers:{...Object.fromEntries(new Headers(init?.headers)),...(!server&&getStorageAccount()?{'X-Mydoc-Account':getStorageAccount()!}:{})}});if(!response.ok){let message='工作空间服务不可用';try{message=(await response.json()).error??message;}catch{}throw new CloudError(message,response.status);}return response;}
+export async function cloudJson<T>(path:string,method='GET',value?:unknown,server=configuredCloudServer):Promise<T>{return (await cloudRequest(path,{method,...(value===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})},server)).json();}
 export type SyncStatus='connecting'|'connected'|'offline'|'blocked';
 const decode=(value:string)=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
 export class CloudStorage implements DocumentStorage {

@@ -200,6 +200,7 @@ h1 { font-size: 24px; margin: 24px 0 8px; }
 .folder-toggle svg { flex-shrink: 0; }
 .folder-toggle svg.expanded { transform: rotate(90deg); }
 .folder-more { padding: 4px; opacity: 0; }
+.folder-more[aria-expanded="true"] { opacity: 1; background: var(--hover); }
 .folder-row:hover .folder-more, .folder-row:focus-within .folder-more { opacity: 1; }
 .header-actions select { max-width: 180px; padding: 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--panel); font-size: 12px; }
 select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -684,3 +685,11 @@ input,select,textarea { color:var(--foreground);background-color:var(--panel);ac
 .document-drop-line { position: absolute; z-index: 14; height: 3px; background: var(--accent); pointer-events: none; }
 @media (max-width:639px) { .document-drag-handle > button { width: 28px; height: 36px; } .document-block-menu button { min-height: 36px; } }
 @media (max-width:639px) { .document-editor .ProseMirror { padding-left: 24px; } }
+
+.document-row { display: flex; align-items: center; min-width: 0; }
+.document-row .doc-link { flex: 1; min-width: 0; }
+.document-row:hover .folder-more, .document-row:focus-within .folder-more { opacity: 1; }
+.resource-actions-menu { position: fixed; z-index: 100; width: min(232px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; display: grid; gap: 2px; padding: 5px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 24px #00000018; }
+.resource-actions-menu button { justify-content: flex-start; min-height: 36px; width: 100%; text-align: left; }
+@media (max-width: 639px) { .resource-actions-menu button { min-height: 40px; } }
+.dialog-heading h2 { overflow-wrap: anywhere; }
