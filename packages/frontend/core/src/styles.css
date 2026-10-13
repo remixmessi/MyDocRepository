@@ -248,8 +248,9 @@ select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); 
 .document-outline-markers { display: flex; flex-direction: column; padding: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
 .document-outline-markers::-webkit-scrollbar { display: none; }
 .document-outline-marker { flex: 0 0 18px; width: 34px; height: 18px; min-height: 18px; padding: 0; border: 0; border-radius: 3px; }
-.document-outline-marker-line { display: block; height: 3px; margin-left: auto; border-radius: 2px; background: var(--line); transition: background 120ms ease; }
-.document-outline-marker.highlighted .document-outline-marker-line { background: var(--foreground); }
+.document-outline-marker-line { display: block; height: 3px; margin-left: auto; border-radius: 2px; background: var(--line); transform: scale(1); transform-origin: right center; transition: background 160ms ease, transform 160ms ease-out; }
+.document-outline-marker.highlighted .document-outline-marker-line { background: var(--foreground); transform: scale(1.15, 1.4); }
+@media (prefers-reduced-motion: reduce) { .document-outline-marker-line { transition: none; } }
 .document-outline-popover { position: absolute; right: 100%; top: 0; width: var(--outline-popover-width); overflow-y: auto; overscroll-behavior: contain; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 24px #00000018; }
 .document-outline-popover button { display: block; width: 100%; min-height: 34px; padding: 8px 12px; text-align: left; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .document-outline-popover button.hovered { background: var(--hover); }

@@ -3,7 +3,7 @@ import {createReadStream} from 'node:fs';import {createHash,randomUUID} from 'no
 import * as Y from 'yjs';
 import type {SQLiteProjectDatabase,SQLiteConnection} from './database';
 import type {BackupSettings,DatabaseBackup,BackupStatus} from '../src/backups';
-import {SCHEMA_VERSION,BUSINESS_TABLES,LOCAL_STATE_TABLES} from '../src/schema';
+import {SCHEMA_VERSION,BUSINESS_TABLES,LOCAL_STATE_TABLES,LOCAL_ACCOUNT_TABLES} from '../src/schema';
 async function checksum(path:string){const hash=createHash('sha256');for await(const chunk of createReadStream(path))hash.update(chunk);return hash.digest('hex');}
 export class DatabaseBackups {
  settings:BackupSettings;running=false;private timer?:ReturnType<typeof setInterval>;private readonly config:string;private startupError?:string;
@@ -33,7 +33,7 @@ export class DatabaseBackups {
    const version=db.pragma('user_version',{simple:true}) as number;if(!Number.isSafeInteger(version)||version<1||version>SCHEMA_VERSION)throw new Error('备份数据库版本不支持');
    const check=db.pragma('quick_check') as Record<string,unknown>[];if(check.length!==1||Object.values(check[0])[0]!=='ok')throw new Error('备份数据库完整性检查失败');
    // 允许的对象：三张业务表、本机未提交状态表及其索引。业务表列结构仍严格校验。
-   const allowed=[...BUSINESS_TABLES.map(([name])=>name),...LOCAL_STATE_TABLES];const schema=db.prepare("SELECT type,name,tbl_name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all() as {type:string;name:string;tbl_name:string}[];
+   const allowed=[...BUSINESS_TABLES.map(([name])=>name),...LOCAL_STATE_TABLES,...LOCAL_ACCOUNT_TABLES];const schema=db.prepare("SELECT type,name,tbl_name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all() as {type:string;name:string;tbl_name:string}[];
    if(!BUSINESS_TABLES.every(([name])=>schema.some(s=>s.type==='table'&&s.name===name))||schema.some(s=>s.type==='table'?!allowed.includes(s.name):s.type!=='index'||!allowed.includes(s.tbl_name)))throw new Error('备份数据库结构无效');
    for(const [table,columns] of BUSINESS_TABLES){const names=(db.prepare('PRAGMA table_info('+table+')').all() as {name:string}[]).map(c=>c.name).join(',');if(names!==columns)throw new Error('备份数据库列结构无效');}
    for(const row of db.prepare('SELECT scope,workspace,id,name,mime,typeof(data) type,length(data) size FROM assets').all() as {scope:string;workspace:string;id:string;name:string;mime:string;type:string;size:number}[]){if([row.scope,row.workspace,row.id,row.name,row.mime].some(v=>typeof v!=='string'||!v)||row.type!=='blob'||row.size>20*1024*1024)throw new Error('备份附件无效');}

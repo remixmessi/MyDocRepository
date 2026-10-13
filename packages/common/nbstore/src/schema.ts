@@ -16,7 +16,9 @@ export const BUSINESS_TABLES: [string, string][] = [
   ['preferences', 'scope,key,value'],
 ];
 /** 本机未提交状态表。随快照文件存在，但不参与恢复替换。 */
-export const LOCAL_STATE_TABLES = ['pending_updates', 'drafts', 'local_accounts', 'local_account_sessions'];
+export const LOCAL_STATE_TABLES = ['pending_updates', 'drafts'];
+/** 整库快照包含账号，但恢复业务数据时不替换账号与登录会话。 */
+export const LOCAL_ACCOUNT_TABLES = ['local_accounts', 'local_account_sessions'];
 
 /**
  * 隔离键：scope 已编码账户（`main` 或 `user:<账户 ID>`），server 编码目标服务器，

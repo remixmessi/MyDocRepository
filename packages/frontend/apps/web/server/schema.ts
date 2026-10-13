@@ -2,13 +2,13 @@ import {randomUUID} from 'node:crypto';
 import {validateDatabase,type SQLiteConnection} from '../../../../common/nbstore/server/database';
 
 export const CLOUD_SCHEMA_VERSION=6;
- // 协作表随账户设置扩列：逐列检查后 ALTER，已有库只补缺失列，不重建也不迁移数据。
+/** 由公共数据库启动事务调用；版本记录与 DDL 失败时一起回滚。 */
 export function upgradeCloudDatabase(db:SQLiteConnection){const columns=(table:string)=>new Set((db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name));
   const add=(table:string,column:string,definition:string)=>{if(!columns(table).has(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);};
-  {
    db.exec('CREATE TABLE IF NOT EXISTS cloud_migrations(version INTEGER PRIMARY KEY)');
    const version=(db.prepare('SELECT max(version) version FROM cloud_migrations').get() as {version:number|null}).version??0;
    if(version>CLOUD_SCHEMA_VERSION)throw new Error('协作数据库版本高于当前程序，请升级程序后再启动');
+   if(!Number.isSafeInteger(version)||version<0)throw new Error('协作数据库版本无效');
    db.exec(`CREATE TABLE IF NOT EXISTS cloud_deleted(workspace TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(workspace,id));CREATE TABLE IF NOT EXISTS cloud_users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,salt TEXT NOT NULL,password TEXT NOT NULL);CREATE TABLE IF NOT EXISTS cloud_sessions(token TEXT PRIMARY KEY,user TEXT NOT NULL,expires INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS cloud_workspaces(id TEXT PRIMARY KEY,name TEXT NOT NULL,created INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS cloud_members(workspace TEXT NOT NULL,user TEXT NOT NULL,role TEXT NOT NULL,PRIMARY KEY(workspace,user));CREATE TABLE IF NOT EXISTS cloud_invites(token TEXT PRIMARY KEY,workspace TEXT NOT NULL,email TEXT NOT NULL,role TEXT NOT NULL,expires INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS cloud_tokens(token TEXT PRIMARY KEY,user TEXT NOT NULL,kind TEXT NOT NULL,payload TEXT,created INTEGER NOT NULL,expires INTEGER NOT NULL);CREATE INDEX IF NOT EXISTS cloud_tokens_user ON cloud_tokens(user,kind);CREATE TABLE IF NOT EXISTS cloud_releases(id TEXT PRIMARY KEY,version TEXT NOT NULL,platform TEXT NOT NULL,filename TEXT NOT NULL,notes TEXT NOT NULL,bytes INTEGER NOT NULL,sha256 TEXT NOT NULL,created INTEGER NOT NULL,path TEXT NOT NULL);`);
    if(version<1){db.exec("CREATE TABLE IF NOT EXISTS cloud_document_permissions(workspace TEXT NOT NULL,doc TEXT NOT NULL,user TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('viewer','editor')),PRIMARY KEY(workspace,doc,user))");db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(1);}
    if(version<2){add('cloud_users','server_admin','INTEGER NOT NULL DEFAULT 0 CHECK(server_admin IN (0,1))');db.exec("CREATE TABLE IF NOT EXISTS cloud_bootstrap(key TEXT PRIMARY KEY,user TEXT NOT NULL)");db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(2);}
@@ -32,5 +32,4 @@ export function upgradeCloudDatabase(db:SQLiteConnection){const columns=(table:s
     cloud_releases:'id,version,platform,filename,notes,bytes,sha256,created,path,arch',cloud_bootstrap:'key,user',
     cloud_document_permissions:'workspace,doc,user,role',cloud_asset_owners:'workspace,id,doc,user',
    });
-  }
 }
