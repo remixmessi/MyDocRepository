@@ -1,15 +1,21 @@
 import Database from 'better-sqlite3';
 import * as Y from 'yjs';
 import {randomUUID,randomBytes,createHash,scryptSync,timingSafeEqual} from 'node:crypto';
+import {createReadStream,createWriteStream,mkdirSync,existsSync,unlinkSync} from 'node:fs';
+import {dirname,join,basename} from 'node:path';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {SQLiteProjectDatabase} from '../../../../common/nbstore/server/database';
+import {upgradeCloudDatabase} from './schema';
 import {MailService} from './mail';
 import {defaultAdminConfig,type DefaultAdminConfig} from './default-admin';
+import {compareReleaseVersions,validReleaseVersion,type DesktopRelease} from '../../../../common/nbstore/src/releases';
 
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 type Account={id:string;email:string;name:string};type Member={user:string;role:'owner'|'admin'|'member'|'viewer'};
 class RequestError extends Error {constructor(message:string,readonly status=400){super(message);}}
 function text(value:unknown,max=160){if(typeof value!=='string'||!value.trim()||value.length>max)throw new RequestError('请输入有效内容');return value.trim();}
+function compareRelease(a:{version:string;created:number},b:{version:string;created:number}){return compareReleaseVersions(b.version,a.version)||b.created-a.created;}
+type ReleaseRow=Omit<DesktopRelease,'downloadPath'>&{path?:string};
 function position(value:unknown){if(!value||typeof value!=='object')return false;const p=value as {type?:{client:number;clock:number};item?:{client:number;clock:number};tname?:string;assoc?:number};const identifier=(v:typeof p.type)=>v==null||!!v&&Number.isSafeInteger(v.client)&&v.client>=0&&v.client<=0xffffffff&&Number.isSafeInteger(v.clock)&&v.clock>=0;return identifier(p.type)&&identifier(p.item)&&(p.tname==null||typeof p.tname==='string'&&p.tname.length<200)&&(p.assoc===undefined||Number.isSafeInteger(p.assoc));}
 const AVATAR_TYPES=['image/png','image/jpeg','image/webp'],AVATAR_LIMIT=256*1024;
 /** 按魔数判断图片类型：只认 PNG、JPEG、WebP，避免靠 Content-Type 就存任意字节。 */
@@ -20,28 +26,11 @@ function detectImage(data:Buffer){
  return undefined;
 }
 async function body(req:IncomingMessage,max=8192){const chunks:Buffer[]=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>max)throw new RequestError('请求超过大小限制',413);chunks.push(Buffer.from(chunk));}return Buffer.concat(chunks);}
+async function bodyToFile(req:IncomingMessage,path:string,max=512*1024*1024){return await new Promise<{bytes:number;sha256:string}>((resolve,reject)=>{let bytes=0;const hash=createHash('sha256'),stream=createWriteStream(path,{flags:'wx'});const fail=(error:unknown)=>{stream.destroy();try{unlinkSync(path);}catch{}reject(error);};req.on('data',chunk=>{const data=Buffer.from(chunk);bytes+=data.length;if(bytes>max){req.destroy();fail(new RequestError('版本文件超过 512 MB',413));return;}hash.update(data);stream.write(data);});req.on('end',()=>{stream.end(()=>resolve({bytes,sha256:hash.digest('hex')}));});req.on('error',fail);stream.on('error',fail);});}
 export class CloudServer {
- readonly database:SQLiteProjectDatabase;private streams=new Map<ServerResponse,{user:string;workspace:string;doc:string;expires:number;session:string;sessionId:string}>();private presence=new Map<string,{workspace:string;doc:string;client:number;clock:number;user:string;state:unknown;at:number}>();private attempts=new Map<string,{count:number;until:number}>();private timer:ReturnType<typeof setInterval>;
+ readonly database:SQLiteProjectDatabase;private readonly releaseDir:string;private streams=new Map<ServerResponse,{user:string;workspace:string;doc:string;expires:number;session:string;sessionId:string}>();private presence=new Map<string,{workspace:string;doc:string;client:number;clock:number;user:string;state:unknown;at:number}>();private attempts=new Map<string,{count:number;until:number}>();private timer:ReturnType<typeof setInterval>;
  readonly mail:MailService;
- constructor(path:string,options:{mail?:MailService;defaultAdmin?:DefaultAdminConfig}={}){this.mail=options.mail??new MailService();this.database=new SQLiteProjectDatabase(path,path=>new Database(path));this.database.db.exec(`CREATE TABLE IF NOT EXISTS cloud_deleted(workspace TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(workspace,id));CREATE TABLE IF NOT EXISTS cloud_users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,salt TEXT NOT NULL,password TEXT NOT NULL);CREATE TABLE IF NOT EXISTS cloud_sessions(token TEXT PRIMARY KEY,user TEXT NOT NULL,expires INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS cloud_workspaces(id TEXT PRIMARY KEY,name TEXT NOT NULL,created INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS cloud_members(workspace TEXT NOT NULL,user TEXT NOT NULL,role TEXT NOT NULL,PRIMARY KEY(workspace,user));CREATE TABLE IF NOT EXISTS cloud_invites(token TEXT PRIMARY KEY,workspace TEXT NOT NULL,email TEXT NOT NULL,role TEXT NOT NULL,expires INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS cloud_tokens(token TEXT PRIMARY KEY,user TEXT NOT NULL,kind TEXT NOT NULL,payload TEXT,created INTEGER NOT NULL,expires INTEGER NOT NULL);CREATE INDEX IF NOT EXISTS cloud_tokens_user ON cloud_tokens(user,kind);`);try{this.upgrade();this.bootstrapAdmin(options.defaultAdmin);}catch(error){this.database.close();throw error;}this.timer=setInterval(()=>{for(const [res,state]of this.streams){if(state.expires<Date.now()||!this.database.db.prepare('SELECT 1 FROM cloud_sessions WHERE token=? AND expires>?').get(state.session,Date.now())||!this.member(state.workspace,state.user)){res.end();this.streams.delete(res);}else res.write(': heartbeat\n\n');}for(const[k,p]of this.presence)if(p.at<Date.now()-30000||!this.member(p.workspace,p.user)){this.broadcastPresence({...p,clock:p.clock+1,state:null});this.presence.delete(k);}for(const[k,v]of this.attempts)if(v.until<Date.now())this.attempts.delete(k);},15000);this.timer.unref();}
- // 协作表随账户设置扩列：逐列检查后 ALTER，已有库只补缺失列，不重建也不迁移数据。
- private upgrade(){const columns=(table:string)=>new Set((this.database.db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name));
-  const add=(table:string,column:string,definition:string)=>{if(!columns(table).has(column))this.database.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);};
-  this.database.db.transaction(()=>{
-   this.database.db.exec('CREATE TABLE IF NOT EXISTS cloud_migrations(version INTEGER PRIMARY KEY)');
-   const version=(this.database.db.prepare('SELECT max(version) version FROM cloud_migrations').get() as {version:number|null}).version??0;
-   if(version>3)throw new Error('协作数据库版本高于当前程序，请升级程序后再启动');
-   if(version<1){this.database.db.exec("CREATE TABLE IF NOT EXISTS cloud_document_permissions(workspace TEXT NOT NULL,doc TEXT NOT NULL,user TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('viewer','editor')),PRIMARY KEY(workspace,doc,user))");this.database.db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(1);}
-   if(version<2){add('cloud_users','server_admin','INTEGER NOT NULL DEFAULT 0 CHECK(server_admin IN (0,1))');this.database.db.exec("CREATE TABLE IF NOT EXISTS cloud_bootstrap(key TEXT PRIMARY KEY,user TEXT NOT NULL)");this.database.db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(2);}
-   if(version<3){this.database.db.exec("ALTER TABLE cloud_document_permissions RENAME TO cloud_document_permissions_old;CREATE TABLE cloud_document_permissions(workspace TEXT NOT NULL,doc TEXT NOT NULL,user TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('viewer','editor','denied')),PRIMARY KEY(workspace,doc,user));INSERT INTO cloud_document_permissions SELECT workspace,doc,user,role FROM cloud_document_permissions_old;DROP TABLE cloud_document_permissions_old;");this.database.db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(3);}
-   // 迁移记录可能来自部分升级或手工恢复，版本号较新也要修复缺失的基础结构。
-   add('cloud_users','server_admin','INTEGER NOT NULL DEFAULT 0 CHECK(server_admin IN (0,1))');
-   this.database.db.exec("CREATE TABLE IF NOT EXISTS cloud_bootstrap(key TEXT PRIMARY KEY,user TEXT NOT NULL)");
-   add('cloud_users','avatar','BLOB');add('cloud_users','avatar_type','TEXT');add('cloud_users','verified','INTEGER NOT NULL DEFAULT 0');add('cloud_users','created','INTEGER NOT NULL DEFAULT 0');
-   add('cloud_sessions','id','TEXT');add('cloud_sessions','created','INTEGER NOT NULL DEFAULT 0');add('cloud_sessions','seen','INTEGER NOT NULL DEFAULT 0');add('cloud_sessions','agent','TEXT');add('cloud_sessions','ip','TEXT');
-   // 旧会话没有公开 ID，补一个随机值，避免把 token 哈希暴露给注销接口。
-   for(const row of this.database.db.prepare('SELECT token FROM cloud_sessions WHERE id IS NULL').all() as {token:string}[])this.database.db.prepare('UPDATE cloud_sessions SET id=? WHERE token=?').run(randomUUID(),row.token);
-  }).immediate();}
+ constructor(path:string,options:{mail?:MailService;defaultAdmin?:DefaultAdminConfig}={}){this.mail=options.mail??new MailService();this.database=new SQLiteProjectDatabase(path,path=>new Database(path),upgradeCloudDatabase);this.releaseDir=join(dirname(path),'releases');try{mkdirSync(this.releaseDir,{recursive:true});this.bootstrapAdmin(options.defaultAdmin);}catch(error){this.database.close();throw error;}this.timer=setInterval(()=>{for(const [res,state]of this.streams){if(state.expires<Date.now()||!this.database.db.prepare('SELECT 1 FROM cloud_sessions WHERE token=? AND expires>?').get(state.session,Date.now())||!this.member(state.workspace,state.user)){res.end();this.streams.delete(res);}else res.write(': heartbeat\n\n');}for(const[k,p]of this.presence)if(p.at<Date.now()-30000||!this.member(p.workspace,p.user)){this.broadcastPresence({...p,clock:p.clock+1,state:null});this.presence.delete(k);}for(const[k,v]of this.attempts)if(v.until<Date.now())this.attempts.delete(k);},15000);this.timer.unref();}
  private bootstrapAdmin(config:DefaultAdminConfig|undefined){if(!config)return;
   const validated=defaultAdminConfig({MYDOC_ADMIN_EMAIL:config.email,MYDOC_ADMIN_PASSWORD:config.password,MYDOC_ADMIN_NAME:config.name})!;
   this.database.db.transaction(()=>{
@@ -84,8 +73,21 @@ export class CloudServer {
  private disconnect(workspace:string,user?:string){for(const[res,s]of this.streams)if(s.workspace===workspace&&(!user||s.user===user)){res.end();this.streams.delete(res);}}
  /** 断开某账户的全部实时连接：注销、改密与重置密码后立即生效，不等心跳。 */
  private dropUserStreams(user:string,session?:string){for(const[res,s]of this.streams)if(s.user===user&&(!session||s.sessionId===session)){res.end();this.streams.delete(res);}}
+ private release(id:string){return this.database.db.prepare('SELECT id,version,platform,arch,filename,notes,bytes,sha256,created,path FROM cloud_releases WHERE id=?').get(id) as (ReleaseRow&{path:string})|undefined;}
+ private releaseJson(row:ReleaseRow){const {path:_,...release}=row;return {...release,downloadPath:'/api/cloud/releases/download?id='+encodeURIComponent(row.id)};}
  handler=async(req:IncomingMessage,res:ServerResponse)=>{const json=(value:unknown,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};try{
- res.setHeader('Cache-Control','no-store');const url=new URL(req.url??'/','http://local'),route=url.pathname;const origin=req.headers.origin;if(origin&&/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)){res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Access-Control-Allow-Credentials','true');res.setHeader('Access-Control-Allow-Headers','Content-Type,X-Mydoc-Account');res.setHeader('Access-Control-Allow-Methods','GET,POST,PATCH,PUT,DELETE,OPTIONS');if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}}else if(origin&&new URL(origin).host!==req.headers.host)throw new RequestError('禁止跨站请求',403);if(req.headers['sec-fetch-site']==='cross-site'&&!origin)throw new RequestError('禁止跨站请求',403);
+ res.setHeader('Cache-Control','no-store');const url=new URL(req.url??'/','http://local'),route=url.pathname;const origin=req.headers.origin;if(origin&&/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)){res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Access-Control-Allow-Credentials','true');res.setHeader('Access-Control-Allow-Headers','Content-Type,X-Mydoc-Account,X-MyDoc-Version,X-MyDoc-Platform,X-MyDoc-Arch,X-MyDoc-Filename,X-MyDoc-Notes');res.setHeader('Access-Control-Allow-Methods','GET,POST,PATCH,PUT,DELETE,OPTIONS');if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}}else if(origin&&new URL(origin).host!==req.headers.host)throw new RequestError('禁止跨站请求',403);if(req.headers['sec-fetch-site']==='cross-site'&&!origin)throw new RequestError('禁止跨站请求',403);
+ // 版本检查接口不需要登录，供桌面客户端在配置更新服务器后读取最新版本。
+ if(route==='/releases/latest'&&req.method==='GET'){
+  const platform=(url.searchParams.get('platform')??'').trim();if(!['darwin','win32','linux'].includes(platform))throw new RequestError('平台参数无效');
+  const arch=url.searchParams.get('arch')??'';if(arch&&!['x64','arm64'].includes(arch)||platform==='darwin'&&!arch)throw new RequestError('macOS 版本检查需指定 x64 或 arm64 架构');
+  const rows=this.database.db.prepare("SELECT id,version,platform,arch,filename,notes,bytes,sha256,created FROM cloud_releases WHERE platform=? AND (arch=? OR (arch='' AND platform!='darwin'))").all(platform,arch) as ReleaseRow[];const row=rows.filter(row=>validReleaseVersion(row.version)).sort(compareRelease)[0];
+  json(row?this.releaseJson(row):null);return;
+ }
+ if(route==='/releases/download'&&req.method==='GET'){
+  const row=this.release(url.searchParams.get('id')??'');if(!row||!existsSync(row.path))throw new RequestError('版本文件不存在',404);
+  res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Length':String(row.bytes),'Content-Disposition':`attachment; filename="${row.filename.replace(/[^\x20-\x7e]|["\\]/g,'_')}"; filename*=UTF-8''${encodeURIComponent(row.filename).replace(/['()*]/g,char=>'%'+char.charCodeAt(0).toString(16))}`});const file=createReadStream(row.path);file.on('error',()=>res.destroy());res.on('close',()=>file.destroy());file.pipe(res);return;
+ }
  // 会话信息附带邮箱验证状态、到期时间与邮件服务是否可用，界面据此提示而不是猜测。
  if(route==='/session'&&req.method==='GET'){const current=this.account(req);if(current)this.database.db.prepare('UPDATE cloud_sessions SET seen=? WHERE id=?').run(Date.now(),current.session);
   json({user:current?{id:current.id,email:current.email,name:current.name,verified:!!current.verified,serverAdmin:!!current.serverAdmin,createdAt:current.createdAt,hasAvatar:!!current.avatarType,expiresAt:current.expires,session:current.session}:null,mail:{configured:this.mail.status.configured,reason:this.mail.status.reason}});return;}
@@ -105,6 +107,25 @@ export class CloudServer {
   this.database.db.transaction(()=>{this.setPassword(row.user,password);this.database.db.prepare('DELETE FROM cloud_sessions WHERE user=?').run(row.user);}).immediate();
   this.dropUserStreams(row.user);json({ok:true});return;}
  const user=this.require(req);
+ if(route==='/admin/releases'&&req.method==='GET'){
+  if(!user.serverAdmin)throw new RequestError('需要服务器管理员权限',403);
+  const rows=this.database.db.prepare('SELECT id,version,platform,arch,filename,notes,bytes,sha256,created FROM cloud_releases ORDER BY created DESC').all() as ReleaseRow[];
+  json(rows.map(row=>this.releaseJson(row)));return;
+ }
+ if(route==='/admin/release'&&req.method==='POST'){
+  if(!user.serverAdmin)throw new RequestError('需要服务器管理员权限',403);
+  const version=text(req.headers['x-mydoc-version'],100);if(!validReleaseVersion(version))throw new RequestError('版本号需使用 1.2.3 或带预发布标识的格式');
+  const platform=text(req.headers['x-mydoc-platform'],20);if(!['darwin','win32','linux'].includes(platform))throw new RequestError('平台无效');
+  const arch=req.headers['x-mydoc-arch']??'';if(typeof arch!=='string'||arch&&!['x64','arm64'].includes(arch)||platform==='darwin'&&!arch)throw new RequestError('请选择 x64 或 arm64 架构');
+  let filename:string;try{filename=basename(decodeURIComponent(text(req.headers['x-mydoc-filename'],600)));}catch{throw new RequestError('文件名无效');}let notes='';try{const encoded=typeof req.headers['x-mydoc-notes']==='string'?req.headers['x-mydoc-notes']:'';notes=Buffer.from(encoded,'base64').toString('utf8').slice(0,4000);}catch{throw new RequestError('更新说明无效');}if(!filename||filename==='.'||filename==='..')throw new RequestError('文件名无效');
+  const id=randomUUID(),path=join(this.releaseDir,id+'-'+filename);const file=await bodyToFile(req,path);if(!file.bytes){unlinkSync(path);throw new RequestError('版本文件不能为空');}
+  const created=Date.now();try{if(!this.require(req).serverAdmin)throw new RequestError('需要服务器管理员权限',403);this.database.db.prepare('INSERT INTO cloud_releases(id,version,platform,arch,filename,notes,bytes,sha256,created,path) VALUES (?,?,?,?,?,?,?,?,?,?)').run(id,version,platform,arch,filename,notes,file.bytes,file.sha256,created,path);}catch(error){try{unlinkSync(path);}catch{}throw error;}
+  json(this.releaseJson(this.release(id)!),201);return;
+ }
+ if(route==='/admin/release'&&req.method==='DELETE'){
+  if(!user.serverAdmin)throw new RequestError('需要服务器管理员权限',403);const id=text(JSON.parse((await body(req)).toString()).id,100),row=this.release(id);if(!row)throw new RequestError('版本不存在',404);
+  this.database.db.prepare('DELETE FROM cloud_releases WHERE id=?').run(id);try{unlinkSync(row.path);}catch{}json({ok:true});return;
+ }
  if(route==='/admin/users'&&req.method==='GET'){
   if(!user.serverAdmin)throw new RequestError('需要服务器管理员权限',403);
   const offset=Number(url.searchParams.get('offset')??0);if(!Number.isSafeInteger(offset)||offset<0)throw new RequestError('分页参数无效');
@@ -202,8 +223,12 @@ export class CloudServer {
  // 空间概览：名称、所有者、当前角色、成员数量与存储占用，供设置页集中展示。
  if(route==='/overview'&&req.method==='GET'){const space=this.database.db.prepare('SELECT name,created FROM cloud_workspaces WHERE id=?').get(workspace) as {name:string;created:number};const owner=this.database.db.prepare("SELECT u.name,u.email FROM cloud_members m JOIN cloud_users u ON u.id=m.user WHERE m.workspace=? AND m.role='owner'").get(workspace) as {name:string;email:string}|undefined;const counts=this.database.db.prepare("SELECT count(*) total,sum(role='owner') owners,sum(role='admin') admins,sum(role='member') members,sum(role='viewer') viewers FROM cloud_members WHERE workspace=?").get(workspace) as {total:number;owners:number;admins:number;members:number;viewers:number};const documents=this.database.db.prepare("SELECT count(*) count,coalesce(sum(length(data)),0) bytes FROM documents WHERE scope=? AND id LIKE 'doc:%'").get('cloud:'+workspace) as {count:number;bytes:number};const shared=this.database.db.prepare("SELECT coalesce(sum(length(data)),0) bytes FROM documents WHERE scope=? AND id LIKE 'workspace:%'").get('cloud:'+workspace) as {bytes:number};const assets=this.database.db.prepare('SELECT count(*) count,coalesce(sum(length(data)),0) bytes FROM assets WHERE scope=?').get('cloud:'+workspace) as {count:number;bytes:number};const invites=this.database.db.prepare('SELECT count(*) count FROM cloud_invites WHERE workspace=? AND expires>?').get(workspace,Date.now()) as {count:number};json({id:workspace,name:space.name,createdAt:space.created,role:member.role,owner:owner?{name:owner.name,email:owner.email}:null,members:counts,documents:documents.count,invites:invites.count,storage:{documents:documents.bytes+shared.bytes,assets:assets.bytes,assetCount:assets.count,total:documents.bytes+shared.bytes+assets.bytes}});return;}
  if(route==='/workspace'&&req.method==='PATCH'){this.authorize(workspace,this.require(req).id,true);const input=JSON.parse((await body(req)).toString());this.authorize(workspace,this.require(req).id,true);this.database.db.prepare('UPDATE cloud_workspaces SET name=? WHERE id=?').run(text(input.name),workspace);json({ok:true});return;}
- if(route==='/workspace'&&req.method==='DELETE'){if(member.role!=='owner')throw new RequestError('只有所有者可以删除工作空间',403);this.database.db.transaction(()=>{for(const table of ['cloud_members','cloud_invites','cloud_deleted','cloud_document_permissions'])this.database.db.prepare(`DELETE FROM ${table} WHERE workspace=?`).run(workspace);this.database.db.prepare('DELETE FROM cloud_workspaces WHERE id=?').run(workspace);this.database.db.prepare('DELETE FROM documents WHERE scope=?').run('cloud:'+workspace);this.database.db.prepare('DELETE FROM assets WHERE scope=?').run('cloud:'+workspace);}).immediate();this.disconnect(workspace);json({ok:true});return;}
+ if(route==='/workspace'&&req.method==='DELETE'){if(member.role!=='owner')throw new RequestError('只有所有者可以删除工作空间',403);this.database.db.transaction(()=>{for(const table of ['cloud_members','cloud_invites','cloud_deleted','cloud_document_permissions','cloud_asset_owners'])this.database.db.prepare(`DELETE FROM ${table} WHERE workspace=?`).run(workspace);this.database.db.prepare('DELETE FROM cloud_workspaces WHERE id=?').run(workspace);this.database.db.prepare('DELETE FROM documents WHERE scope=?').run('cloud:'+workspace);this.database.db.prepare('DELETE FROM assets WHERE scope=?').run('cloud:'+workspace);}).immediate();this.disconnect(workspace);json({ok:true});return;}
  if(route==='/members'&&req.method==='GET'){json(this.database.db.prepare('SELECT u.id,u.name,u.email,m.role FROM cloud_members m JOIN cloud_users u ON u.id=m.user WHERE m.workspace=?').all(workspace));return;}
+ if(route==='/directory-users'&&req.method==='GET'){
+  this.authorize(workspace,user.id,true);const query=(url.searchParams.get('q')??'').trim().toLowerCase();if(query.length>254)throw new RequestError('搜索内容过长');
+  json(this.database.db.prepare("SELECT u.id,u.name,u.email FROM cloud_users u WHERE (instr(lower(u.email),?)>0 OR instr(lower(u.name),?)>0) AND NOT EXISTS (SELECT 1 FROM cloud_members m WHERE m.workspace=? AND m.user=u.id) ORDER BY u.name,u.email LIMIT 50").all(query,query,workspace));return;
+ }
  if(route==='/document-visibility'&&req.method==='GET'){
   const raw=url.searchParams.getAll('id');if(raw.length>1000)throw new RequestError('文档数量过多');
   const ids=raw.map(id=>text(id,200));if(ids.some(id=>!id.startsWith('doc:')))throw new RequestError('文档标识无效');
@@ -224,8 +249,33 @@ export class CloudServer {
  if(route==='/invites'&&req.method==='GET'){this.authorize(workspace,this.require(req).id,true);json(this.database.db.prepare('SELECT token AS id,email,role,expires AS expiresAt FROM cloud_invites WHERE workspace=? ORDER BY expires DESC').all(workspace).map(row=>{const invite=row as {id:string;email:string;role:string;expiresAt:number};return {...invite,expired:invite.expiresAt<=Date.now()};}));return;}
  if(route==='/invite'&&req.method==='DELETE'){this.authorize(workspace,this.require(req).id,true);const id=text(JSON.parse((await body(req)).toString()).id,64);this.authorize(workspace,this.require(req).id,true);this.database.db.prepare('DELETE FROM cloud_invites WHERE workspace=? AND token=?').run(workspace,id);json({ok:true});return;}
  if(route==='/presence'&&req.method==='POST'){const doc=text(url.searchParams.get('id'),200),input=JSON.parse((await body(req,8192)).toString());this.authorize(workspace,user.id);if(!/^doc:/.test(doc)&&doc!=='workspace:'+workspace)throw new RequestError('文档标识无效');if(!Number.isSafeInteger(input.client)||input.client<0||input.client>0xffffffff||!Number.isSafeInteger(input.clock)||input.clock<0||typeof input.active!=='boolean')throw new RequestError('在线状态无效');if(input.cursor!==null&&(!input.cursor||!position(input.cursor.anchor)||!position(input.cursor.head)))throw new RequestError('光标位置无效');const key=workspace+':'+doc+':'+input.client,old=this.presence.get(key);if(old&&old.user!==user.id)throw new RequestError('在线状态标识冲突',409);if(old&&input.clock<old.clock){json({ok:true});return;}const colors=['#3159cb','#b54708','#027a48','#7a5af8'];const state=input.active?{user:{name:user.name,color:colors[parseInt(hash(user.id).slice(0,8),16)%colors.length]},cursor:input.cursor}:null;const p={workspace,doc,client:input.client,clock:input.clock,user:user.id,state,at:Date.now()};this.presence.set(key,p);this.broadcastPresence(p);json({ok:true});return;}
- if(route==='/assets'&&req.method==='DELETE'){if(member.role!=='owner')throw new RequestError('需要所有者权限',403);this.database.db.prepare('DELETE FROM assets WHERE scope=?').run('cloud:'+workspace);json({ok:true});return;}
- if(route==='/asset'){const id=text(url.searchParams.get('id'),200),scope='cloud:'+workspace,document=url.searchParams.get('doc');if(document)this.documentAccess(workspace,text(document,200),user.id,req.method!=='GET');if(req.method==='GET'){const a=this.database.db.prepare('SELECT name,mime,data FROM assets WHERE scope=? AND workspace=? AND id=?').get(scope,workspace,id) as {name:string;mime:string;data:Buffer}|undefined;if(!a){json({error:'附件不存在'},404);return;}json({id,name:a.name,mime:a.mime,size:a.data.length,data:Buffer.from(a.data).toString('base64')});return;}if(req.method==='PUT'){this.writable(workspace,req);const data=await body(req,20*1024*1024);this.writable(workspace,req);this.database.db.prepare('INSERT INTO assets VALUES (?,?,?,?,?,?) ON CONFLICT(scope,workspace,id) DO UPDATE SET name=excluded.name,mime=excluded.mime,data=excluded.data').run(scope,workspace,id,text(url.searchParams.get('name'),1000),text(url.searchParams.get('mime'),200),data);json({ok:true});return;}if(req.method==='DELETE'){this.writable(workspace,req);this.database.db.prepare('DELETE FROM assets WHERE scope=? AND workspace=? AND id=?').run(scope,workspace,id);json({ok:true});return;}}
+ if(route==='/assets'&&req.method==='DELETE'){if(member.role!=='owner')throw new RequestError('需要所有者权限',403);this.database.db.transaction(()=>{this.database.db.prepare('DELETE FROM assets WHERE scope=?').run('cloud:'+workspace);this.database.db.prepare('DELETE FROM cloud_asset_owners WHERE workspace=?').run(workspace);}).immediate();json({ok:true});return;}
+ if(route==='/asset'){
+  const id=text(url.searchParams.get('id'),200),scope='cloud:'+workspace,document=url.searchParams.has('doc')?text(url.searchParams.get('doc'),200):null;
+  if(document&&(!document.startsWith('doc:')||document.length<=4))throw new RequestError('文档标识无效');
+  const check=()=>{
+   const current=this.require(req),role=this.authorize(workspace,current.id),write=req.method!=='GET';
+   if(write)this.writable(workspace,req);
+   const binding=this.database.db.prepare('SELECT doc,user FROM cloud_asset_owners WHERE workspace=? AND id=?').get(workspace,id) as {doc:string|null;user:string}|undefined;
+   if(binding?.doc){
+    if(document&&document!==binding.doc)throw new RequestError('附件不存在或无权访问',404);
+    if(this.database.db.prepare('SELECT 1 FROM cloud_deleted WHERE workspace=? AND id=?').get(workspace,binding.doc))throw new RequestError('附件不存在或无权访问',404);
+    this.documentAccess(workspace,binding.doc,current.id,write);
+   }else if(binding){
+    if(binding.user!==current.id)throw new RequestError('附件不存在或无权访问',404);
+    if(document)throw new RequestError('跨文档使用附件需要复制为新附件',409);
+   }else{
+    const exists=this.database.db.prepare('SELECT 1 FROM assets WHERE scope=? AND workspace=? AND id=?').get(scope,workspace,id);
+    if(exists&&!['owner','admin'].includes(role.role))throw new RequestError('旧附件尚未绑定文档，请联系空间管理员',404);
+    if(document){if(this.database.db.prepare('SELECT 1 FROM cloud_deleted WHERE workspace=? AND id=?').get(workspace,document))throw new RequestError('文档已永久删除',404);this.documentAccess(workspace,document,current.id,write);}
+   }
+   return current;
+  };
+  check();
+  if(req.method==='GET'){const a=this.database.db.prepare('SELECT name,mime,data FROM assets WHERE scope=? AND workspace=? AND id=?').get(scope,workspace,id) as {name:string;mime:string;data:Buffer}|undefined;if(!a){json({error:'附件不存在'},404);return;}json({id,name:a.name,mime:a.mime,size:a.data.length,data:Buffer.from(a.data).toString('base64')});return;}
+  if(req.method==='PUT'){const data=await body(req,20*1024*1024);this.database.db.transaction(()=>{const current=check();this.database.db.prepare('INSERT INTO assets VALUES (?,?,?,?,?,?) ON CONFLICT(scope,workspace,id) DO UPDATE SET name=excluded.name,mime=excluded.mime,data=excluded.data').run(scope,workspace,id,text(url.searchParams.get('name'),1000),text(url.searchParams.get('mime'),200),data);this.database.db.prepare('INSERT OR IGNORE INTO cloud_asset_owners VALUES (?,?,?,?)').run(workspace,id,document,current.id);}).immediate();json({ok:true});return;}
+  if(req.method==='DELETE'){this.database.db.transaction(()=>{check();this.database.db.prepare('DELETE FROM assets WHERE scope=? AND workspace=? AND id=?').run(scope,workspace,id);this.database.db.prepare('DELETE FROM cloud_asset_owners WHERE workspace=? AND id=?').run(workspace,id);}).immediate();json({ok:true});return;}
+ }
  const id=text(url.searchParams.get('id'),200);if(!(route==='/events'&&id==='*')&&!/^(workspace:|doc:)/.test(id))throw new RequestError('文档标识无效');const scope='cloud:'+workspace;
  if(/^doc:/.test(id)){if(route==='/document'&&req.method==='POST')this.documentAccess(workspace,id,user.id,true);else if(['GET','POST'].includes(req.method??'')&&['/document','/sync','/events'].includes(route))this.documentAccess(workspace,id,user.id);}
  if(route==='/sync'&&req.method==='POST'){const vector=await body(req,65536);this.require(req);const current=this.documentAccess(workspace,id,user.id);if(this.database.db.prepare('SELECT 1 FROM cloud_deleted WHERE workspace=? AND id=?').get(workspace,id))throw new RequestError('文档已永久删除，请导出草稿',410);const doc=new Y.Doc();try{const bytes=this.database.load(scope,id);if(bytes)Y.applyUpdate(doc,bytes);let update:Uint8Array;try{update=Y.encodeStateAsUpdate(doc,vector);}catch{throw new RequestError('同步向量无效');}json({role:current.role,update:Buffer.from(update).toString('base64'),vector:Buffer.from(Y.encodeStateVector(doc)).toString('base64')});}finally{doc.destroy();}return;}

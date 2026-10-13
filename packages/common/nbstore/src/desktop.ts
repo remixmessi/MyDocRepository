@@ -3,6 +3,7 @@ export interface DesktopStorageReply {status:number;contentType:string;body:Uint
 export interface DesktopOpenFiles {id:string;files:{name:string;bytes:Uint8Array;modified:number}[];errors:string[];}
 export interface DesktopBridge {
  readonly platform:string;
+ readonly arch:string;
  updateStatus():Promise<import('./updates').DesktopUpdateState>;
  updateAction(action:'check'|'download'|'install'):Promise<import('./updates').DesktopUpdateState>;
  setAutomaticUpdateChecks(value:boolean):Promise<import('./updates').DesktopUpdateState>;

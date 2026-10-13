@@ -1,4 +1,5 @@
 import { documentSchema,markdownParser,readDocument,writeDocument } from '@mydoc/editor-blocks';
+import { sha256 } from '@mydoc/crdt';
 import { imageMime,MAX_ASSET_SIZE } from '@mydoc/nbstore';
 import type { LocalWorkspace } from './workspace';
 import { IMPORT_LIMITS,csvRows,notionName,notionId,resolveImportPath,readImportFiles,type ImportKind,type ImportFile } from './import-source';
@@ -9,7 +10,16 @@ export interface ImportPage {path:string;title:string;folders:string[];node?:Doc
 export interface ImportPlan {kind:ImportKind;pages:ImportPage[];files:Map<string,ImportFile>;warnings:string[]}
 export interface ImportResult {path:string;title:string;status:'imported'|'skipped'|'failed';id?:string;message?:string;warnings:string[]}
 export const importDuplicate=(ws:LocalWorkspace,page:ImportPage,kind:ImportKind)=>ws.list().find(doc=>doc.importSource?.kind===kind&&doc.importSource.path===page.path&&doc.importSource.fingerprint===page.fingerprint);
-const digest=async(bytes:Uint8Array)=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');
+const digest=async(bytes:Uint8Array)=>{
+ let hash:Uint8Array;
+ // Plain HTTP origins may expose crypto without subtle; keep fingerprints identical.
+ const subtle=globalThis.crypto?.subtle;
+ if(typeof subtle?.digest==='function'){
+  try{hash=new Uint8Array(await subtle.digest('SHA-256',bytes));}
+  catch{hash=sha256(bytes);}
+ }else hash=sha256(bytes);
+ return [...hash].map(x=>x.toString(16).padStart(2,'0')).join('');
+};
 function csvDocument(text:string){const rows=csvRows(text);if(!rows.length)throw new Error('CSV 没有内容');const columns=Math.max(...rows.map(row=>row.length));const table=documentSchema.nodes.table.create(null,rows.map((row,index)=>documentSchema.nodes.table_row.create(null,Array.from({length:columns},(_,column)=>{const lines=(row[column]||'').split(/\r?\n/),content:Doc[]=[];lines.forEach((line,i)=>{if(i)content.push(documentSchema.nodes.hard_break.create());if(line)content.push(documentSchema.text(line));});return (index?documentSchema.nodes.table_cell:documentSchema.nodes.table_header).create(null,documentSchema.nodes.paragraph.create(null,content));}))));return documentSchema.nodes.doc.create(null,table);}
 function sourceLinks(node:Doc){const links=new Set<string>();node.descendants(child=>{if(child.type.name==='image')links.add(child.attrs.src);for(const mark of child.marks)if(mark.type.name==='link')links.add(mark.attrs.href);});return [...links];}
 export async function prepareImport(files:File[],kind:ImportKind,signal?:AbortSignal):Promise<ImportPlan>{

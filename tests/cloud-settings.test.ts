@@ -98,6 +98,18 @@ it('邀请列表含角色与过期状态；重新生成替换旧口令，撤销�
  }finally{await f.close();}
 });
 
+it('空间管理员可搜索已有账号并排除已加入成员，普通成员不能读取账号目录',async()=>{
+ const f=await fixture();
+ try{
+  const owner=await f.register('owner@example.com','所有者');const existing=await f.register('existing@example.com','已有账号');
+  const space=await (await f.call('/workspaces','POST',{name:'账号目录空间'},owner.cookie)).json() as {id:string};
+  let users=await (await f.call('/directory-users?workspace='+space.id+'&q=existing','GET',undefined,owner.cookie)).json();expect(users).toEqual([{id:existing.user.id,name:'已有账号',email:'existing@example.com'}]);
+  const invite=await (await f.call('/invite?workspace='+space.id,'POST',{email:existing.user.email,role:'member'},owner.cookie)).json() as {token:string};await f.call('/accept','POST',{token:invite.token},existing.cookie);
+  users=await (await f.call('/directory-users?workspace='+space.id+'&q=existing','GET',undefined,owner.cookie)).json();expect(users).toEqual([]);
+  expect((await f.call('/directory-users?workspace='+space.id+'&q=owner','GET',undefined,existing.cookie)).status).toBe(403);
+ }finally{await f.close();}
+});
+
 it('管理员不能越权操作所有者与其他管理员，查看者不能管理空间',async()=>{
  const f=await fixture();
  try{

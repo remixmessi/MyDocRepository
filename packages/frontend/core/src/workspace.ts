@@ -37,6 +37,7 @@ export class LocalWorkspace {
   readonly search = new DocumentSearch(); readonly references = new ReferenceIndex();
   indexReady: Promise<void> = Promise.resolve(); indexing = false; indexErrors = new Set<string>();
   private openedItems = new Map<string,OpenDocument>();
+  private documentAssetViews = new Map<string,WorkspaceAssets>();
   private opened = new Map<string, Promise<OpenDocument>>(); private listeners = new Set<() => void>(); private indexTimers = new Map<string, ReturnType<typeof setTimeout>>(); private disposed = false;
   constructor(private storage: DocumentStorage, readonly id = 'local', private ownsStorage = true, assets?: AssetStorage,userId?:string,personalStorage?:DocumentStorage) {
     if(userId&&personalStorage){const personalDoc=new Y.Doc();this.uiPreferences=personalDoc.getMap<unknown>('uiPreferences');this.personalPersistence=new PersistentDocument('workspace-ui:'+this.id,personalDoc,personalStorage);}else this.uiPreferences=this.doc.getMap<unknown>('uiPreferences');
@@ -45,7 +46,14 @@ export class LocalWorkspace {
     this.uiPreferences.observe(event=>{if(event.keysChanged.has('editorSettings'))this.notify();}); this.templates.observe(this.notify); this.documents.observe(this.notify); this.trash.observe(this.notify); this.folders.observe(this.notify); this.organization.tags.observe(()=>{if(this.readOnly){this.notify();return;}const tags=new Set(this.organization.tags.keys());this.doc.transact(()=>{for(const [id,entry]of this.trash){const tagIds=(entry.meta.tagIds??[]).filter(id=>tags.has(id));if(tagIds.length!==(entry.meta.tagIds??[]).length)this.trash.set(id,{...entry,meta:{...entry.meta,tagIds}});}},LOCAL_ORIGIN);this.notify();}); this.organization.collections.observe(()=>{if(this.readOnly){this.notify();return;}const keys=new Set(this.organization.collections.keys());this.doc.transact(()=>{for(const[id,entry]of this.trash){const collectionIds=entry.collectionIds.filter(id=>keys.has(id));if(collectionIds.length!==entry.collectionIds.length)this.trash.set(id,{...entry,collectionIds});}},LOCAL_ORIGIN);this.notify();});
   }
   get sync(){return this.storage instanceof CloudStorage?this.storage:undefined;}
-  documentAssets(id:string){return new WorkspaceAssets(new DocumentAssetStorage(this.assetStorage,'doc:'+id),this.id);}
+  documentAssets(id:string){
+    let assets=this.documentAssetViews.get(id);
+    if(!assets){
+      assets=new WorkspaceAssets(new DocumentAssetStorage(this.assetStorage,'doc:'+id),this.id);
+      this.documentAssetViews.set(id,assets);
+    }
+    return assets;
+  }
   get readOnly(){return this.sync?.readOnly??false;}
   documentReadOnly(id:string){return this.sync?.isReadOnly('doc:'+id)??false;}
   assertWritable(id?:string){if(this.readOnly||id&&this.documentReadOnly(id))throw new Error(this.sync?.reason||'该文档为只读');}
@@ -166,6 +174,6 @@ export class LocalWorkspace {
   async destroy() { await this.personalPersistence?.destroy();
     this.disposed = true; await this.indexReady; this.indexTimers.forEach(timer => clearTimeout(timer)); this.indexTimers.clear();
     for (const opened of this.opened.values()) { try { const item = await opened; item.store.destroy(); await item.persistence.destroy(); } catch { /* failed opens already dispose themselves */ } }
-    this.listeners.clear(); await this.persistence.destroy(); if (this.ownsStorage) this.storage.close(); if (this.ownsAssets) this.assetStorage.close();
+    this.listeners.clear(); this.documentAssetViews.clear(); await this.persistence.destroy(); if (this.ownsStorage) this.storage.close(); if (this.ownsAssets) this.assetStorage.close();
   }
 }

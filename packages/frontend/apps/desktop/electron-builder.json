@@ -11,9 +11,16 @@
   ],
   "asar": true,
   "npmRebuild": false,
+  "electronDownload": {
+    "mirror": "https://npmmirror.com/mirrors/electron/"
+  },
   "beforePack": "../../../../scripts/desktop/verify-electron-runtime.cjs",
   "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
   "mac": {
+    "identity": "-",
+    "extendInfo": {
+      "NSLocalNetworkUsageDescription": "MyDoc 需要连接你指定的局域网工作空间服务器，以登录和同步团队文档。"
+    },
     "icon": "resources/icon.icns",
     "category": "public.app-category.productivity",
     "target": [
@@ -39,7 +46,7 @@
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
-    "deleteAppDataOnUninstall": false
+    "deleteAppDataOnUninstall": true
   },
   "fileAssociations": [
     {

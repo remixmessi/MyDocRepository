@@ -3,8 +3,10 @@ import {createServer} from 'node:http';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {writeFileSync} from 'node:fs';
 import {CloudServer} from '../packages/frontend/apps/web/server/cloud';
 import {defaultAdminConfig,type DefaultAdminConfig} from '../packages/frontend/apps/web/server/default-admin';
+import {serverConfig} from '../packages/frontend/apps/web/server/config';
 
 const admin={email:'admin@example.com',password:'initial-password-123',name:'服务器管理员'};
 async function fixture(config?:DefaultAdminConfig){
@@ -57,4 +59,21 @@ it('未配置时保持空库，已有普通邮箱冲突时拒绝提升，版本�
   expect(()=>f.restart(admin)).toThrow('邮箱已被现有账户使用');
   f.restart();expect(f.cloud.database.db.prepare('SELECT server_admin FROM cloud_users').get()).toEqual({server_admin:0});expect(f.cloud.database.db.prepare('SELECT count(*) count FROM cloud_bootstrap').get()).toEqual({count:0});
  }finally{await f.close();}
+});
+
+it('环境变量优先于 server-config.json 中的管理员配置',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'mydoc-server-config-')),path=join(dir,'server-config.json');
+ writeFileSync(path,JSON.stringify({host:'127.0.0.1',port:9090,admin:{email:'file@example.com',password:'file-password-123',name:'配置文件管理员'}}));
+ try{
+  const config=serverConfig({MYDOC_CONFIG_PATH:path,MYDOC_ADMIN_EMAIL:'env@example.com',MYDOC_ADMIN_PASSWORD:'env-password-123',MYDOC_ADMIN_NAME:'容器管理员'});
+  expect(config.host).toBe('127.0.0.1');expect(config.port).toBe(9090);
+  expect(config.admin).toEqual({email:'env@example.com',password:'env-password-123',name:'容器管理员'});
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+it('未设置管理员环境变量时使用配置文件回退值',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'mydoc-server-config-')),path=join(dir,'server-config.json');
+ writeFileSync(path,JSON.stringify({admin:{email:'file@example.com',password:'file-password-123',name:'配置文件管理员'}}));
+ try{expect(serverConfig({MYDOC_CONFIG_PATH:path}).admin).toEqual({email:'file@example.com',password:'file-password-123',name:'配置文件管理员'});}
+ finally{rmSync(dir,{recursive:true,force:true});}
 });

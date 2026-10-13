@@ -58,7 +58,7 @@ jobs:
       - run: node node_modules/electron/install.js
       - run: corepack yarn typecheck
       - run: corepack yarn test
-      - run: node --test scripts/desktop/mac-architecture.test.mjs
+      - run: node --test scripts/desktop/mac-architecture.test.mjs scripts/desktop/mac-identity.test.mjs
       - run: corepack yarn desktop:build
       - run: corepack yarn test:desktop
       - if: runner.os == 'macOS'

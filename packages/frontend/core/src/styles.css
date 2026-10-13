@@ -24,8 +24,12 @@ button:focus-visible, input:focus-visible, .ProseMirror:focus-visible { outline:
 .local-note { margin: auto 8px 0; padding-top: 32px; color: var(--muted); font-size: 11px; }
 main { position: relative; min-width: 0; }
 .workspace-status { padding: 6px 24px; border-bottom: 1px solid var(--line); background: var(--subtle); }
-.save-status { color: var(--muted); font-size: 11px; }
+.save-status { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; vertical-align: middle; }
 .save-status.error { color: var(--danger); }
+.save-status-message, .save-status small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.save-status-message { flex: 1 1 auto; }
+.save-status small { flex: 0 1 auto; }
+.save-status-actions { display: inline-flex; flex: 0 0 auto; gap: 4px; }
 .save-status button { font-size: 11px; text-decoration: underline; }
 .editor-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .header-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
@@ -210,6 +214,7 @@ select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); 
 .form-error { font-size: 13px; color: var(--danger); }
 .folder-delete { color: var(--danger); font-size: 12px; }
 .search-dialog { width: min(640px, calc(100vw - 32px)); }
+.workspace-settings-dialog { width: min(1080px, calc(100vw - 32px)); min-height: min(720px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); }
 .search-input { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 5px; padding: 10px 12px; }
 .search-caption { color: var(--muted); font-size: 12px; padding: 16px 0 8px; }
 .search-results { max-height: min(460px, 55dvh); overflow-y: auto; }
@@ -228,6 +233,7 @@ select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); 
   .sidebar .doc-link { width: 100%; max-width: none; }
   .folder-more { opacity: 1; }
   .app-dialog { padding: 18px; }
+  .workspace-settings-dialog { width: calc(100vw - 20px); min-height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); }
   .header-actions select { max-width: 130px; }
 }
 .document-layout { display: flex; align-items: flex-start; }
@@ -237,6 +243,17 @@ select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); 
 .outline-heading h2 { font-size: 13px; color: var(--muted); font-weight: 500; margin: 0; }
 .document-outline nav button { width: 100%; justify-content: flex-start; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 .document-outline nav p { font-size: 12px; line-height: 1.6; color: var(--muted); }
+.document-outline-rail { position: fixed; width: 42px; z-index: 15; }
+.document-outline-rail[hidden], .document-outline-popover[hidden] { display: none; }
+.document-outline-markers { display: flex; flex-direction: column; padding: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.document-outline-markers::-webkit-scrollbar { display: none; }
+.document-outline-marker { flex: 0 0 18px; width: 34px; height: 18px; min-height: 18px; padding: 0; border: 0; border-radius: 3px; }
+.document-outline-marker-line { display: block; height: 3px; margin-left: auto; border-radius: 2px; background: var(--line); transition: background 120ms ease; }
+.document-outline-marker.highlighted .document-outline-marker-line { background: var(--foreground); }
+.document-outline-popover { position: absolute; right: 100%; top: 0; width: var(--outline-popover-width); overflow-y: auto; overscroll-behavior: contain; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 24px #00000018; }
+.document-outline-popover button { display: block; width: 100%; min-height: 34px; padding: 8px 12px; text-align: left; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.document-outline-popover button.hovered { background: var(--hover); }
+@media (hover: none), (max-width: 639px) { .document-outline-rail { display: none; } }
 .document-backlinks { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .backlinks-heading h2 { margin: 0; font-size: 15px; font-weight: 500; }
 .backlinks-heading button { border: 1px solid var(--line); }

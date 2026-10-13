@@ -9,6 +9,7 @@ import {ArrowLeft,HardDrive,Mail,Settings2,ShieldCheck,Users} from 'lucide-react
 import {cloudJson,type CloudAccount,type CloudWorkspace} from '../../../common/nbstore/src/cloud';
 
 export interface Member {id:string;email:string;name:string;role:CloudWorkspace['role']}
+interface DirectoryUser {id:string;email:string;name:string}
 export interface Invite {id:string;email:string;role:string;expiresAt:number;expired:boolean}
 export interface Overview {
   id:string;name:string;createdAt:number;role:CloudWorkspace['role'];
@@ -44,6 +45,7 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
  const [overview,setOverview]=useState<Overview>(),[members,setMembers]=useState<Member[]>([]),[invites,setInvites]=useState<Invite[]>([]);
  const [search,setSearch]=useState(''),[roleFilter,setRoleFilter]=useState(''),[page,setPage]=useState(0);
  const [pending,setPending]=useState<Pending|null>(null),[token,setToken]=useState(''),[notice,setNotice]=useState('');
+ const [directoryQuery,setDirectoryQuery]=useState(''),[directory,setDirectory]=useState<DirectoryUser[]>([]),[inviteEmail,setInviteEmail]=useState(''),[inviteRole,setInviteRole]=useState<'member'|'viewer'>('member');
  const [section,setSection]=useState<'overview'|'members'|'invites'|'maintenance'>('overview');
  const alive=useRef(true);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
@@ -73,9 +75,11 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
  const current=Math.min(page,pages-1);
  const visible=filtered.slice(current*PAGE_SIZE,current*PAGE_SIZE+PAGE_SIZE);
  useEffect(()=>{setPage(0);},[search,roleFilter]);
+ useEffect(()=>{if(!canManage||section!=='invites'){setDirectory([]);return;}let active=true;const query=directoryQuery.trim();void cloudJson<DirectoryUser[]>(path('/directory-users')+(query?'&q='+encodeURIComponent(query):'')).then(value=>{if(active)setDirectory(value);}).catch(()=>{if(active)setDirectory([]);});return()=>{active=false;};},[canManage,directoryQuery,section,path]);
  // 管理员不能操作所有者或其他管理员；界面与服务端校验保持一致。
  const canModify=(member:Member)=>canManage&&member.id!==account.id&&member.role!=='owner'&&(isOwner||member.role!=='admin');
  const act=(work:()=>Promise<void>,message:string)=>run(async()=>{await work();await refresh();if(alive.current){setPending(null);setNotice(message);}});
+ const inviteExisting=(entry:DirectoryUser)=>act(async()=>{const invite=await cloudJson<{token:string}>(path('/invite'),'POST',{email:entry.email,role:inviteRole});if(alive.current){setInviteEmail(entry.email);setToken(invite.token);}},`${entry.email} 的邀请口令已生成`);
  return <section className="cloud-settings workspace-settings-shell" aria-label="工作空间设置">
   <header className="workspace-settings-hero"><button className="workspace-back" disabled={busy} onClick={onBack}><ArrowLeft size={16}/>返回工作空间列表</button><div className="workspace-title-row"><div><p className="workspace-eyebrow">团队工作空间</p><h2>{overview?.name??workspace.name}</h2><p className="workspace-subtitle">成员、邀请与空间策略</p></div><span className={`workspace-role workspace-role-${overview?.role??workspace.role}`}>{roleLabels[overview?.role??workspace.role]}</span></div></header>
   {notice&&<p role="status" className="cloud-settings-notice">{notice}<button aria-label="关闭提示" onClick={()=>setNotice('')}>×</button></p>}
@@ -134,9 +138,14 @@ export function WorkspaceSettings({workspace,account,busy,onBack,onChanged,onLef
      <span>{invite.expired?'已过期':'待接受'}</span>
      <button disabled={busy} onClick={()=>act(async()=>{await cloudJson(path('/invite'),'DELETE',{id:invite.id});},'邀请已撤销，原口令立即失效')}>撤销<span className="sr-only"> {invite.email}</span></button>
     </li>)}</ul>}
-    <form className="cloud-settings-form" onSubmit={event=>{event.preventDefault();const data=new FormData(event.currentTarget);act(async()=>{const invite=await cloudJson<{token:string}>(path('/invite'),'POST',{email:data.get('email'),role:data.get('role')});if(alive.current)setToken(invite.token);},'邀请口令已生成，同一邮箱的旧口令已失效');}}>
-     <label className="form-field">邀请成员邮箱<input name="email" type="email" required disabled={busy}/></label>
-     <label className="form-field">邀请角色<select name="role" disabled={busy}><option value="member">成员（可编辑）</option><option value="viewer">查看者（只读）</option></select></label>
+    <section className="workspace-invite-directory" aria-label="已有账号">
+     <div className="workspace-section-heading"><div><h3>已有账号</h3><p>点击账号即可生成邀请口令，账号无需再次注册。</p></div><span>{directory.length} 个可邀请账号</span></div>
+     <div className="workspace-invite-toolbar"><label className="form-field"><span className="sr-only">搜索已有账号</span><input type="search" value={directoryQuery} placeholder="按姓名或邮箱搜索" disabled={busy} onChange={event=>setDirectoryQuery(event.target.value)}/></label><label className="form-field"><span className="sr-only">邀请角色</span><select value={inviteRole} disabled={busy} onChange={event=>setInviteRole(event.target.value as 'member'|'viewer')}><option value="member">成员（可编辑）</option><option value="viewer">查看者（只读）</option></select></label></div>
+     {directory.length?<ul className="cloud-members workspace-invite-list">{directory.map(entry=><li key={entry.id}><div className="management-identity"><span className="workspace-monogram" aria-hidden="true">{entry.name.slice(0,1)}</span><span><strong>{entry.name}</strong><small>{entry.email}</small></span></div><button className="primary" disabled={busy} onClick={()=>inviteExisting(entry)}>生成邀请</button></li>)}</ul>:<p className="panel-empty">没有可邀请的已有账号。</p>}
+    </section>
+    <form className="cloud-settings-form workspace-email-invite" onSubmit={event=>{event.preventDefault();const data=new FormData(event.currentTarget);act(async()=>{const invite=await cloudJson<{token:string}>(path('/invite'),'POST',{email:data.get('email'),role:data.get('role')});if(alive.current){setToken(invite.token);setInviteEmail(String(data.get('email')??''));}},'邀请口令已生成，同一邮箱的旧口令已失效');}}>
+     <label className="form-field">邀请其他邮箱<input name="email" type="email" required value={inviteEmail} onChange={event=>setInviteEmail(event.target.value)} disabled={busy}/></label>
+     <label className="form-field">邀请角色<select name="role" defaultValue="member" disabled={busy}><option value="member">成员（可编辑）</option><option value="viewer">查看者（只读）</option></select></label>
      <button disabled={busy}>生成邀请口令</button>
      {token&&<label className="form-field">邀请口令（7 天有效，仅指定邮箱可接受）<input readOnly value={token} onFocus={event=>event.currentTarget.select()}/></label>}
     </form>

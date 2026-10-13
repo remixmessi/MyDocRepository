@@ -7,8 +7,9 @@ import type {SQLiteProjectDatabase} from '../../../../common/nbstore/server/data
 import {storageHandler} from '../../../../common/nbstore/server/http';
 import {clipperHandler} from '../../web/clipper-server';
 import {staticFile} from './policy';
+import {proxyCloudRequest,type CloudRequestFactory} from './cloud-proxy';
 const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon'};
-export async function startDesktopServer(root:string,database:SQLiteProjectDatabase){
+export async function startDesktopServer(root:string,database:SQLiteProjectDatabase,requestCloud?:CloudRequestFactory){
  const backups=new DatabaseBackups(database,database.connect);backups.start();
  const token=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
  const server=createServer(async(req,res)=>{
@@ -18,6 +19,7 @@ export async function startDesktopServer(root:string,database:SQLiteProjectDatab
    if(url.pathname.startsWith('/api/storage/')){if(req.headers.authorization!=='Bearer '+token){res.writeHead(403);res.end();return;}req.url=url.pathname.slice('/api/storage'.length)+url.search;await storageHandler(database,false,backups)(req,res);return;}
    if(url.pathname==='/'&&url.searchParams.get('desktopKey')===cookieToken){res.writeHead(303,{'Set-Cookie':`mydoc-desktop=${cookieToken}; HttpOnly; SameSite=Strict; Path=/`,'Location':'/'});res.end();return;}
    if(!req.headers.cookie?.split(';').some(c=>c.trim()==='mydoc-desktop='+cookieToken)){res.writeHead(403);res.end();return;}
+   if(url.pathname.startsWith('/api/cloud-proxy/')){proxyCloudRequest(req,res,origin,requestCloud);return;}
    if(url.pathname==='/api/clipper'){await clipperHandler(req,res);return;}
    if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);res.end();return;}
    const file=staticFile(root,req.url??'/');if(!file){res.writeHead(403);res.end();return;}

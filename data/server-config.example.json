@@ -1,0 +1,10 @@
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "cloudDbPath": "data/cloud.sqlite",
+  "admin": {
+    "email": "admin@example.com",
+    "password": "请替换为至少10位的强密码",
+    "name": "系统管理员"
+  }
+}

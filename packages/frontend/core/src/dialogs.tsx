@@ -3,10 +3,10 @@ import { X } from 'lucide-react';
 import type { LocalWorkspace } from './workspace';
 import { snippet } from './search';
 import { commandMatches, paletteHistory, rememberPalette, nextPaletteIndex, type PaletteCommand } from './command-palette';
-export function Modal({ title, onClose, children, wide = false, restoreFocus }: { restoreFocus?: () => boolean; title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide = false, className = '', restoreFocus }: { restoreFocus?: () => boolean; title: string; onClose: () => void; children: ReactNode; wide?: boolean; className?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current!; const previous = document.activeElement as HTMLElement | null; dialog.showModal(); return () => { dialog.close(); if(restoreFocus?.()!==false)previous?.focus(); }; }, []);
-  return <dialog ref={ref} className={`app-dialog${wide ? ' search-dialog' : ''}`} aria-label={title} onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); onClose(); } }} onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) { const bounds = event.currentTarget.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
+  return <dialog ref={ref} className={`app-dialog${wide ? ' search-dialog' : ''}${className ? ` ${className}` : ''}`} aria-label={title} onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); onClose(); } }} onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) { const bounds = event.currentTarget.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
     <div className="dialog-heading"><h2>{title}</h2><button type="button" aria-label="关闭弹窗" onClick={onClose}><X size={18} /></button></div>{children}
   </dialog>;
 }

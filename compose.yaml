@@ -1,0 +1,14 @@
+services:
+  mydoc:
+    image: mydoc-web:latest
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - "${MYDOC_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./data:/app/data
+    # To initialize a server administrator, uncomment and replace both values.
+    # environment:
+    #   MYDOC_ADMIN_EMAIL: admin@example.com
+    #   MYDOC_ADMIN_PASSWORD: replace-with-a-strong-password
+    #   MYDOC_ADMIN_NAME: Administrator

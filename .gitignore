@@ -30,6 +30,7 @@ data/*.sqlite-journal
 data/backups/
 data/backup-settings.json
 data/backup-settings.json.tmp
+data/server-config.json
 !docs/
 !docs/实现方案.md
 !docs/TODO-功能清单.md
@@ -45,6 +46,7 @@ data/backup-settings.json.tmp
 !/tests/desktop/
 !/tests/desktop/**
 !/tests/desktop.test.ts
+!/tests/desktop-cloud-proxy.test.ts
 !/tests/desktop-deep-links.test.ts
 !/tests/desktop-updates.test.ts
 !/tests/database-backups.test.ts
@@ -68,3 +70,8 @@ data/backup-settings.json.tmp
 !/tests/cloud-settings.test.ts
 !/tests/cloud-account.test.ts
 !/tests/e2e/account.spec.ts
+!/tests/import-crypto.test.ts
+!/tests/releases.test.ts
+data/releases/
+!/tests/e2e/import-crypto.spec.ts
+!/tests/server-connections.test.ts

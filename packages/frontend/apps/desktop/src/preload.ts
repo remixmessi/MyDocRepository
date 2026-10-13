@@ -8,6 +8,7 @@ ipcRenderer.on('mydoc:prepare-update',(_event,id:string)=>void prepare(id,true))
 ipcRenderer.on('mydoc:update-unlock',()=>{document.documentElement.inert=previousInert;});
 const bridge:DesktopBridge={
  platform:process.platform,
+ arch:process.arch,
  updateStatus:()=>ipcRenderer.invoke('mydoc:update-status'),
  updateAction:action=>ipcRenderer.invoke('mydoc:update-action',action),
  setAutomaticUpdateChecks:value=>ipcRenderer.invoke('mydoc:update-settings',value),

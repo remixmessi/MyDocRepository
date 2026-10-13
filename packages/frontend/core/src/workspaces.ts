@@ -1,4 +1,4 @@
-import {CloudStorage,CloudAssets,cloudJson,type CloudWorkspace,type CloudAccount} from '../../../common/nbstore/src/cloud';
+import {CloudStorage,CloudAssets,cloudJson,cloudServerUrl,type CloudWorkspace,type CloudAccount} from '../../../common/nbstore/src/cloud';
 import { templateStore, disposeTemplate, snapshotAssets } from './document-templates';
 import { encodeBinary } from './backup';
 import { Y, LOCAL_ORIGIN } from '@mydoc/crdt';
@@ -8,17 +8,27 @@ import { LocalWorkspace } from './workspace';
 import { decodeBinary, type WorkspaceBackup } from './backup';
 export interface WorkspaceMeta { id: string; name: string; createdAt: number; cloud?:boolean; userId?:string;role?:CloudWorkspace['role'] }
 export class WorkspaceRegistry {
+  private readonly server=cloudServerUrl()||globalThis.location?.origin||'http://localhost';
   private doc = new Y.Doc(); readonly entries = this.doc.getMap<WorkspaceMeta>('workspaces'); private preferences = this.doc.getMap<string>('preferences');
   readonly persistence: PersistentDocument; private opened = new Map<string, Promise<LocalWorkspace>>();
   constructor(private storage: DocumentStorage, private assets: AssetStorage = new IndexedDBAssetStorage()) { this.persistence = new PersistentDocument('registry:local', this.doc, storage); }
-  async open() { await this.persistence.open(); if (!this.entries.size) { this.doc.transact(() => { this.entries.set('local', { id: 'local', name: '本地工作区', createdAt: Date.now() }); this.preferences.set('active', 'local'); }, LOCAL_ORIGIN); await this.persistence.flush(); } }
+  async open() { await this.persistence.open();
+    const previous=this.preferences.get('cloud-registry-server');
+    if(previous&&previous!==this.server){
+      const clouds=this.list().filter(entry=>entry.cloud);if(clouds.length&&previous)this.preferences.set('cloud-spaces:'+previous,JSON.stringify(clouds));
+      let restored:WorkspaceMeta[]=[];try{restored=JSON.parse(this.preferences.get('cloud-spaces:'+this.server)??'[]');}catch{}
+      this.doc.transact(()=>{for(const entry of clouds)this.entries.delete(entry.id);for(const entry of restored)if(entry.cloud)this.entries.set(entry.id,entry);this.preferences.set('cloud-registry-server',this.server);const local=this.list().find(entry=>!entry.cloud);if(local)this.preferences.set('active',local.id);},LOCAL_ORIGIN);
+      await this.persistence.flush();
+    }
+    if(!previous){this.preferences.set('cloud-registry-server',this.server);this.preferences.set('cloud-spaces:'+this.server,JSON.stringify(this.list().filter(entry=>entry.cloud)));await this.persistence.flush();}
+    if (!this.entries.size) { this.doc.transact(() => { this.entries.set('local', { id: 'local', name: '本地工作区', createdAt: Date.now() }); this.preferences.set('active', 'local'); }, LOCAL_ORIGIN); await this.persistence.flush(); } }
   subscribe = (listener: () => void) => { this.entries.observe(listener); this.preferences.observe(listener); return () => { this.entries.unobserve(listener); this.preferences.unobserve(listener); }; };
   list() { return [...this.entries.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); }
   get activeId() { const saved = this.preferences.get('active'); return saved && this.entries.has(saved) ? saved : this.list()[0]?.id ?? 'local'; }
   async get(id: string) { if (!this.entries.has(id)) throw new Error('工作区不存在'); let promise = this.opened.get(id); if (!promise) { const ws = new LocalWorkspace(this.entries.get(id)!.cloud?new CloudStorage(id,this.entries.get(id)!.role):this.storage, id, !!this.entries.get(id)!.cloud, this.entries.get(id)!.cloud?new CloudAssets(id):this.assets,this.entries.get(id)!.userId,this.storage); promise = ws.open().then(() => ws).catch(async error => { await ws.destroy(); this.opened.delete(id); throw error; }); this.opened.set(id, promise); } return promise; }
   async select(id: string) { const next = await this.get(id); this.doc.transact(() => this.preferences.set('active', id), LOCAL_ORIGIN); await this.persistence.flush(); return next; }
   async create(name: string) { if (!name.trim()) throw new Error('请输入工作区名称'); const id = crypto.randomUUID(); this.doc.transact(() => this.entries.set(id, { id, name: name.trim(), createdAt: Date.now() }), LOCAL_ORIGIN); try { await this.persistence.flush(); } catch (error) { this.doc.transact(() => this.entries.delete(id), LOCAL_ORIGIN); throw error; } return this.select(id); }
-  async refreshCloud(){const {user}=await cloudJson<{user:CloudAccount|null}>('/session');if(!user)return;const spaces=await cloudJson<CloudWorkspace[]>('/workspaces');for(const [id,promise]of this.opened)if(this.entries.get(id)?.cloud&&!spaces.some(space=>space.id===id)){const ws=await promise;if(ws.sync?.status==='blocked'||ws.persistence.state==='error')throw new Error('工作空间权限已失效，请先在当前页面导出草稿。');}this.doc.transact(()=>{for(const entry of this.list())if(entry.cloud&&!spaces.some(s=>s.id===entry.id))this.entries.delete(entry.id);for(const space of spaces)this.entries.set(space.id,{id:space.id,name:space.name,createdAt:space.createdAt,cloud:true,userId:user.id,role:space.role});},LOCAL_ORIGIN);await this.persistence.flush();for(const[id,promise]of this.opened)if(!this.entries.has(id)){await (await promise).destroy();this.opened.delete(id);}}
+  async refreshCloud(){const {user}=await cloudJson<{user:CloudAccount|null}>('/session');if(!user){this.doc.transact(()=>{for(const entry of this.list())if(entry.cloud)this.entries.delete(entry.id);},LOCAL_ORIGIN);await this.persistence.flush();return;}const spaces=await cloudJson<CloudWorkspace[]>('/workspaces');for(const [id,promise]of this.opened)if(this.entries.get(id)?.cloud&&!spaces.some(space=>space.id===id)){const ws=await promise;if(ws.sync?.status==='blocked'||ws.persistence.state==='error')throw new Error('工作空间权限已失效，请先在当前页面导出草稿。');}this.doc.transact(()=>{for(const entry of this.list())if(entry.cloud&&!spaces.some(s=>s.id===entry.id))this.entries.delete(entry.id);for(const space of spaces)this.entries.set(space.id,{id:space.id,name:space.name,createdAt:space.createdAt,cloud:true,userId:user.id,role:space.role});this.preferences.set('cloud-spaces:'+this.server,JSON.stringify(this.list().filter(entry=>entry.cloud)));},LOCAL_ORIGIN);await this.persistence.flush();for(const[id,promise]of this.opened)if(!this.entries.has(id)){await (await promise).destroy();this.opened.delete(id);}}
   async rename(id: string, name: string) { const entry = this.entries.get(id); if(entry?.cloud)throw new Error('请在团队工作空间设置中修改名称'); if (!entry || !name.trim()) throw new Error('请输入工作区名称'); this.doc.transact(() => this.entries.set(id, { ...entry, name: name.trim() }), LOCAL_ORIGIN); await this.persistence.flush(); }
   async delete(id: string) {
     if(this.entries.get(id)?.cloud)throw new Error('请在团队工作空间设置中删除工作空间');

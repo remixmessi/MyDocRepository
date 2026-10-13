@@ -13,7 +13,12 @@ module.exports = async context => {
   if (typeof configured !== 'string' || !configured.trim()) return;
   const {stat} = await import('node:fs/promises');
   const resolved = require('node:path').resolve(context.packager.projectDir, configured);
-  if (!(await stat(resolved)).isDirectory()) return;
+  try {
+    if (!(await stat(resolved)).isDirectory()) return;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    throw new Error(`指定的 Electron 运行时目录不存在：${resolved}。请移除 --config.electronDist，让构建器自动下载对应架构；如需复用本机运行时，先运行 node node_modules/electron/install.js。`);
+  }
   const {machoArchitectures, assertArchitecture} = await import('./mac-architecture.mjs');
   const electronPath = join(resolved, 'Electron.app', 'Contents', 'MacOS', 'Electron');
   const {readFile} = await import('node:fs/promises');

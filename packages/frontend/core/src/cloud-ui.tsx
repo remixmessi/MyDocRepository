@@ -1,11 +1,10 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {Modal} from './dialogs';
-import {cloudJson,cloudServerUrl,configureCloudServer,type CloudAccount,type CloudMailStatus,type CloudWorkspace} from '../../../common/nbstore/src/cloud';
-import {projectPreferences} from '@mydoc/nbstore';
+import {ServerConnections} from './server-connections';
+import {localAccount,registerLocalOnServer,restoreLocalAccount} from './local-account-ui';
+import {cloudJson,type CloudAccount,type CloudMailStatus,type CloudWorkspace} from '../../../common/nbstore/src/cloud';
 import {WorkspaceSettings,roleLabels} from './cloud-settings';
-import {AccountSettings} from './account-settings';
-import {ServerAdminSettings} from './server-admin-settings';
-import {ArrowUpRight,Building2,Plus,Settings2,UserRound,Users} from 'lucide-react';
+import {ArrowUpRight,Building2,Plus,Settings2,Users} from 'lucide-react';
 /**
  * 登录／注册与找回密码。
  * 找回密码不显示邮箱是否存在；未配置邮件服务时明确说明口令只写入服务端日志。
@@ -46,28 +45,18 @@ export function CloudLogin({onLogin,beforeSession}:{onLogin:()=>void;beforeSessi
   </div>
  </form>;
 }
-export function CloudDialog({onClose,onRefresh,onOpen}:{onClose:()=>void;onRefresh:()=>Promise<void>;onOpen:(id:string)=>void}){
+export function CloudDialog({onClose,onRefresh,onOpen,onPrepareSwitch}:{onPrepareSwitch:()=>Promise<void>;onClose:()=>void;onRefresh:()=>Promise<void>;onOpen:(id:string)=>void}){
  const [user,setUser]=useState<CloudAccount|null>(),[spaces,setSpaces]=useState<CloudWorkspace[]>([]),[selected,setSelected]=useState<CloudWorkspace>(),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const [mail,setMail]=useState<CloudMailStatus>({configured:false}),[account,setAccount]=useState(false),[admin,setAdmin]=useState(false);
- const [serverUrl,setServerUrl]=useState(cloudServerUrl()),[serverDraft,setServerDraft]=useState(cloudServerUrl()),[serverNotice,setServerNotice]=useState('');
+ const requestGeneration=useRef(0);
+ const [,refreshLocal]=useState(0);
+ useEffect(()=>{let alive=true;void restoreLocalAccount().then(()=>{if(alive)refreshLocal(value=>value+1);}).catch(()=>{});return()=>{alive=false;};},[]);
  const [spaceQuery,setSpaceQuery]=useState(''),[spaceAction,setSpaceAction]=useState<'create'|'join'>('create');
- const isDesktop=!!window.mydocDesktop;
- const load=async()=>{const session=await cloudJson<{user:CloudAccount|null;mail?:CloudMailStatus}>('/session');setUser(session.user);setMail(session.mail??{configured:false});if(session.user)setSpaces(await cloudJson('/workspaces'));};
- const run=(work:()=>Promise<void>)=>{setBusy(true);setError('');void (async()=>{try{await work();}catch(error){setError(error instanceof Error?error.message:'操作失败，请重试');}finally{setBusy(false);}})();};
- useEffect(()=>{let alive=true;void (async()=>{if(isDesktop){const saved=projectPreferences.getItem('cloud-server-url');if(saved){try{configureCloudServer(saved);if(alive){setServerUrl(saved);setServerDraft(saved);}}catch{}}}run(load);})();return()=>{alive=false;};},[]);
- const saveServer=()=>run(async()=>{const next=configureCloudServer(serverDraft);if(isDesktop)await projectPreferences.setItem('cloud-server-url',next);setServerUrl(next);setServerNotice(next?'服务器地址已保存':'已恢复使用当前应用服务器');await load();});
- return <Modal title="团队工作空间" wide onClose={()=>{if(!busy)onClose();}}>{error&&<p role="alert" className="form-error">{error}</p>}{isDesktop&&<form className="cloud-server-config" onSubmit={event=>{event.preventDefault();saveServer();}}><label className="form-field">服务器地址<input type="url" value={serverDraft} placeholder="https://docs.example.com" onChange={event=>setServerDraft(event.target.value)} disabled={busy}/><small>桌面端注册、登录和同步将使用此地址；留空恢复为当前服务器。</small></label><button disabled={busy}>{busy?'正在连接…':'保存并连接'}</button>{serverNotice&&<span role="status">{serverNotice}</span>}{serverUrl&&<small role="status">当前：{serverUrl}</small>}</form>}{user===undefined?<div role="status">{error?<button onClick={()=>run(load)}>重试加载</button>:'正在读取账户…'}</div>:!user?<CloudLogin beforeSession={onRefresh} onLogin={()=>location.reload()}/>:<div className="cloud-management">
-  <div className="cloud-account">
-   <span className="management-identity"><UserRound size={17}/><span><strong>{user.name}</strong><small>{user.email}</small></span></span>
-   {!account&&!selected&&!admin&&<button title="账户设置" aria-label="账户设置" disabled={busy} onClick={()=>setAccount(true)}><Settings2 size={17}/></button>}
-   {!account&&!selected&&!admin&&user.serverAdmin&&<button disabled={busy} onClick={()=>setAdmin(true)}>服务器用户管理</button>}
-   <button disabled={busy} onClick={()=>run(async()=>{await onRefresh();await cloudJson('/logout','POST');location.reload();})}>退出登录</button>
-  </div>
-  {admin&&user.serverAdmin?<ServerAdminSettings accountId={user.id} busy={busy} run={run} onBack={()=>setAdmin(false)}/>:account?<AccountSettings account={user} mail={mail} busy={busy} run={run}
-    onBack={()=>setAccount(false)}
-    onChanged={async()=>{await load();await onRefresh();}}
-    onSignedOut={()=>location.reload()}/>
-  :selected?<WorkspaceSettings workspace={selected} account={user} busy={busy} run={run}
+ const load=async(generation=requestGeneration.current)=>{const session=await cloudJson<{user:CloudAccount|null;mail?:CloudMailStatus}>('/session');if(generation!==requestGeneration.current)return;setUser(session.user);if(session.user){const nextSpaces=await cloudJson<CloudWorkspace[]>('/workspaces');if(generation!==requestGeneration.current)return;setSpaces(nextSpaces);}else setSpaces([]);};
+ const run=(work:()=>Promise<void>)=>{const generation=++requestGeneration.current;setBusy(true);setError('');void (async()=>{try{await work();if(generation===requestGeneration.current)setError('');}catch(error){if(generation===requestGeneration.current)setError(error instanceof Error?error.message:'操作失败，请重试');}finally{if(generation===requestGeneration.current)setBusy(false);}})();};
+ useEffect(()=>{run(load);},[]);
+ return <Modal title="团队工作空间" wide className="workspace-settings-dialog" onClose={()=>{if(!busy)onClose();}}>{error&&<p role="alert" className="form-error">{error}</p>}<ServerConnections busy={busy} prepare={onPrepareSwitch}/>{user===undefined?<div role="status">{error?<button onClick={()=>run(load)}>重试加载</button>:'正在读取账户…'}</div>:!user?<><CloudLogin beforeSession={onRefresh} onLogin={()=>location.reload()}/>{localAccount&&<form onSubmit={event=>{event.preventDefault();const data=new FormData(event.currentTarget);run(async()=>{await onRefresh();await registerLocalOnServer(String(data.get('password')));location.reload();});}}><h3>使用本地账号注册服务器</h3><p>{localAccount.name} · {localAccount.email}</p><label className="form-field">确认本地密码<input type="password" name="password" required minLength={10} disabled={busy} autoComplete="current-password"/></label><button disabled={busy}>注册到当前服务器</button><p className="organization-help">邮箱已注册时不会覆盖账号，请使用上方登录入口。</p></form>}</>:<div className="team-management">
+  <div className="settings-center-content">
+  {selected?<WorkspaceSettings workspace={selected} account={user} busy={busy} run={run}
     onBack={()=>setSelected(undefined)}
     onChanged={async next=>{if(next)setSelected(current=>current?{...current,...next}:current);await load();await onRefresh();}}
     onLeft={()=>setSelected(undefined)} onDeleted={()=>setSelected(undefined)}/>
@@ -90,5 +79,5 @@ export function CloudDialog({onClose,onRefresh,onOpen}:{onClose:()=>void;onRefre
     <button disabled={busy}>接受邀请</button>
    </form>}
   </div>}
- </div>}</Modal>;
+ </div></div>}</Modal>;
 }

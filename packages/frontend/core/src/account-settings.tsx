@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {ArrowLeft} from 'lucide-react';
-import {cloudJson,cloudRequest,cloudServerUrl,type CloudAccount,type CloudMailStatus} from '../../../common/nbstore/src/cloud';
+import {cloudJson,cloudRequest,cloudUrl,type CloudAccount,type CloudMailStatus} from '../../../common/nbstore/src/cloud';
 
 /**
  * 账户设置：显示名称与头像、修改密码、登录设备、邮箱验证与更改邮箱。
@@ -44,7 +44,7 @@ export function AccountSettings({account,mail,busy,run,onBack,onChanged,onSigned
 
   <h4>头像</h4>
   <div className="account-avatar">
-   {account.hasAvatar?<img src={(cloudServerUrl()||'')+'/api/cloud/avatar?user='+encodeURIComponent(account.id)+'&v='+avatarTick} width={64} height={64} alt={account.name+' 的头像'}/>:<span className="account-avatar-empty" aria-hidden="true">{account.name.slice(0,1)}</span>}
+   {account.hasAvatar?<img src={cloudUrl('/avatar?user='+encodeURIComponent(account.id)+'&v='+avatarTick)} width={64} height={64} alt={account.name+' 的头像'}/>:<span className="account-avatar-empty" aria-hidden="true">{account.name.slice(0,1)}</span>}
    <div>
     <label className="form-field">上传头像（PNG／JPEG／WebP，不超过 256 KiB）
      <input type="file" accept={AVATAR_TYPES} disabled={busy} onChange={event=>{
