@@ -17,7 +17,7 @@ export function describeAgent(agent:string|null){
  return platform+' · '+browser;
 }
 
-export function AccountSettings({account,mail,busy,run,onBack,onChanged,onSignedOut}:{account:CloudAccount;mail:CloudMailStatus;busy:boolean;run:(work:()=>Promise<void>)=>void;onBack:()=>void;onChanged:()=>Promise<void>;onSignedOut:()=>void}){
+export function AccountSettings({account,mail,busy,run,onBack,onChanged,onSignedOut}:{account:CloudAccount;mail:CloudMailStatus;busy:boolean;run:(work:()=>Promise<void>)=>void;onBack:()=>void;onChanged:()=>Promise<void>;onSignedOut:()=>void|Promise<void>}){
  const [sessions,setSessions]=useState<Session[]>([]),[notice,setNotice]=useState(''),[avatarTick,setAvatarTick]=useState(0);
  const [verifyToken,setVerifyToken]=useState(''),[emailToken,setEmailToken]=useState(''),[pendingEmail,setPendingEmail]=useState('');
  const [confirm,setConfirm]=useState<{kind:'session';session:Session}|{kind:'others'}|null>(null);
@@ -97,7 +97,7 @@ export function AccountSettings({account,mail,busy,run,onBack,onChanged,onSigned
   <h4>登录设备</h4>
   <ul className="cloud-members" aria-label="登录设备列表">{sessions.map(session=><li key={session.id}>
    <div><strong>{describeAgent(session.agent)}{session.current?'（当前设备）':''}</strong><small>最近活动 {formatTime(session.lastSeenAt)} · 登录于 {formatTime(session.createdAt)} · 到期 {formatTime(session.expiresAt)}{session.ip?' · '+session.ip:''}</small></div>
-   {session.current?<button disabled={busy} onClick={()=>run(async()=>{await cloudJson('/logout','POST');onSignedOut();})}>退出登录</button>
+   {session.current?<button disabled={busy} onClick={()=>run(async()=>{await cloudJson('/logout','POST');await onSignedOut();})}>退出登录</button>
     :<button disabled={busy} onClick={()=>setConfirm({kind:'session',session})}>注销<span className="sr-only"> {describeAgent(session.agent)}</span></button>}
   </li>)}</ul>
   {!sessions.length&&<p className="panel-empty">正在读取登录设备…</p>}

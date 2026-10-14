@@ -41,6 +41,7 @@ test('桌面端通过 HTTP IP 登录，重新载入与进程重启保持会话�
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('IP 团队空间',{exact:true})).toBeVisible();
     await dialog.getByRole('button',{name:'关闭弹窗',exact:true}).click();
+    await expect(page.getByLabel('当前工作区',{exact:true}).locator('option').filter({hasText:'IP 团队空间'})).toHaveCount(1);
     await page.getByRole('button',{name:'设置',exact:true}).click();
     const settings=page.getByRole('dialog',{name:'设置',exact:true});
     await settings.getByRole('button',{name:'服务器账号',exact:true}).click();
@@ -76,6 +77,7 @@ test('桌面端通过 HTTP IP 登录，重新载入与进程重启保持会话�
     await expect(page.getByRole('dialog',{name:'设置',exact:true})).toHaveCount(0);
     dialog=await openCloud(page);
     await expect(dialog.getByRole('button',{name:'登录',exact:true})).toBeVisible();
+    await expect(page.getByLabel('当前工作区',{exact:true}).locator('option').filter({hasText:'IP 团队空间'})).toHaveCount(0);
   }finally{
     await app?.close();server.closeAllConnections();await new Promise<void>(done=>server.close(()=>done()));cloud.close();await rm(directory,{recursive:true,force:true});
   }

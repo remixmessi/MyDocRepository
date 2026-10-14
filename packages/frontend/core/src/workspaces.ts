@@ -54,7 +54,34 @@ export class WorkspaceRegistry {
     },LOCAL_ORIGIN);
     await this.persistence.flush();
   }
-  async refreshCloud(){const {user}=await cloudJson<{user:CloudAccount|null}>('/session');if(!user){this.doc.transact(()=>{for(const entry of this.list())if(entry.cloud)this.entries.delete(entry.id);},LOCAL_ORIGIN);await this.persistence.flush();return;}const spaces=await cloudJson<CloudWorkspace[]>('/workspaces');for(const [id,promise]of this.opened)if(this.entries.get(id)?.cloud&&!spaces.some(space=>space.id===id)){const ws=await promise;if(ws.sync?.status==='blocked'||ws.persistence.state==='error')throw new Error('工作空间权限已失效，请先在当前页面导出草稿。');}this.doc.transact(()=>{for(const entry of this.list())if(entry.cloud&&!spaces.some(s=>s.id===entry.id))this.entries.delete(entry.id);for(const space of spaces)this.entries.set(space.id,{id:space.id,name:space.name,createdAt:space.createdAt,cloud:true,userId:user.id,role:space.role});this.preferences.set('cloud-spaces:'+this.server,JSON.stringify(this.list().filter(entry=>entry.cloud)));},LOCAL_ORIGIN);await this.persistence.flush();for(const[id,promise]of this.opened)if(!this.entries.has(id)){await (await promise).destroy();this.opened.delete(id);}}
+  async refreshCloud(){
+    const {user}=await cloudJson<{user:CloudAccount|null}>('/session');
+    if(!user){
+      const active=this.preferences.get('active');
+      const clouds=this.list().filter(entry=>entry.cloud);
+      for(const [id,promise] of this.opened){
+        if(this.entries.get(id)?.cloud){await (await promise).destroy();this.opened.delete(id);}
+      }
+      this.doc.transact(()=>{
+        for(const entry of clouds)this.entries.delete(entry.id);
+        if(active&&clouds.some(entry=>entry.id===active))this.preferences.set('active',this.list().find(entry=>!entry.cloud)?.id??'local');
+        this.preferences.set('cloud-spaces:'+this.server,'[]');
+      },LOCAL_ORIGIN);
+      await this.persistence.flush();
+      return;
+    }
+    const spaces=await cloudJson<CloudWorkspace[]>('/workspaces');
+    for(const [id,promise]of this.opened)if(this.entries.get(id)?.cloud&&!spaces.some(space=>space.id===id)){const ws=await promise;if(ws.sync?.status==='blocked'||ws.persistence.state==='error')throw new Error('工作空间权限已失效，请先在当前页面导出草稿。');}
+    const active=this.preferences.get('active');
+    this.doc.transact(()=>{
+      for(const entry of this.list())if(entry.cloud&&!spaces.some(s=>s.id===entry.id))this.entries.delete(entry.id);
+      for(const space of spaces)this.entries.set(space.id,{id:space.id,name:space.name,createdAt:space.createdAt,cloud:true,userId:user.id,role:space.role});
+      if(active&&this.entries.get(active)===undefined)this.preferences.set('active',this.list().find(entry=>!entry.cloud)?.id??'local');
+      this.preferences.set('cloud-spaces:'+this.server,JSON.stringify(this.list().filter(entry=>entry.cloud)));
+    },LOCAL_ORIGIN);
+    await this.persistence.flush();
+    for(const[id,promise]of this.opened)if(!this.entries.has(id)){await (await promise).destroy();this.opened.delete(id);}
+  }
   async rename(id: string, name: string) { const entry = this.entries.get(id); if(entry?.cloud)throw new Error('请在团队工作空间设置中修改名称'); if (!entry || !name.trim()) throw new Error('请输入工作区名称'); this.doc.transact(() => this.entries.set(id, { ...entry, name: name.trim() }), LOCAL_ORIGIN); await this.persistence.flush(); }
   async delete(id: string) {
     if(this.entries.get(id)?.cloud)throw new Error('请在团队工作空间设置中删除工作空间');

@@ -68,7 +68,8 @@ textarea:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accen
 .empty-state { max-width:680px; padding:100px 48px; }
 .empty-state h1 { font-size:28px; letter-spacing:-.6px; line-height:1.4; }
 .empty-state p { line-height:1.7; max-width:360px; }
-.app-dialog { border-radius:10px; padding:24px; }
+.app-dialog { border-radius:10px; padding:var(--dialog-padding,24px); }
+.app-dialog:not(.unified-settings) > .dialog-heading { margin:calc(-1 * var(--dialog-padding,24px)) calc(-1 * var(--dialog-padding,24px)) 18px; padding:var(--dialog-padding,24px) var(--dialog-padding,24px) 16px; background:var(--panel); }
 .dialog-heading { padding-bottom:16px; border-bottom:1px solid var(--line); margin-bottom:18px; }
 .dialog-heading h2 { font-size:18px; letter-spacing:-.3px; }
 .dialog-actions { padding-top:16px; border-top:1px solid var(--line); }

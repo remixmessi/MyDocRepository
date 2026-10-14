@@ -20,7 +20,7 @@ test('保存失败阻止退出，恢复后可正常关闭；macOS 关闭窗口�
 
 test('桌面 SQLite 待提交队列在真实进程重启后保留并按序确认清理',async()=>{
  let app:ElectronApplication|undefined;
- const stop=async()=>{if(!app)return;app.process().kill('SIGKILL');app=undefined;};
+ const stop=async()=>{if(!app)return;const process=app.process();app=undefined;process.kill('SIGKILL');if(!process.killed)return;await new Promise<void>(resolve=>{if(process.exitCode!==null)resolve();else process.once('close',()=>resolve());});await new Promise(resolve=>setTimeout(resolve,500));};
  const doc=new Y.Doc();doc.getText('body').insert(0,'进程重启后仍待提交');
  const update=Buffer.from(Y.encodeStateAsUpdate(doc));doc.destroy();
  const base64=update.toString('base64');

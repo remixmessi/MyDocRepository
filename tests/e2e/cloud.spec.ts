@@ -41,7 +41,7 @@ test('独立 Web 服务：两个账户、邀请加入、正文实时协作和独
     }
     let manager = await dialog(a);
     await manager.getByLabel('新工作空间名称').fill('多人协作测试');
-    await manager.getByRole('button', { name: '创建团队工作空间' }).click();
+    await manager.getByRole('button', { name: '创建团队空间' }).click();
     await manager.getByRole('button', { name: '设置与成员' }).click();
     await manager.getByRole('navigation', { name: '工作区管理分区' }).getByRole('button', { name: '邀请', exact: true }).click();
     await manager.getByLabel('邀请其他邮箱').fill('b' + suffix + '@example.com');
