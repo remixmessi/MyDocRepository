@@ -1,5 +1,5 @@
 import {test,expect,_electron as electron,type ElectronApplication} from '@playwright/test';
-import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,open} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {Y} from '@mydoc/crdt';
@@ -20,7 +20,8 @@ test('保存失败阻止退出，恢复后可正常关闭；macOS 关闭窗口�
 
 test('桌面 SQLite 待提交队列在真实进程重启后保留并按序确认清理',async()=>{
  let app:ElectronApplication|undefined;
- const stop=async()=>{if(!app)return;const process=app.process();app=undefined;process.kill('SIGKILL');if(!process.killed)return;await new Promise<void>(resolve=>{if(process.exitCode!==null)resolve();else process.once('close',()=>resolve());});await new Promise(resolve=>setTimeout(resolve,500));};
+ const stop=async()=>{if(!app)return;const process=app.process();app=undefined;await new Promise<void>(resolve=>{if(process.exitCode!==null){resolve();return;}process.once('close',()=>resolve());process.kill('SIGKILL');});};
+ const waitForDatabaseUnlock=async()=>{const path=join(directory,'data','mydoc.sqlite');const deadline=Date.now()+15000;for(;;){try{const handle=await open(path,'r+');await handle.close();return;}catch(error){if(Date.now()>=deadline)throw error;await new Promise(resolve=>setTimeout(resolve,100));}}};
  const doc=new Y.Doc();doc.getText('body').insert(0,'进程重启后仍待提交');
  const update=Buffer.from(Y.encodeStateAsUpdate(doc));doc.destroy();
  const base64=update.toString('base64');
@@ -32,8 +33,8 @@ test('桌面 SQLite 待提交队列在真实进程重启后保留并按序确认
   app=await launch();let page=await app.firstWindow();await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();
   const path='/sync-queue?'+new URLSearchParams({server:'http://127.0.0.1:4180',workspace:'desktop-restart',id:'doc:restart'}).toString();
   const queued=await request(page,path,'POST',{update:base64,snapshot:base64});expect(queued.status).toBe(200);const seq=JSON.parse(queued.text).seq;expect(seq).toBeGreaterThan(0);
-  await stop();app=await launch();page=await app.firstWindow();const restored=await request(page,path);expect(restored.status).toBe(200);const snapshot=JSON.parse(restored.text);expect(snapshot.rows).toHaveLength(1);expect(snapshot.rows[0].seq).toBe(seq);expect(snapshot.rows[0].attempts).toBe(0);
-  const ack=await request(page,path,'DELETE',{seq});expect(ack.status).toBe(200);await stop();app=await launch();page=await app.firstWindow();const empty=await request(page,path);expect(JSON.parse(empty.text).rows).toEqual([]);
+  await stop();await waitForDatabaseUnlock();app=await launch();page=await app.firstWindow();const restored=await request(page,path);expect(restored.status).toBe(200);const snapshot=JSON.parse(restored.text);expect(snapshot.rows).toHaveLength(1);expect(snapshot.rows[0].seq).toBe(seq);expect(snapshot.rows[0].attempts).toBe(0);
+  const ack=await request(page,path,'DELETE',{seq});expect(ack.status).toBe(200);await stop();await waitForDatabaseUnlock();app=await launch();page=await app.firstWindow();const empty=await request(page,path);expect(JSON.parse(empty.text).rows).toEqual([]);
  }finally{await stop();}
 });
 

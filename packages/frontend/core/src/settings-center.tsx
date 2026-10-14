@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useState} from 'react';
-import {ChevronDown,Palette,UserRound,Users,Package} from 'lucide-react';
+import {ChevronDown,Palette,UserRound,Users,Package,Tags} from 'lucide-react';
 import {cloudJson,cloudServerUrl,type CloudAccount,type CloudMailStatus,type CloudWorkspace} from '../../../common/nbstore/src/cloud';
 import {Modal} from './dialogs';
 import {ServerConnections} from './server-connections';
@@ -9,15 +9,17 @@ import {AccountSettings} from './account-settings';
 import {ServerAdminSettings} from './server-admin-settings';
 import {WebReleaseSettings,DesktopVersionSettings} from './version-settings';
 import type {ThemeMode} from './theme';
+import type {LocalWorkspace} from './workspace';
+import {OrganizationPanel} from './organization-ui';
 
-type Tab='local'|'server'|'appearance'|'users'|'releases';
-export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,onThemeSave,workspaces,activeWorkspaceId}:{onClose:()=>void;onRefresh:()=>Promise<void>;onCloudSessionChanged?:()=>Promise<void>;theme:ThemeMode;onThemeSave:(mode:ThemeMode)=>Promise<void>;workspaces:CloudWorkspace[];activeWorkspaceId?:string}){
- const [tab,setTab]=useState<Tab>('local'),[expanded,setExpanded]=useState(true),[user,setUser]=useState<CloudAccount|null>(),[mail,setMail]=useState<CloudMailStatus>({configured:false}),[busy,setBusy]=useState(false),[error,setError]=useState('');
+export type SettingsTab='local'|'server'|'appearance'|'organization'|'users'|'releases';
+export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,onThemeSave,workspaces,activeWorkspaceId,workspace,initialTab='local'}:{onClose:()=>void;onRefresh:()=>Promise<void>;onCloudSessionChanged?:()=>Promise<void>;theme:ThemeMode;onThemeSave:(mode:ThemeMode)=>Promise<void>;workspaces:CloudWorkspace[];activeWorkspaceId?:string;workspace?:LocalWorkspace|null;initialTab?:SettingsTab}){
+ const [tab,setTab]=useState<SettingsTab>(initialTab),[expanded,setExpanded]=useState(true),[user,setUser]=useState<CloudAccount|null>(),[mail,setMail]=useState<CloudMailStatus>({configured:false}),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [sessionError,setSessionError]=useState('');
  const load=useCallback(async()=>{if(window.mydocDesktop&&!cloudServerUrl()){setSessionError('');setUser(null);setMail({configured:false});return;}setSessionError('');try{const result=await cloudJson<{user:CloudAccount|null;mail:CloudMailStatus}>('/session');setUser(result.user);setMail(result.mail??{configured:false});}catch(e){setSessionError(e instanceof Error?e.message:'服务器会话读取失败');}},[]);
  useEffect(()=>{if(window.mydocDesktop&&!cloudServerUrl()){setUser(null);setMail({configured:false});return;}let alive=true;void cloudJson<{user:CloudAccount|null;mail:CloudMailStatus}>('/session').then(result=>{if(alive){setUser(result.user);setMail(result.mail??{configured:false});}}).catch(e=>{if(alive)setSessionError(e instanceof Error?e.message:'服务器会话读取失败');});return()=>{alive=false;};},[]);
  const run=(work:()=>Promise<void>)=>{setBusy(true);setError('');void work().catch(e=>setError(e instanceof Error?e.message:'操作失败，请重试')).finally(()=>setBusy(false));};
- const select=(value:Tab)=>{if(!busy){setTab(value);setError('');}};
+ const select=(value:SettingsTab)=>{if(!busy){setTab(value);setError('');}};
  return <Modal title="设置" className="workspace-settings-dialog unified-settings" onClose={()=>{if(!busy)onClose();}}><div className="settings-layout">
   <nav className="settings-navigation" aria-label="设置导航">
    <p className="settings-nav-label">个人设置</p>
@@ -25,6 +27,7 @@ export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,on
    <div id="settings-account-options" hidden={!expanded} className="settings-nav-children"><button aria-current={tab==='local'?'page':undefined} disabled={busy} onClick={()=>select('local')}>本地账号</button><button aria-current={tab==='server'?'page':undefined} disabled={busy} onClick={()=>select('server')}>服务器账号</button></div>
    <button aria-current={tab==='appearance'?'page':undefined} disabled={busy} onClick={()=>select('appearance')}><Palette size={17}/><span>外观</span></button>
    <p className="settings-nav-label">管理</p>
+   <button aria-current={tab==='organization'?'page':undefined} disabled={busy||!workspace||workspace.readOnly} onClick={()=>select('organization')}><Tags size={17}/><span>标签与集合</span></button>
    <button aria-current={tab==='users'?'page':undefined} disabled={busy} onClick={()=>select('users')}><Users size={17}/><span>用户管理</span></button>
    <button aria-current={tab==='releases'?'page':undefined} disabled={busy} onClick={()=>select('releases')}><Package size={17}/><span>{window.mydocDesktop?'版本与更新':'版本维护'}</span></button>
    <p className="settings-nav-note">团队空间的成员与邀请，请在工作区菜单中管理。</p>
@@ -33,6 +36,7 @@ export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,on
    {error&&<p className="form-error" role="alert">{error}</p>}
    {tab==='local'&&<LocalAccountPanel/>}
    {tab==='appearance'&&<AppearancePanel mode={theme} save={onThemeSave}/>}
+   {tab==='organization'&&<section><h2>标签与集合</h2><p className="organization-help">维护当前工作区的标签和集合。文档筛选仍在侧栏中进行。</p>{!workspace?<p role="status">正在打开当前工作区…</p>:workspace.readOnly?<p role="status">当前工作区为只读，无法维护标签与集合。</p>:<OrganizationPanel key={workspace.id} workspace={workspace} onBusyChange={setBusy}/>}</section>}
    {tab==='server'&&<>
     <h2>服务器账号</h2><p className="organization-help">连接服务器，登录并管理账号资料。</p>
     <ServerConnections busy={busy} prepare={onRefresh} onServerChange={load}/>

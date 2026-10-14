@@ -7,7 +7,7 @@ export function Modal({ title, onClose, children, wide = false, className = '', 
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current!; const previous = document.activeElement as HTMLElement | null; dialog.showModal(); return () => { dialog.close(); if(restoreFocus?.()!==false)previous?.focus(); }; }, []);
   return <dialog ref={ref} className={`app-dialog${wide ? ' search-dialog' : ''}${className ? ` ${className}` : ''}`} aria-label={title} onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); onClose(); } }} onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) { const bounds = event.currentTarget.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
-    <div className="dialog-heading"><h2>{title}</h2><button type="button" aria-label="关闭弹窗" onClick={onClose}><X size={18} /></button></div>{children}
+    <div className="dialog-heading"><h2>{title}</h2><button type="button" aria-label="关闭弹窗" onClick={onClose}><X size={18} /></button></div><div className="dialog-body">{children}</div>
   </dialog>;
 }
 export function ResourceDialog({ title, initialName = '', nameLabel = '名称', children, action, onClose, destructive = false, confirm = false, hideName = false }: { title: string; initialName?: string; nameLabel?: string; children?: ReactNode; action: (name: string, form: FormData) => Promise<void>; onClose: () => void; destructive?: boolean; confirm?: boolean; hideName?: boolean }) {
