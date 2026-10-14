@@ -3,10 +3,12 @@ import {mkdtemp,rm,readFile,open} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {Y} from '@mydoc/crdt';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 let directory:string;
 async function launch(){return electron.launch({executablePath:process.env.MYDOC_TEST_ELECTRON_PATH,args:[resolve('packages/frontend/apps/desktop')],env:{...process.env,MYDOC_DESKTOP_DB_PATH:join(directory,'data','mydoc.sqlite'),MYDOC_DESKTOP_PROFILE:join(directory,'profile')},timeout:30000});}
 test.beforeEach(async()=>{directory=await mkdtemp(join(tmpdir(),'mydoc-electron-'));});
-test.afterEach(async()=>{await rm(directory,{recursive:true,force:true});});
+test.afterEach(async()=>{await rm(directory,{recursive:true,force:true,maxRetries:10,retryDelay:100});});
 test('真实桌面首次空库、沙箱与 IPC、编辑附件主题、关闭保存及重启恢复',async()=>{
  let app:ElectronApplication|undefined;
  try{app=await launch();expect(await app.evaluate(()=>process.arch)).toBe(process.env.MYDOC_TEST_ELECTRON_ARCH??process.arch);const page=await app.firstWindow();await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();const security=await app.evaluate(({BrowserWindow})=>(BrowserWindow.getAllWindows()[0].webContents as unknown as {getLastWebPreferences:()=>{contextIsolation:boolean;nodeIntegration:boolean;sandbox:boolean}}).getLastWebPreferences());expect(security.contextIsolation).toBe(true);expect(security.nodeIntegration).toBe(false);expect(security.sandbox).toBe(true);expect(await page.evaluate(()=>({bridge:!!window.mydocDesktop,node:typeof (window as unknown as {require?:unknown}).require}))).toEqual({bridge:true,node:'undefined'});
@@ -20,7 +22,26 @@ test('保存失败阻止退出，恢复后可正常关闭；macOS 关闭窗口�
 
 test('桌面 SQLite 待提交队列在真实进程重启后保留并按序确认清理',async()=>{
  let app:ElectronApplication|undefined;
- const stop=async()=>{if(!app)return;const process=app.process();app=undefined;await new Promise<void>(resolve=>{if(process.exitCode!==null){resolve();return;}process.once('close',()=>resolve());process.kill('SIGKILL');});};
+ const stop=async()=>{
+  if(!app)return;
+  const child=app.process();
+  // Windows kill() only terminates the main process. Chromium children can keep
+  // profile files and inherited stdio open, so kill the tree and wait for exit.
+  const exited=()=>child.exitCode!==null||child.signalCode!==null;
+  const exitResult=new Promise<Error|undefined>(resolve=>{
+   if(exited()){resolve(undefined);return;}
+   const finished=()=>{clearTimeout(timer);resolve(undefined);};
+   const timer=setTimeout(()=>{child.removeListener('exit',finished);resolve(new Error('Electron 进程未在 10 秒内退出'));},10000);
+   child.once('exit',finished);
+  });
+  if(!exited()){
+   if(process.platform==='win32')await promisify(execFile)('taskkill',['/PID',String(child.pid),'/T','/F'],{timeout:10000});
+   else child.kill('SIGKILL');
+  }
+  const error=await exitResult;
+  if(error)throw error;
+  app=undefined;
+ };
  const waitForDatabaseUnlock=async()=>{const path=join(directory,'data','mydoc.sqlite');const deadline=Date.now()+15000;for(;;){try{const handle=await open(path,'r+');await handle.close();return;}catch(error){if(Date.now()>=deadline)throw error;await new Promise(resolve=>setTimeout(resolve,100));}}};
  const doc=new Y.Doc();doc.getText('body').insert(0,'进程重启后仍待提交');
  const update=Buffer.from(Y.encodeStateAsUpdate(doc));doc.destroy();

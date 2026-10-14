@@ -75,3 +75,6 @@
  .release-toolbar { flex-wrap:wrap; }.release-columns { display:none; }.release-record-main { grid-template-columns:1fr auto; gap:8px; }.release-target { grid-column:1; grid-row:2; }.release-package { grid-column:1/-1; }.release-record-actions { grid-column:2; grid-row:1/3; }.release-version { flex-direction:row; align-items:center; }
  .client-version-header { flex-direction:column; gap:8px; }.client-version-header>small { margin-top:0; text-align:left; }.client-target { align-items:flex-start; flex-direction:column; gap:4px; }.client-server-input { flex-wrap:wrap; }.client-server-input input { flex:0 0 100%; }.client-server-input button { width:100%; }.client-check-actions { align-items:flex-start; flex-direction:column; gap:8px; }.client-check-actions>button { width:100%; }.client-release-check .release-badge { display:none; }.release-management a,.version-update-layout a { min-height:40px; }
 }
+.github-release-check { padding-bottom:24px; margin-bottom:24px; border-bottom:1px solid var(--line); }
+.github-release-check .client-check-actions { flex-wrap:wrap; }
+.github-installer-name { overflow-wrap:anywhere; }

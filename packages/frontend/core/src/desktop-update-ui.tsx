@@ -1,3 +1,4 @@
+import {GitHubReleaseCheck} from './github-release-check';
 import {useEffect,useState} from 'react';import type {DesktopUpdateState} from '../../../common/nbstore/src/updates';import {Modal} from './dialogs';import {ClientReleaseCheck} from './client-release-check';import {releaseTarget} from '../../../common/nbstore/src/releases';import {ChevronDown} from 'lucide-react';
 export function useDesktopUpdates(){
  const [state,setState]=useState<DesktopUpdateState>(),[open,setOpen]=useState(false);
@@ -8,7 +9,7 @@ export function useDesktopUpdates(){
 }
 function VersionSummary({state}:{state:DesktopUpdateState}){return <dl className="update-summary"><div><dt>当前版本</dt><dd>MyDoc {state.version}</dd></div><div><dt>更新渠道</dt><dd>{state.channel}</dd></div>{state.latestVersion&&<div><dt>可用版本</dt><dd>{state.latestVersion}</dd></div>}</dl>;}
 const labels:Record<DesktopUpdateState['phase'],string>={disabled:'更新渠道未配置',idle:'尚未检查更新',checking:'正在检查更新…','up-to-date':'当前已是最新版本',available:'发现新版本',downloading:'正在下载更新…',downloaded:'更新已下载，准备安装',preparing:'正在保存文档并生成保护备份…',installing:'正在安装更新，请稍候…',error:'更新未完成'};
-function UpdateStatus({state}:{state:DesktopUpdateState}){return <div className="update-status"><strong role="status">{labels[state.phase]}</strong>{state.phase==='disabled'&&<p>此渠道尚未配置，可使用上方的服务器检查下载更新。</p>}{state.message&&state.phase!=='disabled'&&<p role="alert" className="form-error">{state.message}</p>}{state.checkedAt&&<p>上次检查：{new Date(state.checkedAt).toLocaleString()}</p>}{state.phase==='downloading'&&<><progress max={100} value={state.percent??0} aria-label="更新下载进度"/><p>{Math.round(state.percent??0)}%{state.total?` · ${(state.transferred??0)/1024/1024<1?'<1':((state.transferred??0)/1024/1024).toFixed(1)} / ${(state.total/1024/1024).toFixed(1)} MB`:''}</p></>}</div>;}
+function UpdateStatus({state}:{state:DesktopUpdateState}){return <div className="update-status"><strong role="status">{labels[state.phase]}</strong>{state.phase==='disabled'&&<p>此渠道尚未配置，可使用上方的 GitHub 或服务器检查下载更新。</p>}{state.message&&state.phase!=='disabled'&&<p role="alert" className="form-error">{state.message}</p>}{state.checkedAt&&<p>上次检查：{new Date(state.checkedAt).toLocaleString()}</p>}{state.phase==='downloading'&&<><progress max={100} value={state.percent??0} aria-label="更新下载进度"/><p>{Math.round(state.percent??0)}%{state.total?` · ${(state.transferred??0)/1024/1024<1?'<1':((state.transferred??0)/1024/1024).toFixed(1)} / ${(state.total/1024/1024).toFixed(1)} MB`:''}</p></>}</div>;}
 export function DesktopUpdateDialog({state,onState,onClose}:{state?:DesktopUpdateState;onState:(state:DesktopUpdateState)=>void;onClose:()=>void}){
  const [requesting,setRequesting]=useState(false),[error,setError]=useState('');const busy=requesting||!!state&&['checking','downloading','preparing','installing'].includes(state.phase),locking=state?.phase==='preparing'||state?.phase==='installing';
  const readStatus=async()=>{setRequesting(true);setError('');try{onState(await window.mydocDesktop!.updateStatus());}catch{setError('无法读取版本信息，请重试。');}finally{setRequesting(false);}};
@@ -19,6 +20,7 @@ export function DesktopUpdateDialog({state,onState,onClose}:{state?:DesktopUpdat
    <header className="client-version-header"><div><span>当前安装版本</span><strong>{state?'MyDoc '+state.version:'正在读取…'}</strong></div><small>{window.mydocDesktop?.arch?releaseTarget(window.mydocDesktop.platform,window.mydocDesktop.arch):'读取设备信息…'}</small></header>
    {error&&<p role="alert" className="release-feedback error">{error}</p>}
    {!state&&error&&<button className="release-secondary" disabled={requesting} onClick={()=>void readStatus()}>重试读取</button>}
+   <GitHubReleaseCheck current={state?.version} locked={busy}/>
    <ClientReleaseCheck current={state?.version} locked={busy}/>
    {state&&<details className="automatic-update-section" open={state.enabled?true:undefined}>
     <summary><span>自动更新渠道</span><small>{state.enabled?state.channel:'尚未启用'}</small><ChevronDown size={14}/></summary>

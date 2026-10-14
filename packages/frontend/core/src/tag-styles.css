@@ -1,0 +1,24 @@
+[data-tag-color] { --tag-bg: var(--subtle); --tag-fg: var(--muted); --tag-border: var(--line); }
+[data-tag-color="red"] { --tag-bg: #fce8e8; --tag-fg: #a32c32; --tag-border: #efbfc2; }
+[data-tag-color="orange"] { --tag-bg: #fff0e1; --tag-fg: #98501b; --tag-border: #eed0ad; }
+[data-tag-color="yellow"] { --tag-bg: #fff7cf; --tag-fg: #806219; --tag-border: #e8d894; }
+[data-tag-color="green"] { --tag-bg: #e6f4eb; --tag-fg: #27643f; --tag-border: #badcc7; }
+[data-tag-color="blue"] { --tag-bg: #e8f0ff; --tag-fg: #2d55a0; --tag-border: #c2d2f0; }
+[data-tag-color="purple"] { --tag-bg: #f1eafa; --tag-fg: #71409b; --tag-border: #d9c6ed; }
+[data-tag-color="pink"] { --tag-bg: #fbe9f1; --tag-fg: #a03c70; --tag-border: #edc3d7; }
+:root[data-theme="dark"] [data-tag-color="red"] { --tag-bg: #422b30; --tag-fg: #ffa6ae; --tag-border: #74434c; }
+:root[data-theme="dark"] [data-tag-color="orange"] { --tag-bg: #403025; --tag-fg: #f3b381; --tag-border: #725039; }
+:root[data-theme="dark"] [data-tag-color="yellow"] { --tag-bg: #3b3524; --tag-fg: #e6ca74; --tag-border: #6c6037; }
+:root[data-theme="dark"] [data-tag-color="green"] { --tag-bg: #253b31; --tag-fg: #94d5ad; --tag-border: #41694f; }
+:root[data-theme="dark"] [data-tag-color="blue"] { --tag-bg: #29364c; --tag-fg: #a7c5ff; --tag-border: #475f86; }
+:root[data-theme="dark"] [data-tag-color="purple"] { --tag-bg: #382d47; --tag-fg: #d3aff4; --tag-border: #65517d; }
+:root[data-theme="dark"] [data-tag-color="pink"] { --tag-bg: #422b3a; --tag-fg: #f4a9d0; --tag-border: #754763; }
+.tag-badge { display: inline-block; max-width: 100%; padding: 3px 7px; border: 1px solid var(--tag-border); border-radius: 4px; background: var(--tag-bg); color: var(--tag-fg); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.tag-color-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; width: 100%; }
+.tag-color-label { color: var(--muted); font-size: 12px; }
+.tag-color-picker .tag-color-swatch { flex: 0 0 32px; width: 32px; min-height: 32px; padding: 0; background: var(--tag-bg); color: var(--tag-fg); border: 1px solid var(--tag-border); }
+.tag-color-picker .tag-color-swatch:hover { border-color: var(--tag-fg); }
+.tag-color-picker .tag-color-swatch[aria-pressed="true"] { border-color: var(--tag-fg); box-shadow: inset 0 0 0 1px var(--tag-fg); }
+.tag-color-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+.organization-create { flex-wrap: wrap; }
+.organization-create .tag-color-picker { order: 1; }

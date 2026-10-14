@@ -79,3 +79,4 @@ data/releases/
 !/tests/e2e/cloud-discovery.spec.ts
 
 !/tests/e2e/folder-actions.spec.ts
+!/tests/tag-colors.test.ts

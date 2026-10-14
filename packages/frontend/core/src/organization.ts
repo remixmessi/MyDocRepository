@@ -1,14 +1,24 @@
 import { Y, LOCAL_ORIGIN } from '@mydoc/crdt';
 import type { DocumentMeta } from './workspace';
-export interface TagMeta { id: string; name: string; createdAt: number }
+export const TAG_COLORS = [
+  { id: 'default', label: '默认' }, { id: 'red', label: '红色' },
+  { id: 'orange', label: '橙色' }, { id: 'yellow', label: '黄色' },
+  { id: 'green', label: '绿色' }, { id: 'blue', label: '蓝色' },
+  { id: 'purple', label: '紫色' }, { id: 'pink', label: '粉色' },
+] as const;
+export type TagColor = typeof TAG_COLORS[number]['id'];
+export const validTagColor = (value: unknown): value is TagColor => TAG_COLORS.some(color => color.id === value);
+interface NamedMeta { id: string; name: string; createdAt: number }
+export interface TagMeta extends NamedMeta { color?: TagColor }
 export interface CollectionRules { tagIds: string[]; tagMatch: 'all' | 'any'; keyword: string; favorite: 'any' | 'yes' | 'no'; paused?: boolean }
 export interface CollectionMeta { id: string; name: string; createdAt: number; mode: 'manual' | 'rules'; documentIds: string[]; rules: CollectionRules }
 export const emptyRules = (): CollectionRules => ({ tagIds: [], tagMatch: 'all', keyword: '', favorite: 'any' });
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 export const uniqueIds = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 10000 && value.every(id => typeof id === 'string' && !!id) && new Set(value).size === value.length;
-export function validTag(value: unknown): value is TagMeta { return record(value) && typeof value.id === 'string' && !!value.id && typeof value.name === 'string' && !!value.name.trim() && value.name.length <= 160 && typeof value.createdAt === 'number' && Number.isFinite(value.createdAt); }
+function validNamedMeta(value: unknown): value is NamedMeta { return record(value) && typeof value.id === 'string' && !!value.id && typeof value.name === 'string' && !!value.name.trim() && value.name.length <= 160 && typeof value.createdAt === 'number' && Number.isFinite(value.createdAt); }
+export function validTag(value: unknown): value is TagMeta { return validNamedMeta(value) && record(value) && (value.color === undefined || validTagColor(value.color)); }
 export function validCollection(value: unknown): value is CollectionMeta {
-  return validTag(value) && record(value) && ['manual', 'rules'].includes(String(value.mode)) && uniqueIds(value.documentIds) && record(value.rules) && uniqueIds(value.rules.tagIds) && ['all', 'any'].includes(String(value.rules.tagMatch)) && typeof value.rules.keyword === 'string' && value.rules.keyword.length <= 160 && ['any', 'yes', 'no'].includes(String(value.rules.favorite)) && (value.rules.paused === undefined || typeof value.rules.paused === 'boolean');
+  return validNamedMeta(value) && record(value) && ['manual', 'rules'].includes(String(value.mode)) && uniqueIds(value.documentIds) && record(value.rules) && uniqueIds(value.rules.tagIds) && ['all', 'any'].includes(String(value.rules.tagMatch)) && typeof value.rules.keyword === 'string' && value.rules.keyword.length <= 160 && ['any', 'yes', 'no'].includes(String(value.rules.favorite)) && (value.rules.paused === undefined || typeof value.rules.paused === 'boolean');
 }
 function nameFor(name: string, items: TagMeta[], id?: string) {
   const clean = name.trim(); if (!clean || clean.length > 160) throw new Error('名称需为 1–160 个字符');
@@ -19,9 +29,11 @@ export class DocumentOrganization {
   constructor(private doc: Y.Doc, private documents: Y.Map<DocumentMeta>, private text: (id: string) => string,private assertWritable:()=>void=()=>{}) { this.tags = doc.getMap('tags'); this.collections = doc.getMap('collections'); }
   tagList() { return [...this.tags.values()].sort((a,b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id)); }
   collectionList() { return [...this.collections.values()].sort((a,b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); }
-  saveTag(name: string, id?: string) { this.assertWritable();
+  saveTag(name: string, id?: string, color?: TagColor) { this.assertWritable();
     if (id && !this.tags.has(id)) throw new Error('标签已删除'); const clean = nameFor(name, this.tagList(), id); const key = id ?? crypto.randomUUID();
-    this.doc.transact(() => this.tags.set(key, { id: key, name: clean, createdAt: this.tags.get(key)?.createdAt ?? Date.now() }), LOCAL_ORIGIN); return key;
+    const selectedColor = color === undefined ? this.tags.get(key)?.color : color;
+    if (selectedColor !== undefined && !validTagColor(selectedColor)) throw new Error('标签颜色无效');
+    this.doc.transact(() => this.tags.set(key, { id: key, name: clean, createdAt: this.tags.get(key)?.createdAt ?? Date.now(), ...(selectedColor !== undefined ? { color: selectedColor } : {}) }), LOCAL_ORIGIN); return key;
   }
   deleteTag(id: string) { this.assertWritable();
     this.doc.transact(() => { this.tags.delete(id); for (const meta of this.documents.values()) if (meta.tagIds?.includes(id)) this.documents.set(meta.id, { ...meta, tagIds: meta.tagIds.filter(tag => tag !== id) });
