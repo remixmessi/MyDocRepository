@@ -9,7 +9,7 @@ async function fixture(page:Page,desktop:boolean,unavailable=false,admin=true){
  await page.route('**/api/hosting',route=>route.fulfill({json:{hosted:false}}));
  await page.route('**/api/storage/**',async route=>{
   const request=route.request(),url=new URL(request.url()),path=url.pathname.slice('/api/storage'.length);
-  if(path==='/status')return route.fulfill({json:{initialized:true,schemaVersion:SCHEMA_VERSION,generation:'test',preferences:{'cloud-server-url':'https://team.example'}}});
+  if(path==='/status')return route.fulfill({json:{initialized:true,schemaVersion:SCHEMA_VERSION,generation:'test',preferences:{'cloud-server-url':'https://team.example','cloud-servers':JSON.stringify([{url:'https://team.example',name:'team.example'}])}}});
   if(path==='/document'){
    const id=url.searchParams.get('id')!;
    if(request.method()==='POST'){

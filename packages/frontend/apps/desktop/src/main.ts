@@ -9,7 +9,7 @@ import {SQLiteProjectDatabase} from '../../../../common/nbstore/server/database'
 import {connectDesktopDatabase} from './sqlite-driver';
 import {startDesktopServer} from './server';
 import {electronCloudRequest} from './cloud-transport';
-import {desktopDatabasePath,safeExternalUrl,validStorageRequest} from './policy';
+import {desktopDatabasePath,migrateLegacyDesktopDatabase,safeExternalUrl,validStorageRequest} from './policy';
 import type {DesktopStorageReply} from '../../../../common/nbstore/src/desktop';
 app.setName('MyDoc');
 const profile=!app.isPackaged&&process.env.MYDOC_DESKTOP_PROFILE?resolve(process.env.MYDOC_DESKTOP_PROFILE):join(app.getPath('appData'),app.isPackaged?'MyDoc':'MyDoc Development');
@@ -95,7 +95,7 @@ if(!app.requestSingleInstanceLock())app.quit();else{
   // Packaged applications register the protocol; development leaves installed ownership intact.
   if(app.isPackaged)app.setAsDefaultProtocolClient('mydoc');
   if(process.platform==='darwin')app.dock?.setIcon(appIcon);
-  while(!database){try{const path=!app.isPackaged&&process.env.MYDOC_DESKTOP_DB_PATH?resolve(process.env.MYDOC_DESKTOP_DB_PATH):desktopDatabasePath(app.isPackaged,resolve(__dirname,'../../../../..'),dirname(app.getPath('exe')));database=new SQLiteProjectDatabase(path,connectDesktopDatabase);}catch(error){const result=await dialog.showMessageBox({type:'error',title:'数据库打开失败',message:'无法打开本地数据库',detail:error instanceof Error?error.message:String(error),buttons:['重试','退出'],defaultId:0,cancelId:1});if(result.response===1){allowingQuit=true;app.quit();return;}}}
+  while(!database){try{const path=!app.isPackaged&&process.env.MYDOC_DESKTOP_DB_PATH?resolve(process.env.MYDOC_DESKTOP_DB_PATH):desktopDatabasePath(app.isPackaged,resolve(__dirname,'../../../../..'),app.getPath('userData'));if(app.isPackaged)migrateLegacyDesktopDatabase(dirname(app.getPath('exe')),app.getPath('userData'));database=new SQLiteProjectDatabase(path,connectDesktopDatabase);}catch(error){const result=await dialog.showMessageBox({type:'error',title:'数据库打开失败',message:'无法打开本地数据库',detail:error instanceof Error?error.message:String(error),buttons:['重试','退出'],defaultId:0,cancelId:1});if(result.response===1){allowingQuit=true;app.quit();return;}}}
   try{server=await startDesktopServer(join(__dirname,'renderer'),database,electronCloudRequest);updater=createDesktopUpdates({
    notify:state=>{if(state.phase==='installing'){allowingQuit=true;if(database){database.restoring=true;updateOwnsDatabaseLock=true;}}window?.webContents.send('mydoc:update-state',state);},
    release:()=>{if(!updateOwnsClose)return;updateOwnsClose=false;allowingQuit=false;closing=false;if(updateOwnsDatabaseLock&&database)database.restoring=false;updateOwnsDatabaseLock=false;window?.webContents.send('mydoc:update-unlock');},

@@ -8,7 +8,7 @@ import { LocalWorkspace } from './workspace';
 import { decodeBinary, type WorkspaceBackup } from './backup';
 export interface WorkspaceMeta { id: string; name: string; createdAt: number; cloud?:boolean; userId?:string;role?:CloudWorkspace['role'] }
 export class WorkspaceRegistry {
-  private readonly server=cloudServerUrl()||globalThis.location?.origin||'http://localhost';
+  private server=cloudServerUrl()||globalThis.location?.origin||'http://localhost';
   private doc = new Y.Doc(); readonly entries = this.doc.getMap<WorkspaceMeta>('workspaces'); private preferences = this.doc.getMap<string>('preferences');
   readonly persistence: PersistentDocument; private opened = new Map<string, Promise<LocalWorkspace>>();
   constructor(private storage: DocumentStorage, private assets: AssetStorage = new IndexedDBAssetStorage()) { this.persistence = new PersistentDocument('registry:local', this.doc, storage); }
@@ -28,6 +28,32 @@ export class WorkspaceRegistry {
   async get(id: string) { if (!this.entries.has(id)) throw new Error('工作区不存在'); let promise = this.opened.get(id); if (!promise) { const ws = new LocalWorkspace(this.entries.get(id)!.cloud?new CloudStorage(id,this.entries.get(id)!.role):this.storage, id, !!this.entries.get(id)!.cloud, this.entries.get(id)!.cloud?new CloudAssets(id):this.assets,this.entries.get(id)!.userId,this.storage); promise = ws.open().then(() => ws).catch(async error => { await ws.destroy(); this.opened.delete(id); throw error; }); this.opened.set(id, promise); } return promise; }
   async select(id: string) { const next = await this.get(id); this.doc.transact(() => this.preferences.set('active', id), LOCAL_ORIGIN); await this.persistence.flush(); return next; }
   async create(name: string) { if (!name.trim()) throw new Error('请输入工作区名称'); const id = crypto.randomUUID(); this.doc.transact(() => this.entries.set(id, { id, name: name.trim(), createdAt: Date.now() }), LOCAL_ORIGIN); try { await this.persistence.flush(); } catch (error) { this.doc.transact(() => this.entries.delete(id), LOCAL_ORIGIN); throw error; } return this.select(id); }
+  /**
+   * Rebind the registry to the currently configured cloud server without
+   * reloading the application. Cloud workspaces are cached per server so a
+   * server switch never replaces one server's directory with another's.
+   */
+  async switchServer(server=cloudServerUrl()||globalThis.location?.origin||'http://localhost') {
+    const next=server.trim().replace(/\/+$/,'')||'http://localhost';
+    if(next===this.server)return;
+    const previous=this.server;
+    const clouds=this.list().filter(entry=>entry.cloud);
+    if(clouds.length)this.preferences.set('cloud-spaces:'+previous,JSON.stringify(clouds));
+    for(const [id,promise] of this.opened){
+      if(this.entries.get(id)?.cloud){try{await (await promise).destroy();}finally{this.opened.delete(id);}}
+    }
+    let restored:WorkspaceMeta[]=[];
+    try{restored=JSON.parse(this.preferences.get('cloud-spaces:'+next)??'[]');}catch{}
+    this.server=next;
+    this.doc.transact(()=>{
+      for(const entry of clouds)this.entries.delete(entry.id);
+      for(const entry of restored)if(entry.cloud)this.entries.set(entry.id,entry);
+      this.preferences.set('cloud-registry-server',next);
+      const active=this.preferences.get('active');
+      if(!active||!this.entries.has(active)||this.entries.get(active)?.cloud)this.preferences.set('active',this.list().find(entry=>!entry.cloud)?.id??'local');
+    },LOCAL_ORIGIN);
+    await this.persistence.flush();
+  }
   async refreshCloud(){const {user}=await cloudJson<{user:CloudAccount|null}>('/session');if(!user){this.doc.transact(()=>{for(const entry of this.list())if(entry.cloud)this.entries.delete(entry.id);},LOCAL_ORIGIN);await this.persistence.flush();return;}const spaces=await cloudJson<CloudWorkspace[]>('/workspaces');for(const [id,promise]of this.opened)if(this.entries.get(id)?.cloud&&!spaces.some(space=>space.id===id)){const ws=await promise;if(ws.sync?.status==='blocked'||ws.persistence.state==='error')throw new Error('工作空间权限已失效，请先在当前页面导出草稿。');}this.doc.transact(()=>{for(const entry of this.list())if(entry.cloud&&!spaces.some(s=>s.id===entry.id))this.entries.delete(entry.id);for(const space of spaces)this.entries.set(space.id,{id:space.id,name:space.name,createdAt:space.createdAt,cloud:true,userId:user.id,role:space.role});this.preferences.set('cloud-spaces:'+this.server,JSON.stringify(this.list().filter(entry=>entry.cloud)));},LOCAL_ORIGIN);await this.persistence.flush();for(const[id,promise]of this.opened)if(!this.entries.has(id)){await (await promise).destroy();this.opened.delete(id);}}
   async rename(id: string, name: string) { const entry = this.entries.get(id); if(entry?.cloud)throw new Error('请在团队工作空间设置中修改名称'); if (!entry || !name.trim()) throw new Error('请输入工作区名称'); this.doc.transact(() => this.entries.set(id, { ...entry, name: name.trim() }), LOCAL_ORIGIN); await this.persistence.flush(); }
   async delete(id: string) {
@@ -44,7 +70,7 @@ export class WorkspaceRegistry {
       const collectionIds = new Map((backup.collections??[]).map(c=>[c.id,crypto.randomUUID()]));
       const entries=[...backup.documents,...(backup.trash??[])];const backupAssets=new Map((backup.assets??[]).map(asset=>[asset.id,asset]));
       const docIds = new Map<string,string>();
-      const restoreEntry=async(entry:typeof backup.documents[number],recycled?:{deletedAt:number;collectionIds:string[]})=>{const target=crypto.randomUUID(),store=templateStore({id:entry.meta.id,name:entry.meta.title,createdAt:entry.meta.createdAt,sourceDocId:entry.meta.id,sourceWorkspaceId:backup.workspaceId??'local',update:entry.update});try{const remap=new Map<string,string>();for(const assetId of snapshotAssets(store)){const asset=backupAssets.get(assetId);if(!asset)throw new Error('备份附件缺失');const next=crypto.randomUUID();await ws.documentAssets(target).put({...asset,id:next,bytes:asset.data?decodeBinary(asset.data):new Uint8Array()});remap.set(assetId,next);}if(remap.size)remapAssets(store,remap);const result=await ws.createSnapshot(entry.meta.title,entry.meta.createdAt,entry.meta.folderId?folderIds.get(entry.meta.folderId)!:null,Y.encodeStateAsUpdate(store.doc),recycled,undefined,target);return result;}finally{disposeTemplate(store);}};
+      const restoreEntry=async(entry:typeof backup.documents[number],recycled?:{deletedAt:number;collectionIds:string[]})=>{const target=crypto.randomUUID(),store=templateStore({id:entry.meta.id,name:entry.meta.title,createdAt:entry.meta.createdAt,sourceDocId:entry.meta.id,sourceWorkspaceId:backup.workspaceId??'local',update:entry.update});try{for(const assetId of snapshotAssets(store)){const asset=backupAssets.get(assetId);if(!asset)throw new Error('备份附件缺失');await ws.documentAssets(target).put({...asset,id:assetId,bytes:asset.data?decodeBinary(asset.data):new Uint8Array()});}const result=await ws.createSnapshot(entry.meta.title,entry.meta.createdAt,entry.meta.folderId?folderIds.get(entry.meta.folderId)!:null,Y.encodeStateAsUpdate(store.doc),recycled,undefined,target);return result;}finally{disposeTemplate(store);}};
       for(const entry of backup.documents)docIds.set(entry.meta.id,await restoreEntry(entry));
       for(const entry of backup.trash??[])docIds.set(entry.meta.id,await restoreEntry(entry,{deletedAt:entry.deletedAt,collectionIds:entry.collectionIds.map(key=>collectionIds.get(key)!)}));
       const tagIds = new Map((backup.tags ?? []).map(tag => [tag.id, crypto.randomUUID()]));

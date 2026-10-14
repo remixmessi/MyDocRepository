@@ -92,8 +92,8 @@ h1 { font-size: 24px; margin: 24px 0 8px; }
 .document-editor .ProseMirror pre[data-params]::before { content: attr(data-params); display: block; color: var(--muted); font-size: 11px; margin-bottom: 10px; }
 .document-editor .ProseMirror img { max-width: 100%; height: auto; }
 .document-editor .ProseMirror hr { margin: 24px 0; border: 0; border-top: 1px solid var(--line-strong); }
-.document-editor .ProseMirror table { border-collapse: collapse; width: 100%; table-layout: fixed; margin: 18px 0; }
-.document-editor .ProseMirror td, .document-editor .ProseMirror th { border: 1px solid var(--line); padding: 8px 12px; min-width: 40px; position: relative; vertical-align: top; }
+.document-editor .ProseMirror table { border-collapse: collapse; display: block; width: max-content; min-width: 100%; max-width: 100%; overflow-x: auto; table-layout: auto; margin: 18px 0; }
+.document-editor .ProseMirror td, .document-editor .ProseMirror th { border: 1px solid var(--line); padding: 8px 12px; min-width: 8em; position: relative; vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
 .document-editor .ProseMirror th { background: var(--subtle); font-weight: 600; }
 .document-editor .ProseMirror td p, .document-editor .ProseMirror th p { margin: 0; }
 .document-editor .ProseMirror .selectedCell::after { content: ''; position: absolute; inset: 0; background: var(--selection); pointer-events: none; }

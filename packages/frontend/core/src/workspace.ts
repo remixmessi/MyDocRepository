@@ -60,14 +60,14 @@ export class LocalWorkspace {
   draft(){return {format:'mydoc-workspace-draft',version:1,workspaceId:this.id,createdAt:Date.now(),workspace:Array.from(Y.encodeStateAsUpdate(this.doc)),documents:[...this.opened].map(([id])=>id)};}
   get pendingDraft(){return [...this.openedItems.values()].some(item=>item.persistence.state==='saving'||item.persistence.state==='error')||this.persistence.state==='saving'||this.persistence.state==='error'||this.sync?.status==='offline'||this.sync?.status==='blocked';}
   async exportDraft(){const documents=[];for(const [id,promise]of this.opened){let item:OpenDocument;try{item=await promise;}catch{continue;}documents.push({id,title:item.store.meta.get('title'),markdown:markdownSerializer.serialize(readDocument(item.store)),update:Array.from(Y.encodeStateAsUpdate(item.store.doc))});}return {...this.draft(),documents};}
-  readonly embedSource: EmbedSource = { load: async (id, workspaceId) => { if (workspaceId !== this.id || !this.isDocumentVisible(id)) return null; const item = await this.openDocument(id); if (!this.isDocumentVisible(id)) return null; return { title: this.documents.get(id)!.title, document: readDocument(item.store), surface:[...item.store.doc.getMap('surface').values()].filter(validSurfaceElement), assets: this.documentAssets(id) }; }, subscribe: callback => this.subscribe(callback) };
+  readonly embedSource: EmbedSource = { load: async (id, workspaceId) => { if (workspaceId !== this.id || !this.isDocumentVisible(id)) return null; const item = await this.openDocument(id); if (!this.isDocumentVisible(id)) return null; return { title: item.store.meta.get('title') ?? '', document: readDocument(item.store), surface:[...item.store.doc.getMap('surface').values()].filter(validSurfaceElement), assets: this.documentAssets(id) }; }, subscribe: callback => this.subscribe(callback) };
   private notify = () => this.listeners.forEach(listener => listener());
   async open() {
     await this.persistence.open();if(this.sync){try{this.hiddenDocuments=new Set(this.documents.keys());const visible=await this.sync.visibleDocuments([...this.documents.keys()]);this.hiddenDocuments=new Set([...this.documents.keys()].filter(id=>!visible.has('doc:'+id)));}catch{this.hiddenDocuments.clear();}}this.sync?.subscribe(this.notify);await this.personalPersistence?.open(); this.indexing = true;
     this.indexReady = Promise.allSettled(this.list().map(async meta => this.indexDocument(meta.id, await this.openDocument(meta.id).catch(error => { this.indexErrors.add(meta.id); throw error; })))).then(() => { this.indexing = false; this.notify(); });
   }
   subscribe = (callback: () => void) => { this.listeners.add(callback); return () => { this.listeners.delete(callback); }; };
-  isDocumentVisible(id:string){return !this.hiddenDocuments.has(id);}
+  isDocumentVisible(id:string){return this.documents.has(id) && !this.hiddenDocuments.has(id);}
   list() { return [...this.documents.values()].filter(meta=>this.isDocumentVisible(meta.id)).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); }
   trashList() { return [...this.trash.values()].sort((a,b)=>b.deletedAt-a.deletedAt || a.meta.id.localeCompare(b.meta.id)); }
   allDocuments() { return [...this.list(), ...this.trashList().map(entry=>entry.meta)]; }
@@ -103,7 +103,7 @@ export class LocalWorkspace {
     await this.persistence.flush(); item.store.history.clear(); this.indexDocument(id, item); return id; } catch (error) { await this.discardUnpublished(id); throw error; }
   }
   async createSnapshot(title: string, createdAt: number, folderId: string | null, update: Uint8Array, recycled?: { deletedAt: number; collectionIds: string[] }, transform?: (store: BlockStore, id: string) => void, forcedId?: string) { this.assertWritable();
-    const id = forcedId ?? crypto.randomUUID(); try { await this.storage.append(`doc:${id}`, update); const item = await this.openDocument(id);
+    const id = forcedId ?? crypto.randomUUID(); try { await this.storage.append(`doc:${id}`, update); const item = await this.openDocument(id, { allowUnlisted: true });
     readDocument(item.store); transform?.(item.store,id); item.store.rename(title); await item.persistence.flush();
     this.doc.transact(() => { const meta={ id, title, createdAt, folderId }; if(recycled)this.trash.set(id,{meta,...recycled});else this.documents.set(id,meta); }, LOCAL_ORIGIN); await this.persistence.flush(); item.store.history.clear(); this.indexDocument(id, item); return id; } catch (error) { await this.discardUnpublished(id); throw error; }
   }
@@ -112,8 +112,8 @@ export class LocalWorkspace {
     const opened = this.opened.get(id); if (opened) { try { const item = await opened; item.store.destroy(); await item.persistence.destroy(); } catch { /* failed opens dispose themselves */ } this.opened.delete(id);this.openedItems.delete(id); }
     await this.storage.remove(`doc:${id}`).catch(() => {});
   }
-  openDocument(id: string, options: { create?: boolean } = {}): Promise<OpenDocument> {
-    if(!options.create&&!this.isDocumentVisible(id))return Promise.reject(new Error('文档不存在或无权访问'));
+  openDocument(id: string, options: { create?: boolean; allowUnlisted?: boolean } = {}): Promise<OpenDocument> {
+    if(!options.create&&!options.allowUnlisted&&!this.isDocumentVisible(id)&&!this.trash.has(id))return Promise.reject(new Error('文档不存在或无权访问'));
     let promise = this.opened.get(id);
     if (!promise) {
       promise = (async () => {

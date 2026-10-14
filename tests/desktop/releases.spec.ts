@@ -33,7 +33,7 @@ test('服务器检查使用真实运行架构，保存地址并拒绝不匹配�
   expect(requests[0].pathname).toBe('/api/cloud/releases/latest');
   expect(requests[0].searchParams.get('arch')).toBe(runtime.arch);expect(requests[0].searchParams.get('platform')).toBe(runtime.platform);
   await expect(dialog.locator('.client-release-result h4')).toHaveText(runtime.arch==='arm64'?'0.2.0':'0.3.0');
-  await expect(dialog.getByRole('link',{name:'下载安装包'})).toHaveAttribute('href',`http://${host}/api/cloud/releases/download?id=12345678-1234-1234-1234-123456789abc`);
+  await expect(dialog.getByRole('link',{name:'下载安装包'})).toHaveAttribute('href',`/api/cloud-proxy/${encodeURIComponent(`http://${host}`)}/api/cloud/releases/download?id=12345678-1234-1234-1234-123456789abc`);
   await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/client-release-check.png'});
   await dialog.getByRole('button',{name:'关闭',exact:true}).click();
   await page.getByRole('button',{name:'版本与更新',exact:true}).click();await expect(dialog.getByRole('textbox',{name:'更新服务器地址'})).toHaveValue('http://'+host);

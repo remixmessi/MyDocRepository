@@ -1,7 +1,177 @@
-import {test,expect} from '@playwright/test';
-test('独立 Web 服务：两个账户、邀请加入、正文实时协作和独立工作台',async({browser})=>{const first=await browser.newContext(),second=await browser.newContext(),a=await first.newPage(),b=await second.newPage();const suffix=Date.now();try{for(const[page,name]of [[a,'甲'],[b,'乙']] as const){await page.goto('http://127.0.0.1:4180');await page.getByRole('button',{name:'创建账户',exact:true}).click();await page.getByLabel('显示名称',{exact:true}).fill(name);await page.getByLabel('邮箱',{exact:true}).fill((name==='甲'?'a':'b')+suffix+'@example.com');await page.getByLabel('密码',{exact:true}).fill('test-password-12345');await page.getByRole('button',{name:'注册并登录'}).click();await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();}
-await a.getByRole('button',{name:'新建文档',exact:true}).first().click();await a.getByLabel('文档标题',{exact:true}).fill('甲的私人文档');const privateId=new URLSearchParams(new URL(a.url()).hash.slice(1)).get('doc')!,account=(await(await b.request.get('http://127.0.0.1:4180/api/cloud/session')).json()).user;expect((await b.request.get('http://127.0.0.1:4180/api/storage/document?id=doc:'+privateId,{headers:{'X-Mydoc-Account':account.id}})).status()).toBe(204);expect((await b.request.get('http://127.0.0.1:4180/api/storage/document?id=doc:'+privateId,{headers:{'X-Mydoc-Account':'wrong-account'}})).status()).toBe(409);async function dialog(page:typeof a){await page.getByLabel('工作区选项',{exact:true}).click();await page.getByRole('button',{name:'团队工作空间',exact:true}).click();return page.getByRole('dialog',{name:'团队工作空间'});}
-let manager=await dialog(a);await manager.getByLabel('新工作空间名称').fill('多人协作测试');await manager.getByRole('button',{name:'创建团队工作空间'}).click();await manager.getByRole('button',{name:'设置与成员'}).click();await manager.getByLabel('邀请成员邮箱').fill('b'+suffix+'@example.com');await manager.getByRole('button',{name:'生成邀请口令'}).click();const token=await manager.getByLabel('邀请口令（7 天有效，仅指定邮箱可接受）').inputValue();await manager.getByRole('button',{name:'返回工作空间列表'}).click();await manager.getByRole('button',{name:'打开',exact:true}).click();await a.getByRole('button',{name:'新建文档',exact:true}).first().click();await a.getByLabel('文档标题',{exact:true}).fill('共享文档');await a.getByRole('textbox',{name:'文档正文'}).fill('共同编辑的起点');await expect(a.getByRole('status').filter({hasText:'正在保存'})).toHaveCount(0);
-manager=await dialog(b);await manager.getByLabel('邀请口令',{exact:true}).fill(token);await manager.getByRole('button',{name:'接受邀请'}).click();await manager.getByRole('button',{name:'打开',exact:true}).click();await b.getByRole('button',{name:'共享文档',exact:true}).first().click();await expect(b.getByRole('textbox',{name:'文档正文'})).toContainText('共同编辑的起点');await b.getByRole('textbox',{name:'文档正文'}).press('ControlOrMeta+End');await b.getByRole('textbox',{name:'文档正文'}).press('Enter');await b.getByRole('textbox',{name:'文档正文'}).pressSequentially('乙添加的内容');await expect(a.getByRole('textbox',{name:'文档正文'})).toContainText('乙添加的内容');await a.getByRole('textbox',{name:'文档正文'}).press('ControlOrMeta+End');await a.getByRole('textbox',{name:'文档正文'}).press('Enter');await a.getByRole('textbox',{name:'文档正文'}).pressSequentially('甲继续编辑');await expect(b.getByRole('textbox',{name:'文档正文'})).toContainText('甲继续编辑');await b.bringToFront();await b.getByRole('textbox',{name:'文档正文'}).click();await expect(a.locator('.ProseMirror-yjs-cursor')).toHaveCount(1);await Promise.all([a.getByRole('textbox',{name:'文档正文'}).press('ControlOrMeta+End').then(()=>a.keyboard.insertText(' 甲并发')),b.getByRole('textbox',{name:'文档正文'}).press('ControlOrMeta+End').then(()=>b.keyboard.insertText(' 乙并发'))]);for(const page of [a,b]){await expect(page.getByRole('textbox',{name:'文档正文'})).toContainText('甲并发');await expect(page.getByRole('textbox',{name:'文档正文'})).toContainText('乙并发');}await a.getByLabel('添加本地附件').setInputFiles({name:'共享附件.txt',mimeType:'text/plain',buffer:Buffer.from('共享字节')});await expect(b.getByRole('button',{name:'下载 共享附件.txt'})).toBeVisible();const downloading=b.waitForEvent('download');await b.getByRole('button',{name:'下载 共享附件.txt'}).click();const download=await downloading,stream=await download.createReadStream(),chunks:Buffer[]=[];for await(const chunk of stream!)chunks.push(Buffer.from(chunk));expect(Buffer.concat(chunks).toString()).toBe('共享字节');await a.screenshot({path:'artifacts/cloud-collaboration.png'});await b.reload();await expect(b.getByRole('textbox',{name:'文档正文'})).toContainText('甲继续编辑');await b.bringToFront();await b.getByRole('textbox',{name:'文档正文'}).click();await second.setOffline(true);await b.getByRole('textbox',{name:'文档正文'}).press('ControlOrMeta+End');await b.getByRole('textbox',{name:'文档正文'}).press('Enter');await b.keyboard.insertText('乙离线草稿');await expect(b.getByRole('textbox',{name:'文档正文'})).toContainText('乙离线草稿');await a.getByRole('textbox',{name:'文档正文'}).press('ControlOrMeta+End');await a.keyboard.insertText(' 甲在线改动');await second.setOffline(false);for(const page of [a,b]){await expect(page.getByRole('textbox',{name:'文档正文'})).toContainText('乙离线草稿');await expect(page.getByRole('textbox',{name:'文档正文'})).toContainText('甲在线改动');}await expect(b.getByRole('status').filter({hasText:'已同步到工作空间'})).toHaveCount(2);
-await a.getByRole('button',{name:'新建文档',exact:true}).first().click();await a.getByLabel('文档标题',{exact:true}).fill('另一个共享文档');await expect(b.getByLabel('文档标题',{exact:true})).toHaveValue('共享文档');manager=await dialog(a);await manager.getByRole('button',{name:'设置与成员'}).click();await expect(manager.getByRole('heading',{name:'成员',exact:true})).toBeVisible();await expect(manager.getByLabel('工作空间概览')).toContainText('所有者');await expect(manager.getByLabel('工作空间概览')).toContainText('2 人');await expect(manager.getByRole('button',{name:/^移除/})).toBeEnabled();await manager.getByLabel('搜索成员').fill('不存在的成员');await expect(manager.getByText('没有符合条件的成员，可清除搜索或筛选。')).toBeVisible();await manager.getByLabel('搜索成员').fill('b'+suffix);await expect(manager.getByRole('button',{name:/^移除/})).toBeEnabled();await manager.getByLabel('角色筛选').selectOption('owner');await expect(manager.getByRole('button',{name:/^移除/})).toHaveCount(0);await manager.getByLabel('角色筛选').selectOption('');await manager.getByLabel('搜索成员').fill('');await manager.getByLabel('乙的角色').selectOption('viewer');await manager.getByRole('button',{name:'确认调整角色'}).click();await expect(b.getByLabel('文档标题',{exact:true})).toBeDisabled();await expect(b.getByRole('textbox',{name:'文档正文'})).toHaveAttribute('contenteditable','false');await expect(b.getByRole('button',{name:'新建文档',exact:true}).first()).toBeDisabled();await b.getByRole('button',{name:'白板',exact:true}).click();const canvas=b.getByLabel('白板画布',{exact:true}),beforeView=await canvas.getAttribute('data-viewport');await canvas.hover();await b.mouse.wheel(0,100);await expect(canvas).not.toHaveAttribute('data-viewport',beforeView!);await b.getByRole('button',{name:'页面',exact:true}).click();await b.getByLabel('文档选项',{exact:true}).click();await expect(b.getByRole('button',{name:'导出 Markdown',exact:true})).toBeEnabled();await b.getByRole('button',{name:'导出 Markdown',exact:true}).click();await b.getByLabel('文档选项',{exact:true}).click();const readonlyDownload=b.waitForEvent('download');await b.getByRole('button',{name:'下载 共享附件.txt'}).click();await readonlyDownload;await b.screenshot({path:'artifacts/cloud-readonly.png'});await manager.getByLabel('乙的角色').selectOption('member');await manager.getByRole('button',{name:'确认调整角色'}).click();await expect(b.getByLabel('文档标题',{exact:true})).toBeEnabled();
-await a.screenshot({path:'artifacts/cloud-workspace-members.png'});await a.setViewportSize({width:390,height:844});await a.evaluate(()=>document.documentElement.dataset.theme='dark');await a.screenshot({path:'artifacts/cloud-workspace-dark-mobile.png'});expect(await a.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);await a.setViewportSize({width:1280,height:720});await a.evaluate(()=>document.documentElement.dataset.theme='light');await manager.getByRole('button',{name:/^移除/}).click();await manager.getByRole('button',{name:'确认移除成员'}).click();await expect(manager.getByText('b'+suffix+'@example.com',{exact:true})).toHaveCount(0);await manager.getByLabel('关闭弹窗').click();await expect(b.getByText('编辑已暂停。当前页面中的内容仍保留，请先导出草稿。')).toBeVisible();await expect(b.getByRole('textbox',{name:'文档正文'})).toHaveAttribute('contenteditable','false');const draftDownload=b.waitForEvent('download');await b.getByRole('button',{name:'导出草稿',exact:true}).click();const draft=await draftDownload;expect(draft.suggestedFilename()).toContain('mydoc-draft.json');const draftStream=await draft.createReadStream(),draftChunks:Buffer[]=[];for await(const chunk of draftStream!)draftChunks.push(Buffer.from(chunk));const data=JSON.parse(Buffer.concat(draftChunks).toString());expect(data.documents.some((document:{markdown:string})=>document.markdown.includes('乙离线草稿'))).toBe(true);await b.screenshot({path:'artifacts/cloud-access-revoked.png'});await b.reload();await expect(b.getByLabel('当前工作区')).not.toContainText('多人协作测试');await a.request.post('http://127.0.0.1:4180/api/cloud/logout');await expect(a.getByText('登录已过期。页面内容与已暂存的草稿仍保留，重新登录后会继续提交。')).toBeVisible();await expect(a.getByRole('button',{name:'重新登录'})).toBeVisible();await expect(a.getByLabel('文档标题',{exact:true})).toBeDisabled();}finally{await first.close();await second.close();}});
+import { test as base, expect, type BrowserContext, type Page } from '@playwright/test';
+const test = base.extend<{
+    collaborators: {
+        second: BrowserContext;
+        a: Page;
+        b: Page;
+    };
+}>({
+    collaborators: [
+        async ({ browser }, use) => {
+            const first = await browser.newContext(), second = await browser.newContext();
+            try {
+                await use({ second, a: await first.newPage(), b: await second.newPage() });
+            } finally {
+                await Promise.all([first.close(), second.close()]);
+            }
+        },
+        { timeout: 15000 },
+    ],
+});
+test('独立 Web 服务：两个账户、邀请加入、正文实时协作和独立工作台', async ({ collaborators: { second, a, b } }) => {
+    const suffix = Date.now();
+    for (const [page, name] of [[a, '甲'], [b, '乙']] as const) {
+        await page.goto('http://127.0.0.1:4180');
+        await page.getByRole('button', { name: '创建账户', exact: true }).click();
+        await page.getByLabel('显示名称', { exact: true }).fill(name);
+        await page.getByLabel('邮箱', { exact: true }).fill((name === '甲' ? 'a' : 'b') + suffix + '@example.com');
+        await page.getByLabel('密码', { exact: true }).fill('test-password-12345');
+        await page.getByRole('button', { name: '注册并登录' }).click();
+        await expect(page.getByRole('button', { name: '新建文档', exact: true }).first()).toBeVisible();
+    }
+    await a.getByRole('button', { name: '新建文档', exact: true }).first().click();
+    await a.getByLabel('文档标题', { exact: true }).fill('甲的私人文档');
+    const privateId = new URLSearchParams(new URL(a.url()).hash.slice(1)).get('doc')!, account = (await (await b.request.get('http://127.0.0.1:4180/api/cloud/session')).json()).user;
+    expect((await b.request.get('http://127.0.0.1:4180/api/storage/document?id=doc:' + privateId, { headers: { 'X-Mydoc-Account': account.id } })).status()).toBe(204);
+    expect((await b.request.get('http://127.0.0.1:4180/api/storage/document?id=doc:' + privateId, { headers: { 'X-Mydoc-Account': 'wrong-account' } })).status()).toBe(409);
+    async function dialog(page: Page) {
+        await page.getByLabel('工作区选项', { exact: true }).click();
+        await page.getByRole('button', { name: '团队工作空间', exact: true }).click();
+        return page.getByRole('dialog', { name: '团队工作空间' });
+    }
+    let manager = await dialog(a);
+    await manager.getByLabel('新工作空间名称').fill('多人协作测试');
+    await manager.getByRole('button', { name: '创建团队工作空间' }).click();
+    await manager.getByRole('button', { name: '设置与成员' }).click();
+    await manager.getByRole('navigation', { name: '工作区管理分区' }).getByRole('button', { name: '邀请', exact: true }).click();
+    await manager.getByLabel('邀请其他邮箱').fill('b' + suffix + '@example.com');
+    await manager.getByRole('button', { name: '生成邀请口令' }).click();
+    const token = await manager.getByLabel('邀请口令（7 天有效，仅指定邮箱可接受）').inputValue();
+    await manager.getByRole('button', { name: '返回工作空间列表' }).click();
+    await manager.getByRole('button', { name: '打开', exact: true }).click();
+    await a.getByRole('button', { name: '新建文档', exact: true }).first().click();
+    await a.getByLabel('文档标题', { exact: true }).fill('共享文档');
+    await a.getByRole('textbox', { name: '文档正文' }).fill('共同编辑的起点');
+    await expect(a.getByRole('status').filter({ hasText: '正在保存' })).toHaveCount(0);
+    manager = await dialog(b);
+    await manager.getByRole('group', { name: '工作空间操作' }).getByRole('button', { name: '加入空间', exact: true }).click();
+    await manager.getByLabel('邀请口令', { exact: true }).fill(token);
+    await manager.getByRole('button', { name: '接受邀请' }).click();
+    await manager.getByRole('button', { name: '打开', exact: true }).click();
+    await b.getByRole('button', { name: '共享文档', exact: true }).first().click();
+    await expect(b.getByRole('textbox', { name: '文档正文' })).toContainText('共同编辑的起点');
+    await b.getByRole('textbox', { name: '文档正文' }).press('ControlOrMeta+End');
+    await b.getByRole('textbox', { name: '文档正文' }).press('Enter');
+    await b.getByRole('textbox', { name: '文档正文' }).pressSequentially('乙添加的内容');
+    await expect(a.getByRole('textbox', { name: '文档正文' })).toContainText('乙添加的内容');
+    await a.getByRole('textbox', { name: '文档正文' }).press('ControlOrMeta+End');
+    await a.getByRole('textbox', { name: '文档正文' }).press('Enter');
+    await a.getByRole('textbox', { name: '文档正文' }).pressSequentially('甲继续编辑');
+    await expect(b.getByRole('textbox', { name: '文档正文' })).toContainText('甲继续编辑');
+    await b.bringToFront();
+    await b.getByRole('textbox', { name: '文档正文' }).click();
+    await expect(a.locator('.ProseMirror-yjs-cursor')).toHaveCount(1);
+    await Promise.all([a.getByRole('textbox', { name: '文档正文' }).press('ControlOrMeta+End').then(() => a.keyboard.insertText(' 甲并发')), b.getByRole('textbox', { name: '文档正文' }).press('ControlOrMeta+End').then(() => b.keyboard.insertText(' 乙并发'))]);
+    for (const page of [a, b]) {
+        await expect(page.getByRole('textbox', { name: '文档正文' })).toContainText('甲并发');
+        await expect(page.getByRole('textbox', { name: '文档正文' })).toContainText('乙并发');
+    }
+    await a.getByLabel('添加本地附件').setInputFiles({ name: '共享附件.txt', mimeType: 'text/plain', buffer: Buffer.from('共享字节') });
+    await expect(b.getByRole('button', { name: '下载 共享附件.txt' })).toBeVisible();
+    const downloading = b.waitForEvent('download');
+    await b.getByRole('button', { name: '下载 共享附件.txt' }).click();
+    const download = await downloading, stream = await download.createReadStream(), chunks: Buffer[] = [];
+    for await (const chunk of stream!)
+        chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).toString()).toBe('共享字节');
+    await a.screenshot({ path: 'artifacts/cloud-collaboration.png' });
+    await b.reload();
+    await expect(b.getByRole('textbox', { name: '文档正文' })).toContainText('甲继续编辑');
+    await b.bringToFront();
+    await b.getByRole('textbox', { name: '文档正文' }).click();
+    await second.setOffline(true);
+    await b.getByRole('textbox', { name: '文档正文' }).press('ControlOrMeta+End');
+    await b.getByRole('textbox', { name: '文档正文' }).press('Enter');
+    await b.keyboard.insertText('乙离线草稿');
+    await expect(b.getByRole('textbox', { name: '文档正文' })).toContainText('乙离线草稿');
+    await a.getByRole('textbox', { name: '文档正文' }).press('ControlOrMeta+End');
+    await a.keyboard.insertText(' 甲在线改动');
+    await second.setOffline(false);
+    for (const page of [a, b]) {
+        await expect(page.getByRole('textbox', { name: '文档正文' })).toContainText('乙离线草稿');
+        await expect(page.getByRole('textbox', { name: '文档正文' })).toContainText('甲在线改动');
+    }
+    await expect(b.getByRole('status').filter({ hasText: '已同步到工作空间' })).toHaveCount(2);
+    await a.getByRole('button', { name: '新建文档', exact: true }).first().click();
+    await a.getByLabel('文档标题', { exact: true }).fill('另一个共享文档');
+    await expect(b.getByLabel('文档标题', { exact: true })).toHaveValue('共享文档');
+    manager = await dialog(a);
+    await manager.getByRole('button', { name: '设置与成员' }).click();
+    await expect(manager.getByLabel('工作空间概览')).toContainText('所有者');
+    await expect(manager.getByLabel('工作空间概览').locator('dd').first()).toHaveText(/2\s*人/);
+    await manager.getByRole('navigation', { name: '工作区管理分区' }).getByRole('button', { name: '成员', exact: true }).click();
+    await expect(manager.getByRole('heading', { name: '成员', exact: true })).toBeVisible();
+    await expect(manager.getByText('2 位成员', { exact: true })).toBeVisible();
+    await expect(manager.getByRole('button', { name: /^移除/ })).toBeEnabled();
+    await manager.getByLabel('搜索成员').fill('不存在的成员');
+    await expect(manager.getByText('没有符合条件的成员，可清除搜索或筛选。')).toBeVisible();
+    await manager.getByLabel('搜索成员').fill('b' + suffix);
+    await expect(manager.getByRole('button', { name: /^移除/ })).toBeEnabled();
+    await manager.getByLabel('角色筛选').selectOption('owner');
+    await expect(manager.getByRole('button', { name: /^移除/ })).toHaveCount(0);
+    await manager.getByLabel('角色筛选').selectOption('');
+    await manager.getByLabel('搜索成员').fill('');
+    await manager.getByLabel('乙的角色').selectOption('viewer');
+    await manager.getByRole('button', { name: '确认调整角色' }).click();
+    await expect(b.getByLabel('文档标题', { exact: true })).toBeDisabled();
+    await expect(b.getByRole('textbox', { name: '文档正文' })).toHaveAttribute('contenteditable', 'false');
+    await expect(b.getByRole('button', { name: '新建文档', exact: true }).first()).toBeDisabled();
+    await b.getByRole('button', { name: '白板', exact: true }).click();
+    const canvas = b.getByLabel('白板画布', { exact: true }), beforeView = await canvas.getAttribute('data-viewport');
+    await canvas.hover();
+    await b.mouse.wheel(0, 100);
+    await expect(canvas).not.toHaveAttribute('data-viewport', beforeView!);
+    await b.getByRole('button', { name: '页面', exact: true }).click();
+    await b.getByLabel('文档选项', { exact: true }).click();
+    await expect(b.getByRole('button', { name: '导出 Markdown', exact: true })).toBeEnabled();
+    await b.getByRole('button', { name: '导出 Markdown', exact: true }).click();
+    await b.getByLabel('文档选项', { exact: true }).click();
+    const readonlyDownload = b.waitForEvent('download');
+    await b.getByRole('button', { name: '下载 共享附件.txt' }).click();
+    await readonlyDownload;
+    await b.screenshot({ path: 'artifacts/cloud-readonly.png' });
+    await manager.getByLabel('乙的角色').selectOption('member');
+    await manager.getByRole('button', { name: '确认调整角色' }).click();
+    await expect(b.getByLabel('文档标题', { exact: true })).toBeEnabled();
+    await a.screenshot({ path: 'artifacts/cloud-workspace-members.png' });
+    await a.setViewportSize({ width: 390, height: 844 });
+    await a.evaluate(() => document.documentElement.dataset.theme = 'dark');
+    await a.screenshot({ path: 'artifacts/cloud-workspace-dark-mobile.png' });
+    expect(await a.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await a.setViewportSize({ width: 1280, height: 720 });
+    await a.evaluate(() => document.documentElement.dataset.theme = 'light');
+    await manager.getByRole('button', { name: /^移除/ }).click();
+    await manager.getByRole('button', { name: '确认移除成员' }).click();
+    await expect(manager.getByText('b' + suffix + '@example.com', { exact: true })).toHaveCount(0);
+    await manager.getByLabel('关闭弹窗').click();
+    await expect(b.getByText('编辑已暂停。当前页面中的内容仍保留，请先导出草稿。')).toBeVisible();
+    await expect(b.getByRole('textbox', { name: '文档正文' })).toHaveAttribute('contenteditable', 'false');
+    const draftDownload = b.waitForEvent('download');
+    await b.getByRole('button', { name: '导出草稿', exact: true }).click();
+    const draft = await draftDownload;
+    expect(draft.suggestedFilename()).toContain('mydoc-draft.json');
+    const draftStream = await draft.createReadStream(), draftChunks: Buffer[] = [];
+    for await (const chunk of draftStream!)
+        draftChunks.push(Buffer.from(chunk));
+    const data = JSON.parse(Buffer.concat(draftChunks).toString());
+    expect(data.documents.some((document: {
+        markdown: string;
+    }) => document.markdown.includes('乙离线草稿'))).toBe(true);
+    await b.screenshot({ path: 'artifacts/cloud-access-revoked.png' });
+    await b.reload();
+    await expect(b.getByLabel('当前工作区')).not.toContainText('多人协作测试');
+    await a.request.post('http://127.0.0.1:4180/api/cloud/logout');
+    await expect(a.getByText('登录已过期。页面内容与已暂存的草稿仍保留，重新登录后会继续提交。')).toBeVisible();
+    await expect(a.getByRole('button', { name: '重新登录' })).toBeVisible();
+    await expect(a.getByLabel('文档标题', { exact: true })).toBeDisabled();
+});
