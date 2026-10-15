@@ -33,8 +33,8 @@ export function serverConfig(env:NodeJS.ProcessEnv=process.env){
   MYDOC_ADMIN_NAME:env.MYDOC_ADMIN_NAME??admin.name,
  };
  const configuredAdmin=defaultAdminConfig(mergedEnv);
- const portValue=file.port??(env.MYDOC_PORT===undefined?8080:Number(env.MYDOC_PORT));
+ const portValue=env.MYDOC_PORT===undefined?(file.port??8080):Number(env.MYDOC_PORT);
  if(!Number.isInteger(portValue)||portValue<1||portValue>65535)throw new Error('服务器配置中的 port 必须是 1 至 65535 的整数');
- return {path,host:file.host??env.MYDOC_HOST??'127.0.0.1',port:portValue,
-  cloudDbPath:resolve(root,file.cloudDbPath??env.MYDOC_CLOUD_DB_PATH??'data/cloud.sqlite'),admin:configuredAdmin as DefaultAdminConfig|undefined};
+ return {path,host:env.MYDOC_HOST??file.host??'127.0.0.1',port:portValue,
+  cloudDbPath:resolve(root,env.MYDOC_CLOUD_DB_PATH??file.cloudDbPath??'data/cloud.sqlite'),admin:configuredAdmin as DefaultAdminConfig|undefined};
 }

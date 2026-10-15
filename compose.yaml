@@ -6,9 +6,15 @@ services:
     ports:
       - "${MYDOC_HTTP_PORT:-8080}:8080"
     volumes:
-      - ./data:/app/data
+      - type: bind
+        source: ${MYDOC_DATA_DIR:-/opt/1panel/apps/mydoc/data}
+        target: /app/data
+        bind:
+          create_host_path: false
+    environment:
+      MYDOC_INIT_DATABASE: ${MYDOC_INIT_DATABASE:-0}
     # To initialize a server administrator, uncomment and replace both values.
-    # environment:
+    # Add under environment above:
     #   MYDOC_ADMIN_EMAIL: admin@example.com
     #   MYDOC_ADMIN_PASSWORD: replace-with-a-strong-password
     #   MYDOC_ADMIN_NAME: Administrator

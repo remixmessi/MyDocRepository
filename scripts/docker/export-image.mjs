@@ -1,7 +1,8 @@
 import {spawn, spawnSync} from 'node:child_process';
-import {createWriteStream} from 'node:fs';
-import {mkdir, rename, rm} from 'node:fs/promises';
-import {dirname, resolve} from 'node:path';
+import {createWriteStream,createReadStream} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {mkdir, rename, rm,writeFile} from 'node:fs/promises';
+import {dirname, resolve,basename} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {pipeline} from 'node:stream/promises';
 import {createGzip} from 'node:zlib';
@@ -40,7 +41,8 @@ function run(commandArgs, capture = false) {
 }
 
 run(['info'], true);
-run(['buildx', 'build', '--platform', options.platform, '--load', '--tag', options.tag, '.']);
+const version=options.tag.slice(options.tag.lastIndexOf(':')+1);
+run(['buildx', 'build', '--platform', options.platform, '--load', '--tag', options.tag,'--build-arg',`MYDOC_VERSION=${version}`, '.']);
 const platform = run(['image', 'inspect', '--format', '{{.Os}}/{{.Architecture}}', options.tag], true);
 if (platform !== options.platform) throw new Error(`Image platform mismatch: ${platform}.`);
 await mkdir(dirname(output), {recursive: true});
@@ -58,4 +60,6 @@ try {
   await rm(temporary, {force: true});
   throw error;
 }
+const hash=createHash('sha256');for await(const chunk of createReadStream(output))hash.update(chunk);
+await writeFile(output+'.sha256',`${hash.digest('hex')}  ${basename(output)}\n`);
 console.log(`\n1Panel image archive: ${output}\nImage: ${options.tag}\nPlatform: ${platform}`);

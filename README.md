@@ -96,6 +96,8 @@ corepack yarn docker:export --platform linux/arm64
 
 默认产物为 `release/docker/mydoc-web-linux-amd64.tar.gz`。在 1Panel 导入镜像后使用 `mydoc-web:latest`，映射端口 `8080:8080`，将持久化数据目录挂载到 `/app/data`。
 
+更新必须复用原服务器目录或原 Docker 卷名；仅容器路径相同并不够。从 `2026.10.14-1` 起，容器未挂载数据目录或原数据库缺失时拒绝启动。仅全新安装可临时设置 `MYDOC_INIT_DATABASE=1`，成功后移除；升级不删除数据库、不重新初始化。从 `2026.10.14-2` 起，迁移前保存包含 WAL 的整库快照，并在启动事务中核对原始数据；检查失败则回滚并停止启动。从 `2026.10.15-1` 起还会在打开含 WAL 的原库前保存原始文件，并在副本上拦截 WAL 导致既有账号 ID 消失的异常。
+
 详细配置与更新步骤见 [Docker 与 1Panel 部署](docs/Docker与1Panel部署.md)。
 
 ### 桌面安装包

@@ -24,11 +24,16 @@ COPY scripts/build-server.mjs ./scripts/build-server.mjs
 RUN yarn server:build
 
 FROM node:22-bookworm-slim AS runtime
+ARG MYDOC_VERSION=dev
+LABEL org.opencontainers.image.title="MyDoc Web" \
+    org.opencontainers.image.version=$MYDOC_VERSION
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gosu ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production \
+    MYDOC_VERSION=$MYDOC_VERSION \
+    MYDOC_CONTAINER=1 \
     MYDOC_HOST=0.0.0.0 \
     MYDOC_PORT=8080 \
     MYDOC_CONFIG_PATH=/app/data/server-config.json \
@@ -41,7 +46,7 @@ COPY --from=build /app/node_modules/bindings ./node_modules/bindings
 COPY --from=build /app/node_modules/file-uri-to-path ./node_modules/file-uri-to-path
 COPY docker/entrypoint.sh /usr/local/bin/mydoc-entrypoint
 RUN chmod 755 /usr/local/bin/mydoc-entrypoint && mkdir -p /app/data && chown node:node /app/data
-VOLUME ["/app/data"]
+# Require an explicit mount; anonymous volumes are not reused by a new container.
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:8080/api/hosting').then(async r=>{if(!r.ok||!(await r.json()).hosted)process.exit(1)}).catch(()=>process.exit(1))"

@@ -58,6 +58,9 @@ data/server-config.json
 !/tests/cloud-server.test.ts
 !/tests/document-permissions.test.ts
 !/tests/default-admin.test.ts
+!/tests/docker-storage.test.ts
+!/tests/cloud-upgrade-protection.test.ts
+!/tests/startup-files.test.ts
 !/tests/e2e/
 /tests/e2e/*
 !/tests/e2e/fixtures.ts
