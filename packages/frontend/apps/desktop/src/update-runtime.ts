@@ -4,6 +4,7 @@ import {app} from 'electron';
 import {autoUpdater} from 'electron-updater';
 import {DesktopUpdates} from './updates';
 import {githubUpdateFiles} from './github-update-info';
+import {normalizeUpdateServer,serverUpdateFeed,serverUpdateFiles} from '../../../../common/nbstore/src/server-updates';
 import type {DesktopUpdateState} from '../../../../common/nbstore/src/updates';
 
 export const githubUpdateFeed={provider:'github' as const,owner:'remixmessi',repo:'MyDocRepository',releaseType:'release' as const};
@@ -22,17 +23,19 @@ export function createDesktopUpdates(options:{prepare:()=>Promise<void>;release:
  const supported=app.isPackaged&&['darwin','win32'].includes(process.platform);
  const configured=supported&&config.enabled===true&&existsSync(join(process.resourcesPath,'app-update.yml'));
  const githubDisabledReason=app.isPackaged?'当前系统不支持应用内更新。':'开发运行无法安装更新，请使用已打包的 macOS 或 Windows 客户端。';
- const settingsFile=join(app.getPath('userData'),'update-settings.json');let automaticChecks=true;try{automaticChecks=JSON.parse(readFileSync(settingsFile,'utf8')).automaticChecks!==false;}catch{}
+ const settingsFile=join(app.getPath('userData'),'update-settings.json');let automaticChecks=true,savedSource:DesktopUpdateState['source'],savedServer:string|undefined;try{const settings=JSON.parse(readFileSync(settingsFile,'utf8'));automaticChecks=settings.automaticChecks!==false;if(settings.source==='server'){savedServer=normalizeUpdateServer(settings.serverUrl);savedSource='server';}else if(settings.source==='github')savedSource='github';}catch{}
+ const source=savedSource??(configured?'configured':'github');
+ const writeSettings=(value:boolean,nextSource:DesktopUpdateState['source'],serverUrl?:string)=>{writeFileSync(settingsFile+'.tmp',JSON.stringify({automaticChecks:value,source:nextSource,serverUrl}),{mode:0o600});renameSync(settingsFile+'.tmp',settingsFile);};
  autoUpdater.autoDownload=false;autoUpdater.autoInstallOnAppQuit=false;autoUpdater.autoRunAppAfterInstall=true;autoUpdater.allowDowngrade=false;autoUpdater.allowPrerelease=false;
- // Feeds are owned by the main process; IPC never accepts a URL, path or executable.
- autoUpdater.logger=null;
- if(!configured&&supported)autoUpdater.setFeedURL(githubUpdateFeed);
- const updates:DesktopUpdates=new DesktopUpdates({...options,version:app.getVersion(),enabled:supported,source:configured?'configured':'github',channel:configured?config.channel??'稳定版':'GitHub 正式版',disabledReason:supported?undefined:githubDisabledReason,automaticChecks,
+ // User-entered server addresses are normalized in main; package URLs, paths and commands are never accepted from IPC.
+ autoUpdater.logger=null;autoUpdater.disableDifferentialDownload=source==='server';
+ if(supported&&source==='server'){autoUpdater.setFeedURL({provider:'generic',url:serverUpdateFeed(savedServer,process.platform,process.arch),useMultipleRangeRequest:false});autoUpdater.disableDifferentialDownload=true;}else if(supported&&source==='github')autoUpdater.setFeedURL(githubUpdateFeed);
+ const updates:DesktopUpdates=new DesktopUpdates({...options,version:app.getVersion(),enabled:supported,source,serverUrl:source==='server'?savedServer:undefined,channel:source==='server'?'服务器更新':source==='configured'?config.channel??'稳定版':'GitHub 正式版',disabledReason:supported?undefined:githubDisabledReason,automaticChecks,
   driver:{check:()=>autoUpdater.checkForUpdates(),download:()=>autoUpdater.downloadUpdate(),install:()=>autoUpdater.quitAndInstall(false,true)},
-  errorMessage:error=>updates.status.source==='github'?githubUpdateError(error):undefined,
-  saveSettings(value){writeFileSync(settingsFile+'.tmp',JSON.stringify({automaticChecks:value}),{mode:0o600});renameSync(settingsFile+'.tmp',settingsFile);},
+  errorMessage:error=>{if(updates.status.source==='github')return githubUpdateError(error);if(updates.status.source==='server'){const code=error&&typeof error==='object'&&'code' in error?String(error.code):'';if(code==='MYDOC_SERVER_PACKAGE_UNAVAILABLE')return '服务器返回的更新包与当前系统或架构不匹配，或缺少有效校验信息。';if(code==='ERR_UPDATER_CHANNEL_FILE_NOT_FOUND')return '服务器暂无匹配的正式更新包，或服务版本过旧。请管理员上传对应架构的 macOS ZIP / Windows EXE 并升级服务器。';const status=error&&typeof error==='object'&&'statusCode' in error?error.statusCode:undefined;if(status===409)return '服务器最新版本的更新包尚未就绪或校验失败，请管理员上传正确的 macOS ZIP / Windows EXE。';}return undefined;},
+  saveSettings(value){writeSettings(value,updates.status.source,updates.status.serverUrl);},
  });
- const available=(info:import('electron-updater').UpdateInfo)=>{if(updates.status.source==='github')info.files.splice(0,info.files.length,...githubUpdateFiles(info,process.platform,process.arch));updates.available(info.version,info.releaseDate,typeof info.releaseNotes==='string'?info.releaseNotes:info.releaseNotes?.map(note=>note.version+'\n'+note.note).join('\n\n'));};
+ const available=(info:import('electron-updater').UpdateInfo)=>{if(updates.status.source==='github')info.files.splice(0,info.files.length,...githubUpdateFiles(info,process.platform,process.arch));if(updates.status.source==='server')serverUpdateFiles(info,process.platform,process.arch);updates.available(info.version,info.releaseDate,typeof info.releaseNotes==='string'?info.releaseNotes:info.releaseNotes?.map(note=>note.version+'\n'+note.note).join('\n\n'));};
  const unavailable=()=>updates.unavailable();
  const progress=(p:{percent:number;transferred:number;total:number})=>updates.progress(p.percent,p.transferred,p.total);
  const downloaded=()=>updates.downloaded();
@@ -43,8 +46,17 @@ export function createDesktopUpdates(options:{prepare:()=>Promise<void>;release:
  return {updates,async checkGitHub(){
   if(!updates.canChangeChannel)return updates.status;
   if(updates.status.source!=='github'){
-   if(supported)autoUpdater.setFeedURL(githubUpdateFeed);
+   writeSettings(updates.status.automaticChecks,'github');if(supported){autoUpdater.setFeedURL(githubUpdateFeed);autoUpdater.disableDifferentialDownload=false;}
    updates.selectChannel({source:'github',channel:'GitHub 正式版',enabled:supported,disabledReason:supported?undefined:githubDisabledReason});
+  }
+  return updates.check();
+ },async checkServer(address:unknown){
+  if(!updates.canChangeChannel)return updates.status;
+  const serverUrl=normalizeUpdateServer(address);
+  if(updates.status.source!=='server'||updates.status.serverUrl!==serverUrl){
+   const feed=serverUpdateFeed(serverUrl,process.platform,process.arch);writeSettings(updates.status.automaticChecks,'server',serverUrl);
+   if(supported){autoUpdater.setFeedURL({provider:'generic',url:feed,useMultipleRangeRequest:false});autoUpdater.disableDifferentialDownload=true;}
+   updates.selectChannel({source:'server',serverUrl,channel:'服务器更新',enabled:supported,disabledReason:supported?undefined:githubDisabledReason});
   }
   return updates.check();
  },stop(){if(startup)clearTimeout(startup);if(timer)clearInterval(timer);autoUpdater.removeListener('update-available',available);autoUpdater.removeListener('update-not-available',unavailable);autoUpdater.removeListener('download-progress',progress);autoUpdater.removeListener('update-downloaded',downloaded);autoUpdater.removeListener('error',failed);}};

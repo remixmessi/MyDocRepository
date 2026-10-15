@@ -1,13 +1,13 @@
 import type {DesktopUpdateState} from '../../../../common/nbstore/src/updates';
 export interface UpdateDriver {check():Promise<unknown>;download():Promise<unknown>;install():void;}
-interface Options {version:string;source?:DesktopUpdateState['source'];enabled:boolean;channel:string;disabledReason?:string;automaticChecks:boolean;driver?:UpdateDriver;prepare:()=>Promise<void>;release:()=>void;notify:(state:DesktopUpdateState)=>void;saveSettings:(automaticChecks:boolean)=>void;errorMessage?:(error:unknown)=>string|undefined;}
+interface Options {version:string;source?:DesktopUpdateState['source'];serverUrl?:string;enabled:boolean;channel:string;disabledReason?:string;automaticChecks:boolean;driver?:UpdateDriver;prepare:()=>Promise<void>;release:()=>void;notify:(state:DesktopUpdateState)=>void;saveSettings:(automaticChecks:boolean)=>void;errorMessage?:(error:unknown)=>string|undefined;}
 const busy=new Set(['checking','downloading','preparing','installing']);
 export class DesktopUpdates {
  private state:DesktopUpdateState;
- constructor(private options:Options){this.state={version:options.version,source:options.source,enabled:options.enabled,automaticChecks:options.automaticChecks,channel:options.channel,phase:options.enabled?'idle':'disabled',message:options.disabledReason};}
+ constructor(private options:Options){this.state={version:options.version,source:options.source,serverUrl:options.serverUrl,enabled:options.enabled,automaticChecks:options.automaticChecks,channel:options.channel,phase:options.enabled?'idle':'disabled',message:options.disabledReason};}
  get status(){return {...this.state};}
  get canChangeChannel(){return !busy.has(this.state.phase)&&this.state.phase!=='downloaded';}
- selectChannel(value:{source:DesktopUpdateState['source'];channel:string;enabled:boolean;disabledReason?:string}){if(!this.canChangeChannel)return false;this.publish({source:value.source,channel:value.channel,enabled:value.enabled,phase:value.enabled?'idle':'disabled',message:value.disabledReason,latestVersion:undefined,releaseDate:undefined,releaseNotes:undefined,checkedAt:undefined,percent:undefined,transferred:undefined,total:undefined,retry:undefined});return true;}
+ selectChannel(value:{source:DesktopUpdateState['source'];serverUrl?:string;channel:string;enabled:boolean;disabledReason?:string}){if(!this.canChangeChannel)return false;this.publish({source:value.source,serverUrl:value.serverUrl,channel:value.channel,enabled:value.enabled,phase:value.enabled?'idle':'disabled',message:value.disabledReason,latestVersion:undefined,releaseDate:undefined,releaseNotes:undefined,checkedAt:undefined,percent:undefined,transferred:undefined,total:undefined,retry:undefined});return true;}
  get installing(){return this.state.phase==='preparing'||this.state.phase==='installing';}
  private publish(patch:Partial<DesktopUpdateState>){this.state={...this.state,...patch};this.options.notify(this.status);}
  configure(value:unknown){if(typeof value!=='boolean')throw new Error('更新设置无效');this.options.saveSettings(value);this.publish({automaticChecks:value});return this.status;}

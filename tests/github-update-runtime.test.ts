@@ -2,7 +2,7 @@ import {EventEmitter} from 'node:events';
 import {createHash} from 'node:crypto';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 const mocks=vi.hoisted(()=>({app:{isPackaged:true,getVersion:()=> '0.1.0',getPath:()=>'/nonexistent/mydoc-update-tests'},readFileSync:vi.fn(),existsSync:vi.fn(()=>false),writeFileSync:vi.fn(),renameSync:vi.fn()}));
-const native=Object.assign(new EventEmitter(),{setFeedURL:vi.fn(),checkForUpdates:vi.fn(),downloadUpdate:vi.fn(),quitAndInstall:vi.fn(),autoDownload:true,autoInstallOnAppQuit:true,autoRunAppAfterInstall:false,allowDowngrade:true,allowPrerelease:true,logger:null});
+const native=Object.assign(new EventEmitter(),{setFeedURL:vi.fn(),checkForUpdates:vi.fn(),downloadUpdate:vi.fn(),quitAndInstall:vi.fn(),disableDifferentialDownload:false,autoDownload:true,autoInstallOnAppQuit:true,autoRunAppAfterInstall:false,allowDowngrade:true,allowPrerelease:true,logger:null});
 vi.mock('electron',()=>({app:mocks.app}));
 vi.mock('electron-updater',()=>({autoUpdater:native}));
 vi.mock('node:fs',()=>({readFileSync:mocks.readFileSync,existsSync:mocks.existsSync,writeFileSync:mocks.writeFileSync,renameSync:mocks.renameSync}));
@@ -46,4 +46,38 @@ it('a configured HTTPS channel switches to the fixed GitHub feed only while idle
  mocks.readFileSync.mockImplementation((path:unknown)=>String(path).endsWith('release-config.json')?JSON.stringify({enabled:true,channel:'公司渠道'}):JSON.stringify({automaticChecks:false}));mocks.existsSync.mockReturnValue(true);
  const {updates}=setup();expect(updates.status).toMatchObject({source:'configured',channel:'公司渠道',automaticChecks:false});expect(native.setFeedURL).not.toHaveBeenCalled();
  await runtime!.checkGitHub();expect(native.setFeedURL).toHaveBeenCalledWith(githubUpdateFeed);expect(updates.status).toMatchObject({source:'github',phase:'available',automaticChecks:false});
+});
+
+const serverInfo=()=>({version:'9.0.0',mydocPlatform:'darwin',mydocArch:'arm64',releaseDate:'2026-10-15',releaseNotes:'服务器修复',files:[{url:'12345678-1234-1234-1234-123456789abc.zip',sha512:checksum,size:7}]});
+it('server feed uses normalized address and real architecture, then reuses native download/backup/install',async()=>{
+ const {updates,prepare}=setup();native.checkForUpdates.mockImplementationOnce(async()=>{native.emit('update-available',serverInfo());return {};});
+ await runtime!.checkServer('  docs.example.com/mydoc/  ');
+ expect(native.setFeedURL).toHaveBeenLastCalledWith({provider:'generic',url:'http://docs.example.com/mydoc/api/cloud/releases/update/darwin/arm64/',useMultipleRangeRequest:false});expect(native.disableDifferentialDownload).toBe(true);
+ expect(updates.status).toMatchObject({source:'server',serverUrl:'http://docs.example.com/mydoc',phase:'available',releaseNotes:'服务器修复'});
+ expect(native.downloadUpdate).not.toHaveBeenCalled();await updates.download();expect(updates.status.phase).toBe('downloaded');await updates.install();expect(prepare).toHaveBeenCalledOnce();expect(native.quitAndInstall).toHaveBeenCalledWith(false,true);
+});
+it('server selection and automatic check preference survive restart',async()=>{
+ const {updates}=setup();native.checkForUpdates.mockImplementationOnce(async()=>{native.emit('update-available',serverInfo());return {};});await runtime!.checkServer('https://docs.example.com');updates.configure(false);
+ const settings=String(mocks.writeFileSync.mock.calls.at(-1)![1]);expect(JSON.parse(settings)).toMatchObject({source:'server',serverUrl:'https://docs.example.com',automaticChecks:false});
+ runtime!.stop();mocks.readFileSync.mockImplementation((path:unknown)=>{if(String(path).endsWith('update-settings.json'))return settings;throw new Error('missing');});
+ const restarted=setup();expect(restarted.updates.status).toMatchObject({source:'server',serverUrl:'https://docs.example.com',automaticChecks:false});expect(native.setFeedURL).toHaveBeenLastCalledWith(expect.objectContaining({provider:'generic',url:'https://docs.example.com/api/cloud/releases/update/darwin/arm64/'}));
+});
+it('server cannot replace a channel while downloading or holding a downloaded update',async()=>{
+ const {updates}=setup();await updates.check();let finish!:()=>void;native.downloadUpdate.mockImplementationOnce(()=>new Promise<void>(resolve=>{finish=resolve;}));const download=updates.download();const calls=native.setFeedURL.mock.calls.length;
+ await runtime!.checkServer('https://other.example.com');expect(updates.status.source).toBe('github');expect(native.setFeedURL).toHaveBeenCalledTimes(calls);finish();await download;await runtime!.checkServer('https://other.example.com');expect(updates.status.source).toBe('github');
+});
+it('server input rejects credentials and non-HTTP protocols, and metadata rejects wrong architecture',async()=>{
+ const {updates}=setup();for(const url of ['file:///tmp/app.zip','https://user:secret@example.com','https://example.com/?token=x','https://example.com/#x',{},''])await expect(runtime!.checkServer(url)).rejects.toThrow();
+ native.checkForUpdates.mockImplementationOnce(async()=>{native.emit('update-available',{...serverInfo(),mydocArch:'x64'});return {};});await runtime!.checkServer('http://127.0.0.1:8080');expect(updates.status).toMatchObject({source:'server',phase:'error',retry:'check'});expect(updates.status.message).toContain('架构');expect(native.downloadUpdate).not.toHaveBeenCalled();
+});
+it('switching back to GitHub resets server differential policy and persists the chosen channel',async()=>{
+ setup();native.checkForUpdates.mockImplementationOnce(async()=>{native.emit('update-available',serverInfo());return {};});await runtime!.checkServer('http://127.0.0.1:8080');await runtime!.checkGitHub();expect(native.disableDifferentialDownload).toBe(false);expect(runtime!.updates.status.source).toBe('github');expect(JSON.parse(String(mocks.writeFileSync.mock.calls.at(-1)![1]))).toMatchObject({source:'github'});
+});
+
+it('server manifest contract rejects absolute URLs, prereleases, malformed checksums and wrong package formats',async()=>{
+ const {serverUpdateFiles,serverUpdateFeed}=await import('../packages/common/nbstore/src/server-updates');
+ const valid=serverInfo();expect(serverUpdateFiles(valid,'darwin','arm64')).toEqual(valid.files);
+ for(const patch of [{version:'9.0.0-beta.1'},{mydocPlatform:'win32'},{files:[{...valid.files[0],url:'https://other.example/app.zip'}]},{files:[{...valid.files[0],url:valid.files[0].url.replace('.zip','.exe')}]},{files:[{...valid.files[0],sha512:'bad'}]}])expect(()=>serverUpdateFiles({...valid,...patch},'darwin','arm64')).toThrow();
+ expect(serverUpdateFeed('https://docs.example.com/base/','win32','x64')).toBe('https://docs.example.com/base/api/cloud/releases/update/win32/x64/');
+ expect(()=>serverUpdateFeed('https://docs.example.com','linux','x64')).toThrow();
 });

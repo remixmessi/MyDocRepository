@@ -8,8 +8,9 @@ import {attachmentPlayer,playbackType,type AttachmentPlayer} from './media-playb
 import { isPdfAttachment } from './pdf-preview-utils';
 export type UploadKind = 'image' | 'attachment' | 'auto';
 export function formatFileSize(size: number) { return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KB` : `${(size / (1024 * 1024)).toFixed(1)} MB`; }
-export function documentMedia(assets: WorkspaceAssets, store: BlockStore, notify: (text: string) => void, progress: (text: string) => void, previewPdf?: (id:string)=>void) {
+export function documentMedia(assets: WorkspaceAssets, store: BlockStore, notify: (text: string) => void, progress: (text: string) => void, previewPdf?: (id:string)=>void, previewImage?: (request:{assetId?:string;src?:string;alt?:string;name?:string})=>void) {
   const players=new Set<AttachmentPlayer>();
+  const imagePreviewActions = new WeakMap<HTMLElement, () => void>();
   let editor: EditorView; let disposed = false; let uploading = false; let bookmark: SelectionBookmark | null = null;
   async function upload(files: File[], kind: UploadKind) {
     if (uploading || !files.length) return;
@@ -30,11 +31,19 @@ export function documentMedia(assets: WorkspaceAssets, store: BlockStore, notify
   const plugin = new Plugin({ props: {
     handlePaste(_view, event) { const files = [...(event.clipboardData?.files ?? [])]; if (!files.length) return false; void upload(files, 'auto'); return true; },
     handleDrop(view, event) { const files = [...(event.dataTransfer?.files ?? [])]; if (!files.length) return false; event.preventDefault(); const position = view.posAtCoords({ left: event.clientX, top: event.clientY }); if (position) { view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(position.pos)))); } void upload(files, 'auto'); return true; },
+    handleDoubleClick(_view, _pos, event) { const media = (event.target as HTMLElement)?.closest('.media-image') as HTMLElement | null; const action = media && imagePreviewActions.get(media); if (!action) return false; event.preventDefault(); action(); return true; },
   }, view(view) { editor = view; return { update(view) { editor = view;if(view.dom.closest('[hidden]'))for(const player of players)player.pause(); }, destroy() { disposed = true;for(const player of players)player.pause(); } }; }, state: { init: () => null, apply(tr) { if (bookmark) bookmark = bookmark.map(tr.mapping); return null; } } });
   function nodeView(node: PMNode): NodeView {
     const image = node.type.name === 'image'; const local = image && String(node.attrs.src).startsWith('asset:');
     const dom = document.createElement('span'); dom.contentEditable = 'false'; dom.className = image ? 'media-image' : 'media-attachment';dom.dataset.readonlyAction='true'; let url: string | null = null; let removed = false; let generation = 0; let loaded: AssetRecord | null = null;let player:AttachmentPlayer|null=null;
     const id = () => image ? String(node.attrs.src).slice(6) : node.attrs.assetId;
+    const openImagePreview = (event: Event) => {
+      if (!image || !previewImage) return;
+      event.preventDefault(); event.stopPropagation();
+      previewImage?.(local ? { assetId: id(), alt: node.attrs.alt || loaded?.name, name: loaded?.name } : { src: String(node.attrs.src), alt: node.attrs.alt || '', name: node.attrs.alt || '图片' });
+    };
+    if (image && previewImage) imagePreviewActions.set(dom, () => previewImage(local ? { assetId: id(), alt: node.attrs.alt || loaded?.name, name: loaded?.name } : { src: String(node.attrs.src), alt: node.attrs.alt || '', name: node.attrs.alt || '图片' }));
+    dom.addEventListener('dblclick', openImagePreview, true);
     const revoke = () => {if(player){players.delete(player);player.destroy();player=null;} if (url) URL.revokeObjectURL(url); url = null; };
     const download = () => { if (!loaded) return; const link = document.createElement('a'); const temporary = URL.createObjectURL(new Blob([loaded.bytes], { type: loaded.mime })); link.href = temporary; link.download = loaded.name; link.click(); setTimeout(() => URL.revokeObjectURL(temporary), 1000); };
     async function render() {
@@ -52,7 +61,7 @@ export function documentMedia(assets: WorkspaceAssets, store: BlockStore, notify
         const button = document.createElement('button'); button.type = 'button'; button.textContent = '下载'; button.setAttribute('aria-label', `下载 ${record.name}`); button.addEventListener('click', download);if(player)dom.insertBefore(button,player.dom);else dom.append(button);
       } catch (error) { if (removed || current !== generation) return; status.textContent = error instanceof Error ? error.message : '读取文件失败'; dom.classList.add('media-error');if(isPdfAttachment(node.attrs.name,node.attrs.mime))preview(); const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重试'; retry.addEventListener('click', () => { dom.classList.remove('media-error'); void render(); }); dom.append(retry); }
     }
-    void render(); return { dom, stopEvent: event => !!(event.target as HTMLElement)?.closest('button,select,input,audio,video,.attachment-player'), ignoreMutation: () => true, destroy() { removed = true; generation++; revoke(); } };
+    void render(); return { dom, stopEvent: event => !!(event.target as HTMLElement)?.closest('button,select,input,audio,video,.attachment-player'), ignoreMutation: () => true, destroy() { removed = true; generation++; imagePreviewActions.delete(dom); dom.removeEventListener('dblclick', openImagePreview, true); revoke(); } };
   }
   return { plugin, upload, nodeView };
 }

@@ -19,14 +19,14 @@ function ReleaseComposer({busy,onUpload,onCancel}:{busy:boolean;onUpload:(file:F
  return <form className="release-composer" aria-label="发布新版本" onSubmit={event=>{
   event.preventDefault();if(!validReleaseVersion(version.trim())){setError('请输入有效版本号，例如 1.2.3 或 1.2.3-beta.1');return;}if(!file||!file.size){setError('请选择非空安装包');return;}if(file.size>512*1024*1024){setError('安装包不能超过 512 MB');return;}setError('');onUpload(file,version.trim(),platform,arch,notes);
  }}>
-  <div className="release-section-head"><div><h4>发布新版本</h4><p>每个系统与架构分别上传一个安装包。</p></div><span className="release-badge">{releaseTarget(platform,arch)}</span></div>
+  <div className="release-section-head"><div><h4>发布新版本</h4><p>每个系统与架构分别上传。应用内更新使用 macOS ZIP 或 Windows EXE。</p></div><span className="release-badge">{releaseTarget(platform,arch)}</span></div>
   <div className="release-fields">
    <label>版本号<input required autoFocus value={version} maxLength={100} pattern={releaseVersionPattern} placeholder="例如 1.2.3" disabled={busy} onChange={event=>setVersion(event.target.value)}/></label>
    <label>操作系统<select value={platform} disabled={busy} onChange={event=>setPlatform(event.target.value as ReleasePlatform)}>{Object.entries(releasePlatforms).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
    <label>处理器架构<select value={arch} disabled={busy} onChange={event=>setArch(event.target.value as ReleaseArchitecture)}><option value="arm64">{platform==='darwin'?'Apple 芯片 · arm64':'arm64'}</option><option value="x64">{platform==='darwin'?'Intel · x64':'x64'}</option></select></label>
   </div>
   <label className="release-file-label" htmlFor={fileId}>安装包</label>
-  <div className="release-file-picker"><FileUp size={22}/><div><strong>{file?.name??'选择安装包'}</strong><small>{file?formatBytes(file.size):'支持 DMG、ZIP、EXE 等安装文件，最大 512 MB'}</small></div><button type="button" className="release-secondary" disabled={busy} onClick={()=>input.current?.click()}>{file?'重新选择':'浏览文件'}</button><input id={fileId} ref={input} type="file" aria-label="安装包" disabled={busy} onChange={event=>{setFile(event.target.files?.[0]);setError('');}}/></div>
+  <div className="release-file-picker"><FileUp size={22}/><div><strong>{file?.name??'选择安装包'}</strong><small>{file?formatBytes(file.size):'应用内更新：macOS ZIP / Windows EXE；DMG 可供手动安装。最大 512 MB'}</small></div><button type="button" className="release-secondary" disabled={busy} onClick={()=>input.current?.click()}>{file?'重新选择':'浏览文件'}</button><input id={fileId} ref={input} type="file" aria-label="安装包" disabled={busy} onChange={event=>{setFile(event.target.files?.[0]);setError('');}}/></div>
   <label className="release-notes-field">更新说明 <span>可选</span><textarea value={notes} onChange={event=>setNotes(event.target.value)} maxLength={4000} rows={3} disabled={busy} placeholder="介绍本次修复与改进，供客户端查看"/></label>
   {error&&<p className="release-feedback error" role="alert">{error}</p>}
   <div className="release-composer-actions"><small>发布后，匹配此架构的客户端即可检查到版本。</small><button type="button" disabled={busy} onClick={onCancel}>取消</button><button className="primary" disabled={busy||!file}><FileUp size={15}/>{busy?'正在上传…':'上传并发布'}</button></div>

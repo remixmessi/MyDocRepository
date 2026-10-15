@@ -91,6 +91,14 @@ export function codeBlockView(node: PMNode, view: EditorView, getPos: () => numb
       for (const text of texts) { if (remaining <= text.length) { const range = document.createRange(); range.setStart(text, remaining); range.setEnd(text, Math.min(text.length, remaining + 1)); const rect = range.getClientRects()[0]; if (rect?.height) top = rect.top - bounds.top; break; } remaining -= text.length; }
       number.style.top = `${top}px`; gutter.append(number); offset += value.length + 1;
     });
+    if (node.attrs.collapsed && node.attrs.wrap && texts.length) {
+      const firstLineEnd = full.indexOf('\n'); const target = firstLineEnd < 0 ? full.length : firstLineEnd;
+      const range = document.createRange(); range.setStart(texts[0], 0); let remaining = target;
+      for (const text of texts) { if (remaining <= text.length) { range.setEnd(text, remaining); break; } remaining -= text.length; }
+      const rects = [...range.getClientRects()]; const preStyle = getComputedStyle(pre); const preBounds = pre.getBoundingClientRect();
+      const bottom = rects.reduce((value, rect) => Math.max(value, rect.bottom), preBounds.top); const paddingBottom = parseFloat(preStyle.paddingBottom) || 0;
+      pre.style.setProperty('--code-collapsed-height', `${Math.ceil(bottom - preBounds.top + paddingBottom)}px`);
+    } else pre.style.removeProperty('--code-collapsed-height');
   }); };
   const update = (next: PMNode) => { if (next.type !== node.type) return false; node = next; localId = next.attrs.id || localId; dom.id = `code-${localId}`; dom.dataset.codeId = localId; dom.classList.toggle('code-wrap', node.attrs.wrap); dom.classList.toggle('code-no-numbers', !node.attrs.lineNumbers); dom.classList.toggle('code-collapsed', node.attrs.collapsed); pre.dataset.params = node.attrs.params;
     const lang = aliases[node.attrs.params] || node.attrs.params; language.textContent = `${codeLanguages.find(([id]) => id === lang)?.[1] || node.attrs.params || '纯文本'} ⌄`; const label = node.attrs.collapsed ? '展开代码' : '折叠代码'; collapse.title = label; collapse.setAttribute('aria-label', label); collapse.setAttribute('aria-pressed', String(node.attrs.collapsed)); commentButton.setAttribute('aria-label', `代码块评论${node.attrs.comments.length ? `（${node.attrs.comments.length}）` : ''}`); renderComments(); measureLines(); return true; };

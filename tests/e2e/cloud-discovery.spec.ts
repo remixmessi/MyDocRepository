@@ -35,7 +35,7 @@ async function fixture(page:Page,desktop:boolean,unavailable=false,admin=true){
  });
  if(desktop)await page.addInitScript(()=>{
   const idle=()=>()=>{};
-  window.mydocDesktop={platform:'darwin',arch:'arm64',
+  window.mydocDesktop={checkServerUpdates:async server=>{(window as Window&{serverUpdateAddress?:string}).serverUpdateAddress=server;return {version:'1.0.0',source:'server',serverUrl:server,enabled:true,phase:'up-to-date',automaticChecks:false,channel:'测试'};},platform:'darwin',arch:'arm64',
    storage:async request=>{
     const response=await fetch('/api/storage'+request.path,{method:request.method,body:request.body?new Uint8Array(request.body):undefined});
     return {status:response.status,contentType:response.headers.get('Content-Type')??'',body:new Uint8Array(await response.arrayBuffer())};
@@ -113,9 +113,9 @@ test('桌面版本与更新使用独立更新地址，不提供版本发布管�
  await expect(page.getByLabel('更新服务器地址',{exact:true})).toHaveValue('');
  await page.getByLabel('更新服务器地址',{exact:true}).fill('https://releases.example');
  await page.getByRole('button',{name:'保存地址',exact:true}).click();
- const request=page.waitForRequest(value=>value.url().includes(encodeURIComponent('https://releases.example'))&&value.url().includes('/api/cloud/releases/latest'));
- await page.getByRole('button',{name:'检查服务器版本',exact:true}).click();await request;
- await expect(page.getByText('暂无匹配的安装包',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'检查服务器版本',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as Window&{serverUpdateAddress?:string}).serverUpdateAddress)).toBe('https://releases.example');
+ await expect(page.getByText('当前已是最新版本',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'发布版本',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'用户管理',exact:true}).click();
  await expect(page.getByText('当前团队服务器：https://team.example',{exact:true})).toBeVisible();

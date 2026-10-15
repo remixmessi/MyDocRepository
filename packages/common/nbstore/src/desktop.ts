@@ -6,6 +6,7 @@ export interface DesktopBridge {
  readonly arch:string;
  updateStatus():Promise<import('./updates').DesktopUpdateState>;
  updateAction(action:'check'|'check-github'|'download'|'install'):Promise<import('./updates').DesktopUpdateState>;
+ checkServerUpdates(server:string):Promise<import('./updates').DesktopUpdateState>;
  setAutomaticUpdateChecks(value:boolean):Promise<import('./updates').DesktopUpdateState>;
  onUpdate(callback:(state:import('./updates').DesktopUpdateState)=>void):()=>void;
  onShowUpdates(callback:()=>void):()=>void;

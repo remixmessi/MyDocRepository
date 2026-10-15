@@ -3,6 +3,7 @@ import {cloudJson,type CloudAccount} from '../../../common/nbstore/src/cloud';
 import {CloudLogin} from './cloud-ui';
 import {ReleaseManagement} from './release-management';
 import {ClientReleaseCheck} from './client-release-check';
+import type {DesktopUpdateState} from '../../../common/nbstore/src/updates';
 
 export function WebReleaseSettings({busy,run:perform}:{busy:boolean;run:(work:()=>Promise<void>)=>void}){
  const [user,setUser]=useState<CloudAccount|null>(),[error,setError]=useState('');
@@ -15,7 +16,7 @@ export function WebReleaseSettings({busy,run:perform}:{busy:boolean;run:(work:()
 }
 
 export function DesktopVersionSettings({busy}:{busy:boolean}){
- const [version,setVersion]=useState<string>(),[error,setError]=useState(''),[retry,setRetry]=useState(0);
- useEffect(()=>{let alive=true;setError('');void window.mydocDesktop!.updateStatus().then(state=>{if(alive)setVersion(state.version);}).catch(()=>{if(alive)setError('无法读取当前客户端版本');});return()=>{alive=false;};},[retry]);
- return <section><h2>版本与更新</h2>{version&&<p>当前版本：{version}</p>}{error&&<p role="alert">{error}<button onClick={()=>setRetry(value=>value+1)}>重试读取</button></p>}<ClientReleaseCheck current={version} locked={busy}/></section>;
+ const [state,setState]=useState<DesktopUpdateState>(),[error,setError]=useState(''),[retry,setRetry]=useState(0);
+ useEffect(()=>{let alive=true;setError('');void window.mydocDesktop!.updateStatus().then(state=>{if(alive)setState(state);}).catch(()=>{if(alive)setError('无法读取当前客户端版本');});const unsubscribe=window.mydocDesktop!.onUpdate(value=>{if(alive)setState(value);});return()=>{alive=false;unsubscribe();};},[retry]);
+ return <section><h2>版本与更新</h2>{state&&<p>当前版本：{state.version}</p>}{error&&<p role="alert">{error}<button onClick={()=>setRetry(value=>value+1)}>重试读取</button></p>}<ClientReleaseCheck state={state} onState={setState} locked={busy||!!state&&['checking','downloading','preparing','installing'].includes(state.phase)}/></section>;
 }

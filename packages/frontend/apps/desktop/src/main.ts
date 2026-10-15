@@ -30,6 +30,7 @@ const appIcon=join(__dirname,'icon.png');
 function trusted(event:Electron.IpcMainInvokeEvent|Electron.IpcMainEvent){return !!window&&event.sender===window.webContents&&event.senderFrame===event.sender.mainFrame&&!!server&&new URL(event.senderFrame.url).origin===server.origin;}
 ipcMain.handle('mydoc:update-status',event=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.updates.status;});
 ipcMain.handle('mydoc:update-action',(event,action:unknown)=>{if(!trusted(event)||!updater||typeof action!=='string'||!['check','check-github','download','install'].includes(action))throw new Error('更新请求无效');return action==='check-github'?updater.checkGitHub():action==='check'?updater.updates.check():action==='download'?updater.updates.download():updater.updates.install();});
+ipcMain.handle('mydoc:update-server',(event,address:unknown)=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.checkServer(address);});
 ipcMain.handle('mydoc:update-settings',(event,value:unknown)=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.updates.configure(value);});
 ipcMain.handle('mydoc:storage',async(event,input):Promise<DesktopStorageReply>=>{
  if(!trusted(event)||!validStorageRequest(input)||!server)throw new Error('桌面存储请求无效');

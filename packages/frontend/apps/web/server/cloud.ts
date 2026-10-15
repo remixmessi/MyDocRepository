@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import {ReleaseUpdateManifests,ReleaseUpdateError,selectUpdateRelease,type UpdateReleaseRow} from './release-updates';
 import * as Y from 'yjs';
 import {randomUUID,randomBytes,createHash,scryptSync,timingSafeEqual} from 'node:crypto';
 import {createReadStream,createWriteStream,mkdirSync,existsSync,unlinkSync} from 'node:fs';
@@ -29,6 +30,7 @@ async function body(req:IncomingMessage,max=8192){const chunks:Buffer[]=[];let s
 async function bodyToFile(req:IncomingMessage,path:string,max=512*1024*1024){return await new Promise<{bytes:number;sha256:string}>((resolve,reject)=>{let bytes=0;const hash=createHash('sha256'),stream=createWriteStream(path,{flags:'wx'});const fail=(error:unknown)=>{stream.destroy();try{unlinkSync(path);}catch{}reject(error);};req.on('data',chunk=>{const data=Buffer.from(chunk);bytes+=data.length;if(bytes>max){req.destroy();fail(new RequestError('版本文件超过 512 MB',413));return;}hash.update(data);stream.write(data);});req.on('end',()=>{stream.end(()=>resolve({bytes,sha256:hash.digest('hex')}));});req.on('error',fail);stream.on('error',fail);});}
 export class CloudServer {
  readonly database:SQLiteProjectDatabase;private readonly releaseDir:string;private streams=new Map<ServerResponse,{user:string;workspace:string;doc:string;expires:number;session:string;sessionId:string}>();private presence=new Map<string,{workspace:string;doc:string;client:number;clock:number;user:string;state:unknown;at:number}>();private attempts=new Map<string,{count:number;until:number}>();private timer:ReturnType<typeof setInterval>;
+ private updateManifests=new ReleaseUpdateManifests();
  readonly mail:MailService;
  constructor(path:string,options:{mail?:MailService;defaultAdmin?:DefaultAdminConfig;mustExist?:boolean;beforeMigration?:(db:SQLiteConnection)=>void}={}){this.mail=options.mail??new MailService();this.database=new SQLiteProjectDatabase(path,path=>new Database(path,{fileMustExist:options.mustExist??false}),upgradeCloudDatabase,{beforeMigration:options.beforeMigration,preserve:{cloud_users:'id,email,name,salt,password',cloud_workspaces:'id,name,created',cloud_members:'workspace,user,role',cloud_workspace_audit:'id,workspace,actor,actor_name,action,details,created'}});this.releaseDir=join(dirname(path),'releases');try{mkdirSync(this.releaseDir,{recursive:true});this.bootstrapAdmin(options.defaultAdmin);}catch(error){this.database.close();throw error;}this.timer=setInterval(()=>{for(const [res,state]of this.streams){if(state.expires<Date.now()||!this.database.db.prepare('SELECT 1 FROM cloud_sessions WHERE token=? AND expires>?').get(state.session,Date.now())||!this.member(state.workspace,state.user)){res.end();this.streams.delete(res);}else res.write(': heartbeat\n\n');}for(const[k,p]of this.presence)if(p.at<Date.now()-30000||!this.member(p.workspace,p.user)){this.broadcastPresence({...p,clock:p.clock+1,state:null});this.presence.delete(k);}for(const[k,v]of this.attempts)if(v.until<Date.now())this.attempts.delete(k);},15000);this.timer.unref();}
  private bootstrapAdmin(config:DefaultAdminConfig|undefined){if(!config)return;
@@ -77,6 +79,21 @@ export class CloudServer {
  private releaseJson(row:ReleaseRow){const {path:_,...release}=row;return {...release,downloadPath:'/api/cloud/releases/download?id='+encodeURIComponent(row.id)};}
  handler=async(req:IncomingMessage,res:ServerResponse)=>{const json=(value:unknown,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};try{
  res.setHeader('Cache-Control','no-store');const url=new URL(req.url??'/','http://local'),route=url.pathname;const origin=req.headers.origin;if(origin&&/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)){res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Access-Control-Allow-Credentials','true');res.setHeader('Access-Control-Allow-Headers','Content-Type,X-Mydoc-Account,X-MyDoc-Version,X-MyDoc-Platform,X-MyDoc-Arch,X-MyDoc-Filename,X-MyDoc-Notes');res.setHeader('Access-Control-Allow-Methods','GET,POST,PATCH,PUT,DELETE,OPTIONS');if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}}else if(origin&&new URL(origin).host!==req.headers.host)throw new RequestError('禁止跨站请求',403);if(req.headers['sec-fetch-site']==='cross-site'&&!origin)throw new RequestError('禁止跨站请求',403);
+ // Generic electron-updater feed, derived from existing release rows without changing their schema.
+ const updateRoute=/^\/releases\/update\/(darwin|win32)\/(arm64|x64)\/(latest-mac\.yml|latest\.yml|[a-f0-9-]{36}\.(?:zip|exe))$/.exec(route);
+ if(updateRoute&&['GET','HEAD'].includes(req.method??'')){
+  const [,platform,arch,file]=updateRoute,extension=platform==='darwin'?'.zip':'.exe';
+  if(file.startsWith('latest')){
+   if(file!==(platform==='darwin'?'latest-mac.yml':'latest.yml'))throw new RequestError('更新清单不存在',404);
+   const rows=this.database.db.prepare('SELECT id,version,platform,arch,filename,notes,bytes,sha256,created,path FROM cloud_releases WHERE platform=? AND arch=?').all(platform,arch) as UpdateReleaseRow[];
+   try{const row=selectUpdateRelease(rows,platform,arch);const manifest=await this.updateManifests.create(row);res.writeHead(200,{'Content-Type':'application/yaml'});res.end(req.method==='HEAD'?undefined:JSON.stringify(manifest));}catch(error){if(error instanceof ReleaseUpdateError)throw new RequestError(error.message,error.status);if((error as NodeJS.ErrnoException).code==='ENOENT')throw new RequestError('更新文件不存在，请管理员重新上传',404);throw new RequestError('更新清单生成失败，请稍后重试',500);}return;
+  }
+  const row=this.release(file.slice(0,-4));
+  if(!row||row.platform!==platform||row.arch!==arch||!file.endsWith(extension)||!row.filename.toLowerCase().endsWith(extension)||!existsSync(row.path))throw new RequestError('更新文件不存在或架构不匹配',404);
+  res.setHeader('Accept-Ranges','bytes');let start=0,end=row.bytes-1,status=200;
+  if(req.headers.range){const range=/^bytes=(\d+)-(\d*)$/.exec(req.headers.range);start=range?Number(range[1]):-1;end=range&&range[2]?Number(range[2]):end;if(start<0||!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||end<start||start>=row.bytes){res.writeHead(416,{'Content-Range':'bytes */'+row.bytes});res.end();return;}end=Math.min(end,row.bytes-1);status=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${row.bytes}`);}
+  res.writeHead(status,{'Content-Type':'application/octet-stream','Content-Length':String(end-start+1)});if(req.method==='HEAD'){res.end();return;}const stream=createReadStream(row.path,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);return;
+ }
  // 版本检查接口不需要登录，供桌面客户端在配置更新服务器后读取最新版本。
  if(route==='/releases/latest'&&req.method==='GET'){
   const platform=(url.searchParams.get('platform')??'').trim();if(!['darwin','win32','linux'].includes(platform))throw new RequestError('平台参数无效');
