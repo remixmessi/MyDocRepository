@@ -111,7 +111,7 @@ jobs:
   publish:
     name: Attach installers to GitHub Release
     needs: [prepare, desktop]
-    if: needs.prepare.outputs.release_tag != ''
+    if: github.event_name == 'release' && github.event.action == 'published' && needs.prepare.outputs.release_tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -138,16 +138,8 @@ jobs:
           done
           cd release-assets
           sha256sum ./* > SHA256SUMS.txt
-      - name: Create release or upload to existing release
+      - name: Upload to manually published release
         shell: bash
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release-assets/* --clobber
-          else
-            notes="docs/releases/${RELEASE_TAG#v}.md"
-            if test -f "$notes"; then
-              gh release create "$RELEASE_TAG" release-assets/* --verify-tag --title "MyDoc $RELEASE_TAG" --notes-file "$notes"
-            else
-              gh release create "$RELEASE_TAG" release-assets/* --verify-tag --title "MyDoc $RELEASE_TAG" --generate-notes
-            fi
-          fi
+          gh release view "$RELEASE_TAG" >/dev/null
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
