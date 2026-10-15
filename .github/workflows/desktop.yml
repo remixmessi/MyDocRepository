@@ -1,7 +1,11 @@
 name: Desktop builds
 on:
   workflow_dispatch:
+  release:
+    types: [published]
   push:
+    branches: ['**']
+    tags: ['v*', '[0-9]*']
     paths:
       - 'packages/**'
       - 'scripts/build-desktop.mjs'
@@ -34,7 +38,32 @@ on:
 permissions:
   contents: read
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || '' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const tag = process.env.RELEASE_TAG;
+          if (!tag) process.exit(0);
+          const { version } = JSON.parse(readFileSync('packages/frontend/apps/desktop/package.json', 'utf8'));
+          if (!/^v?\d+\.\d+\.\d+$/.test(tag) || tag.replace(/^v/, '') !== version) {
+            throw new Error(`Release tag ${tag} must match desktop version ${version} (v${version} or ${version}).`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_tag=${tag}\n`);
+          NODE
   desktop:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -79,3 +108,46 @@ jobs:
         with:
           name: desktop-test-results-${{ runner.os }}-${{ matrix.arch }}
           path: test-results/
+  publish:
+    name: Attach installers to GitHub Release
+    needs: [prepare, desktop]
+    if: needs.prepare.outputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: desktop-release-${{ needs.prepare.outputs.release_tag }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: MyDoc-*
+          merge-multiple: true
+          path: release-assets
+      - name: Check installers and generate checksums
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          for asset in "MyDoc-$version-mac-arm64.dmg" "MyDoc-$version-mac-x64.dmg" "MyDoc-$version-win-x64.exe"; do
+            test -s "release-assets/$asset" || { echo "Missing installer: $asset"; exit 1; }
+          done
+          cd release-assets
+          sha256sum ./* > SHA256SUMS.txt
+      - name: Create release or upload to existing release
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            notes="docs/releases/${RELEASE_TAG#v}.md"
+            if test -f "$notes"; then
+              gh release create "$RELEASE_TAG" release-assets/* --verify-tag --title "MyDoc $RELEASE_TAG" --notes-file "$notes"
+            else
+              gh release create "$RELEASE_TAG" release-assets/* --verify-tag --title "MyDoc $RELEASE_TAG" --generate-notes
+            fi
+          fi
