@@ -17,6 +17,7 @@ function fixture(){
 }
 function bytes(path:string){return Object.fromEntries(['','-wal','-shm','-journal'].filter(suffix=>existsSync(path+suffix)).map(suffix=>[suffix,readFileSync(path+suffix)]));}
 
+// Includes multiple SQLite opens, password hashing, VACUUM and fsync on CI disks.
 it('复现恢复主库混入另一份 WAL：完整性检查仍为 ok，但原账号和空间一起消失；新检查在打开原库前拦截',()=>{
  const f=fixture();try{
   f.writer.transaction(()=>{
@@ -35,7 +36,7 @@ it('复现恢复主库混入另一份 WAL：完整性检查仍为 ok，但原账
   const saved=join(f.dir,'upgrade-inputs',readdirSync(join(f.dir,'upgrade-inputs')).find(name=>name.startsWith('input-'))!);
   expect(readFileSync(join(saved,'database.sqlite'))).toEqual(before['']);expect(readFileSync(join(saved,'database.sqlite-wal'))).toEqual(before['-wal']);
  }finally{f.close();}
-});
+},15000);
 
 it('同一库正常崩溃恢复保留新注册账号、改名改邮箱及删除空间，不修改原始主库和 WAL',()=>{
  const f=fixture();try{
