@@ -20,9 +20,9 @@ export function DesktopUpdateDialog({state,onState,onClose}:{state?:DesktopUpdat
    <header className="client-version-header"><div><span>当前安装版本</span><strong>{state?'MyDoc '+state.version:'正在读取…'}</strong></div><small>{window.mydocDesktop?.arch?releaseTarget(window.mydocDesktop.platform,window.mydocDesktop.arch):'读取设备信息…'}</small></header>
    {error&&<p role="alert" className="release-feedback error">{error}</p>}
    {!state&&error&&<button className="release-secondary" disabled={requesting} onClick={()=>void readStatus()}>重试读取</button>}
-   <GitHubReleaseCheck current={state?.version} locked={busy}/>
+   <GitHubReleaseCheck state={state} onState={onState} locked={busy}/>
    <ClientReleaseCheck current={state?.version} locked={busy}/>
-   {state&&<details className="automatic-update-section" open={state.enabled?true:undefined}>
+   {state&&state.source!=='github'&&<details className="automatic-update-section" open={state.enabled?true:undefined}>
     <summary><span>自动更新渠道</span><small>{state.enabled?state.channel:'尚未启用'}</small><ChevronDown size={14}/></summary>
     <div className="desktop-update"><VersionSummary state={state}/><UpdateStatus state={state}/>
      <label className="update-auto"><input type="checkbox" disabled={busy||!state.enabled} checked={state.automaticChecks} onChange={event=>{const value=event.target.checked;setRequesting(true);setError('');void window.mydocDesktop!.setAutomaticUpdateChecks(value).then(onState).catch(()=>setError('设置保存失败，请重试。')).finally(()=>setRequesting(false));}}/>自动检查更新</label>

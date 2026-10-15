@@ -12,6 +12,7 @@ on:
       - 'scripts/desktop/**'
       - 'tests/desktop/**'
       - 'tests/*desktop*.test.ts'
+      - 'tests/github*.test.ts'
       - 'tests/database-backups.test.ts'
       - 'tests/sqlite-storage.test.ts'
       - 'tests/fixtures/pdf-preview.pdf'
@@ -27,6 +28,7 @@ on:
       - 'scripts/desktop/**'
       - 'tests/desktop/**'
       - 'tests/*desktop*.test.ts'
+      - 'tests/github*.test.ts'
       - 'tests/database-backups.test.ts'
       - 'tests/sqlite-storage.test.ts'
       - 'tests/fixtures/pdf-preview.pdf'
@@ -87,7 +89,7 @@ jobs:
       - run: node node_modules/electron/install.js
       - run: corepack yarn typecheck
       - run: corepack yarn test
-      - run: node --test scripts/desktop/mac-architecture.test.mjs scripts/desktop/mac-identity.test.mjs
+      - run: node --test scripts/desktop/mac-architecture.test.mjs scripts/desktop/mac-identity.test.mjs scripts/desktop/prepare-release-assets.test.mjs
       - run: corepack yarn desktop:build
       - run: corepack yarn test:desktop
       - if: runner.os == 'macOS'
@@ -101,6 +103,7 @@ jobs:
             release/desktop/*.dmg
             release/desktop/*.zip
             release/desktop/*.exe
+            release/desktop/*.yml
             release/desktop/*.blockmap
           if-no-files-found: error
       - if: failure()
@@ -127,17 +130,20 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: MyDoc-*
-          merge-multiple: true
-          path: release-assets
-      - name: Check installers and generate checksums
+          path: release-artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: corepack yarn install --immutable --mode=skip-builds
+      - name: Merge update manifests and verify installers
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"
+          node scripts/desktop/prepare-release-assets.mjs release-artifacts release-assets "$version"
           for asset in "MyDoc-$version-mac-arm64.dmg" "MyDoc-$version-mac-x64.dmg" "MyDoc-$version-win-x64.exe"; do
             test -s "release-assets/$asset" || { echo "Missing installer: $asset"; exit 1; }
           done
-          cd release-assets
-          sha256sum ./* > SHA256SUMS.txt
       - name: Upload to manually published release
         shell: bash
         run: |

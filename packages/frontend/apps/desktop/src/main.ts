@@ -2,7 +2,7 @@ import {spawn} from 'node:child_process';
 import {createDesktopUpdates} from './update-runtime';
 import {DocumentLinkQueue,commandLineLinks} from './deep-links';
 import {OpenFileQueue,commandLineFiles} from './open-files';
-import {app,BrowserWindow,Menu,ipcMain,dialog,shell} from 'electron';
+import {app,BrowserWindow,Menu,ipcMain,dialog,shell,net} from 'electron';
 import {dirname,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
@@ -29,7 +29,7 @@ const pendingClose=new Map<string,{resolve:(result:{ok:boolean;error?:string})=>
 const appIcon=join(__dirname,'icon.png');
 function trusted(event:Electron.IpcMainInvokeEvent|Electron.IpcMainEvent){return !!window&&event.sender===window.webContents&&event.senderFrame===event.sender.mainFrame&&!!server&&new URL(event.senderFrame.url).origin===server.origin;}
 ipcMain.handle('mydoc:update-status',event=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.updates.status;});
-ipcMain.handle('mydoc:update-action',(event,action:unknown)=>{if(!trusted(event)||!updater||typeof action!=='string'||!['check','download','install'].includes(action))throw new Error('更新请求无效');return action==='check'?updater.updates.check():action==='download'?updater.updates.download():updater.updates.install();});
+ipcMain.handle('mydoc:update-action',(event,action:unknown)=>{if(!trusted(event)||!updater||typeof action!=='string'||!['check','check-github','download','install'].includes(action))throw new Error('更新请求无效');return action==='check-github'?updater.checkGitHub():action==='check'?updater.updates.check():action==='download'?updater.updates.download():updater.updates.install();});
 ipcMain.handle('mydoc:update-settings',(event,value:unknown)=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.updates.configure(value);});
 ipcMain.handle('mydoc:storage',async(event,input):Promise<DesktopStorageReply>=>{
  if(!trusted(event)||!validStorageRequest(input)||!server)throw new Error('桌面存储请求无效');
@@ -112,7 +112,7 @@ if(!app.requestSingleInstanceLock())app.quit();else{
   if(app.isPackaged)app.setAsDefaultProtocolClient('mydoc');
   if(process.platform==='darwin')app.dock?.setIcon(appIcon);
   while(!database){try{const path=!app.isPackaged&&process.env.MYDOC_DESKTOP_DB_PATH?resolve(process.env.MYDOC_DESKTOP_DB_PATH):desktopDatabasePath(app.isPackaged,resolve(__dirname,'../../../../..'),app.getPath('userData'));if(app.isPackaged)migrateLegacyDesktopDatabase(dirname(app.getPath('exe')),app.getPath('userData'));database=new SQLiteProjectDatabase(path,connectDesktopDatabase);}catch(error){const result=await dialog.showMessageBox({type:'error',title:'数据库打开失败',message:'无法打开本地数据库',detail:error instanceof Error?error.message:String(error),buttons:['重试','退出'],defaultId:0,cancelId:1});if(result.response===1){allowingQuit=true;app.quit();return;}}}
-  try{server=await startDesktopServer(join(__dirname,'renderer'),database,electronCloudRequest);updater=createDesktopUpdates({
+  try{server=await startDesktopServer(join(__dirname,'renderer'),database,electronCloudRequest,(url,options)=>net.fetch(url instanceof URL?url.href:url,options));updater=createDesktopUpdates({
    notify:state=>{if(state.phase==='installing'){allowingQuit=true;if(database){database.restoring=true;updateOwnsDatabaseLock=true;}}window?.webContents.send('mydoc:update-state',state);},
    release:()=>{if(!updateOwnsClose)return;updateOwnsClose=false;allowingQuit=false;closing=false;if(updateOwnsDatabaseLock&&database)database.restoring=false;updateOwnsDatabaseLock=false;window?.webContents.send('mydoc:update-unlock');},
    prepare:async()=>{if(closing||!server||!window)throw new Error('正在处理其他操作，请稍后安装更新。');updateOwnsClose=true;closing=true;if(!await saveBeforeClose(true))throw new Error('保存未完成，已保留当前窗口，请完成保存后重试。');await server.backups.create('before-update');},

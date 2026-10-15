@@ -6,13 +6,14 @@ import {ServerConnections} from './server-connections';
 import {LocalAccountPanel} from './local-account-ui';
 import {CloudLogin} from './cloud-ui';
 import {AccountSettings} from './account-settings';
+import {ServerWorkspaceSettings} from './server-workspace-settings';
 import {ServerAdminSettings} from './server-admin-settings';
 import {WebReleaseSettings,DesktopVersionSettings} from './version-settings';
 import type {ThemeMode} from './theme';
 import type {LocalWorkspace} from './workspace';
 import {OrganizationPanel} from './organization-ui';
 
-export type SettingsTab='local'|'server'|'appearance'|'organization'|'users'|'releases';
+export type SettingsTab='local'|'server'|'appearance'|'organization'|'users'|'spaces'|'releases';
 export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,onThemeSave,workspaces,activeWorkspaceId,workspace,initialTab='local'}:{onClose:()=>void;onRefresh:()=>Promise<void>;onCloudSessionChanged?:()=>Promise<void>;theme:ThemeMode;onThemeSave:(mode:ThemeMode)=>Promise<void>;workspaces:CloudWorkspace[];activeWorkspaceId?:string;workspace?:LocalWorkspace|null;initialTab?:SettingsTab}){
  const [tab,setTab]=useState<SettingsTab>(initialTab),[expanded,setExpanded]=useState(true),[user,setUser]=useState<CloudAccount|null>(),[mail,setMail]=useState<CloudMailStatus>({configured:false}),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [sessionError,setSessionError]=useState('');
@@ -29,8 +30,9 @@ export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,on
    <p className="settings-nav-label">管理</p>
    <button aria-current={tab==='organization'?'page':undefined} disabled={busy||!workspace||workspace.readOnly} onClick={()=>select('organization')}><Tags size={17}/><span>标签与集合</span></button>
    <button aria-current={tab==='users'?'page':undefined} disabled={busy} onClick={()=>select('users')}><Users size={17}/><span>用户管理</span></button>
+   {user?.serverAdmin&&<button aria-current={tab==='spaces'?'page':undefined} disabled={busy} onClick={()=>select('spaces')}><Users size={17}/><span>所有团队空间</span></button>}
    <button aria-current={tab==='releases'?'page':undefined} disabled={busy} onClick={()=>select('releases')}><Package size={17}/><span>{window.mydocDesktop?'版本与更新':'版本维护'}</span></button>
-   <p className="settings-nav-note">团队空间的成员与邀请，请在工作区菜单中管理。</p>
+   <p className="settings-nav-note">{user?.serverAdmin?'所有团队空间提供服务器全局管理；日常协作请使用工作区菜单。':'团队空间的成员与邀请，请在工作区菜单中管理。'}</p>
   </nav>
   <div className="settings-body" aria-busy={busy}>
    {error&&<p className="form-error" role="alert">{error}</p>}
@@ -43,6 +45,7 @@ export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,on
     {window.mydocDesktop&&!cloudServerUrl()?<p role="status">请先添加远程服务器，再登录服务器账号。</p>:sessionError?<p role="alert">{sessionError}<button disabled={busy} onClick={()=>run(load)}>重试读取账号</button></p>:user===undefined?<p role="status">正在读取服务器账号…</p>:user?<><AccountSettings key={user.id} account={user} mail={mail} busy={busy} run={run} onBack={()=>select('local')} onChanged={load} onSignedOut={async()=>{await onCloudSessionChanged?.();await load();onClose();}}/><button disabled={busy} onClick={()=>run(async()=>{await onRefresh();await cloudJson('/logout','POST');await onCloudSessionChanged?.();await load();onClose();})}>退出服务器账号</button></>:<CloudLogin beforeSession={onRefresh} onLogin={async()=>{await load();await onCloudSessionChanged?.();}}/>}
    </>}
    {tab==='users'&&<><p className="organization-help">当前团队服务器：{cloudServerUrl()||(window.mydocDesktop?'未连接远程服务器':location.origin)}</p>{sessionError?<p role="alert">账号读取失败：{sessionError}<button disabled={busy} onClick={()=>run(load)}>重试读取账号</button></p>:user===undefined?<p role="status">正在读取管理权限…</p>:!user?<section><h2>用户管理</h2><p className="organization-help">服务器地址已选定，请登录该服务器账号。</p><button onClick={()=>{setExpanded(true);select('server');}}>登录服务器账号</button></section>:!user.serverAdmin?<section><h2>用户管理</h2><p role="status">已登录 {user.email}，当前账号没有服务器用户管理权限。请联系该服务器管理员授权。</p></section>:<ServerAdminSettings accountId={user.id} busy={busy} run={run} workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} onBack={()=>select('server')}/>}</>}
+   {tab==='spaces'&&(sessionError?<p role="alert">{sessionError}<button disabled={busy} onClick={()=>run(load)}>重试</button></p>:user===undefined?<p role="status">正在读取管理权限…</p>:user?.serverAdmin?<ServerWorkspaceSettings key={user.id} busy={busy} run={run} onChanged={onCloudSessionChanged??onRefresh}/>:<p role="status">需要当前服务器的管理员权限。</p>)}
    {tab==='releases'&&(window.mydocDesktop?<DesktopVersionSettings busy={busy}/>:<WebReleaseSettings busy={busy} run={run}/>)}
   </div>
  </div></Modal>;

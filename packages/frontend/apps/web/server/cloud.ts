@@ -30,7 +30,7 @@ async function bodyToFile(req:IncomingMessage,path:string,max=512*1024*1024){ret
 export class CloudServer {
  readonly database:SQLiteProjectDatabase;private readonly releaseDir:string;private streams=new Map<ServerResponse,{user:string;workspace:string;doc:string;expires:number;session:string;sessionId:string}>();private presence=new Map<string,{workspace:string;doc:string;client:number;clock:number;user:string;state:unknown;at:number}>();private attempts=new Map<string,{count:number;until:number}>();private timer:ReturnType<typeof setInterval>;
  readonly mail:MailService;
- constructor(path:string,options:{mail?:MailService;defaultAdmin?:DefaultAdminConfig;mustExist?:boolean;beforeMigration?:(db:SQLiteConnection)=>void}={}){this.mail=options.mail??new MailService();this.database=new SQLiteProjectDatabase(path,path=>new Database(path,{fileMustExist:options.mustExist??false}),upgradeCloudDatabase,{beforeMigration:options.beforeMigration,preserve:{cloud_users:'id,email,name,salt,password',cloud_workspaces:'id,name,created',cloud_members:'workspace,user,role'}});this.releaseDir=join(dirname(path),'releases');try{mkdirSync(this.releaseDir,{recursive:true});this.bootstrapAdmin(options.defaultAdmin);}catch(error){this.database.close();throw error;}this.timer=setInterval(()=>{for(const [res,state]of this.streams){if(state.expires<Date.now()||!this.database.db.prepare('SELECT 1 FROM cloud_sessions WHERE token=? AND expires>?').get(state.session,Date.now())||!this.member(state.workspace,state.user)){res.end();this.streams.delete(res);}else res.write(': heartbeat\n\n');}for(const[k,p]of this.presence)if(p.at<Date.now()-30000||!this.member(p.workspace,p.user)){this.broadcastPresence({...p,clock:p.clock+1,state:null});this.presence.delete(k);}for(const[k,v]of this.attempts)if(v.until<Date.now())this.attempts.delete(k);},15000);this.timer.unref();}
+ constructor(path:string,options:{mail?:MailService;defaultAdmin?:DefaultAdminConfig;mustExist?:boolean;beforeMigration?:(db:SQLiteConnection)=>void}={}){this.mail=options.mail??new MailService();this.database=new SQLiteProjectDatabase(path,path=>new Database(path,{fileMustExist:options.mustExist??false}),upgradeCloudDatabase,{beforeMigration:options.beforeMigration,preserve:{cloud_users:'id,email,name,salt,password',cloud_workspaces:'id,name,created',cloud_members:'workspace,user,role',cloud_workspace_audit:'id,workspace,actor,actor_name,action,details,created'}});this.releaseDir=join(dirname(path),'releases');try{mkdirSync(this.releaseDir,{recursive:true});this.bootstrapAdmin(options.defaultAdmin);}catch(error){this.database.close();throw error;}this.timer=setInterval(()=>{for(const [res,state]of this.streams){if(state.expires<Date.now()||!this.database.db.prepare('SELECT 1 FROM cloud_sessions WHERE token=? AND expires>?').get(state.session,Date.now())||!this.member(state.workspace,state.user)){res.end();this.streams.delete(res);}else res.write(': heartbeat\n\n');}for(const[k,p]of this.presence)if(p.at<Date.now()-30000||!this.member(p.workspace,p.user)){this.broadcastPresence({...p,clock:p.clock+1,state:null});this.presence.delete(k);}for(const[k,v]of this.attempts)if(v.until<Date.now())this.attempts.delete(k);},15000);this.timer.unref();}
  private bootstrapAdmin(config:DefaultAdminConfig|undefined){if(!config)return;
   const validated=defaultAdminConfig({MYDOC_ADMIN_EMAIL:config.email,MYDOC_ADMIN_PASSWORD:config.password,MYDOC_ADMIN_NAME:config.name})!;
   this.database.db.transaction(()=>{
@@ -126,11 +126,80 @@ export class CloudServer {
   if(!user.serverAdmin)throw new RequestError('需要服务器管理员权限',403);const id=text(JSON.parse((await body(req)).toString()).id,100),row=this.release(id);if(!row)throw new RequestError('版本不存在',404);
   this.database.db.prepare('DELETE FROM cloud_releases WHERE id=?').run(id);try{unlinkSync(row.path);}catch{}json({ok:true});return;
  }
+ // 全局空间管理独立鉴权，不改变正文、附件和同步的成员校验。
+ if(route.startsWith('/admin/workspace')){
+  const requireAdmin=()=>{const current=this.require(req);if(!current.serverAdmin)throw new RequestError('需要服务器管理员权限',403);return current;};
+  requireAdmin();const db=this.database.db;
+  const page=()=>{const offset=Number(url.searchParams.get('offset')??0);if(!Number.isSafeInteger(offset)||offset<0)throw new RequestError('分页参数无效');return offset;};
+  if(route==='/admin/workspaces'&&req.method==='GET'){
+   const offset=page(),query=(url.searchParams.get('q')??'').trim().toLowerCase();if(query.length>160)throw new RequestError('搜索内容过长');
+   const filter='instr(lower(w.name),?)>0 OR instr(lower(w.id),?)>0';
+   const spaces=db.prepare(`SELECT w.id,w.name,w.created AS createdAt,(SELECT count(*) FROM cloud_members m WHERE m.workspace=w.id) AS memberCount,(SELECT u.name FROM cloud_members m JOIN cloud_users u ON u.id=m.user WHERE m.workspace=w.id AND m.role='owner') AS ownerName,(SELECT u.email FROM cloud_members m JOIN cloud_users u ON u.id=m.user WHERE m.workspace=w.id AND m.role='owner') AS ownerEmail FROM cloud_workspaces w WHERE ${filter} ORDER BY w.created DESC,w.id LIMIT 20 OFFSET ?`).all(query,query,offset);
+   const total=(db.prepare(`SELECT count(*) total FROM cloud_workspaces w WHERE ${filter}`).get(query,query) as {total:number}).total;
+   json({spaces,total,offset,limit:20});return;
+  }
+  if(route==='/admin/workspace-audit'&&req.method==='GET'){
+   const offset=page(),workspace=url.searchParams.get('workspace');
+   const filter=workspace?' WHERE workspace=?':'',params=workspace?[text(workspace,100)]:[];
+   const entries=db.prepare('SELECT id,workspace,actor_name AS actorName,action,details,created AS createdAt FROM cloud_workspace_audit'+filter+' ORDER BY created DESC,id DESC LIMIT 20 OFFSET ?').all(...params,offset);
+   const total=(db.prepare('SELECT count(*) total FROM cloud_workspace_audit'+filter).get(...params) as {total:number}).total;
+   json({entries,total,offset,limit:20});return;
+  }
+  const workspace=text(url.searchParams.get('workspace'),100);
+  const getSpace=()=>{const space=db.prepare('SELECT id,name,created AS createdAt FROM cloud_workspaces WHERE id=?').get(workspace) as {id:string;name:string;createdAt:number}|undefined;if(!space)throw new RequestError('工作空间不存在',404);return space;};
+  if(route==='/admin/workspace'&&req.method==='GET'){
+   const space=getSpace();
+   const members=db.prepare('SELECT u.id,u.name,u.email,m.role FROM cloud_members m JOIN cloud_users u ON u.id=m.user WHERE m.workspace=? ORDER BY u.name,u.id').all(workspace);
+   const documents=db.prepare("SELECT count(*) count FROM documents WHERE scope=? AND id LIKE 'doc:%'").get('cloud:'+workspace) as {count:number};
+   const storage=db.prepare('SELECT (SELECT coalesce(sum(length(data)),0) FROM documents WHERE scope=?) + (SELECT coalesce(sum(coalesce(f.size,length(a.data))),0) FROM assets a LEFT JOIN asset_files f ON a.scope=f.scope AND a.workspace=f.workspace AND a.id=f.id WHERE a.scope=?) AS bytes').get('cloud:'+workspace,'cloud:'+workspace) as {bytes:number};
+   json({...space,members,documents:documents.count,storageBytes:storage.bytes});return;
+  }
+  if((route==='/admin/workspace'&&['PATCH','DELETE'].includes(req.method??''))||(route==='/admin/workspace-member'&&['PUT','PATCH','DELETE'].includes(req.method??''))||(route==='/admin/workspace-owner'&&req.method==='POST')){
+   const input=JSON.parse((await body(req)).toString());let action='',details='';
+   db.transaction(()=>{
+    const actor=requireAdmin(),space=getSpace();
+    if(route==='/admin/workspace'){
+     if(req.method==='PATCH'){const name=text(input.name);db.prepare('UPDATE cloud_workspaces SET name=? WHERE id=?').run(name,workspace);action='rename';details=`空间名称：${space.name} → ${name}`;}
+     else{
+      if(input.confirmName!==space.name)throw new RequestError('请输入当前工作空间名称以确认删除');
+      for(const table of ['cloud_members','cloud_invites','cloud_deleted','cloud_document_permissions','cloud_asset_owners'])db.prepare(`DELETE FROM ${table} WHERE workspace=?`).run(workspace);
+      db.prepare('DELETE FROM cloud_workspaces WHERE id=?').run(workspace);db.prepare('DELETE FROM documents WHERE scope=?').run('cloud:'+workspace);this.database.attachments.remove('cloud:'+workspace);
+      action='delete';details=`永久删除空间：${space.name}`;
+     }
+    }else{
+     const target=text(input.user,100),account=db.prepare('SELECT name,email FROM cloud_users WHERE id=?').get(target) as {name:string;email:string}|undefined;
+     if(!account)throw new RequestError('用户不存在',404);
+     const old=this.member(workspace,target),label=`${account.name}（${account.email}）`;
+     if(route==='/admin/workspace-owner'){
+      if(input.confirmName!==space.name)throw new RequestError('请输入当前工作空间名称以确认变更所有者');
+      if(old?.role==='owner')throw new RequestError('此用户已是所有者');
+      const previous=db.prepare("SELECT user FROM cloud_members WHERE workspace=? AND role='owner'").all(workspace) as {user:string}[];
+      db.prepare("UPDATE cloud_members SET role='admin' WHERE workspace=? AND role='owner'").run(workspace);
+      db.prepare("INSERT INTO cloud_members(workspace,user,role) VALUES (?,?,'owner') ON CONFLICT(workspace,user) DO UPDATE SET role='owner'").run(workspace,target);
+      action='owner';details=`重新指定所有者：${label}；原所有者：${previous.map(row=>row.user).join('、')||'无'}`;
+     }else{
+      if(old?.role==='owner')throw new RequestError('请通过重新指定所有者操作变更所有者');
+      if(req.method==='DELETE'){if(!old)throw new RequestError('成员不存在',404);db.prepare('DELETE FROM cloud_members WHERE workspace=? AND user=?').run(workspace,target);db.prepare('DELETE FROM cloud_document_permissions WHERE workspace=? AND user=?').run(workspace,target);action='remove';details=`移除成员：${label}（${old.role}）`;}
+      else{
+       if(!['admin','member','viewer'].includes(input.role))throw new RequestError('成员角色无效');
+       if(req.method==='PATCH'&&!old)throw new RequestError('成员不存在',404);
+       if(req.method==='PUT'&&old)throw new RequestError('用户已在空间中');
+       db.prepare('INSERT INTO cloud_members(workspace,user,role) VALUES (?,?,?) ON CONFLICT(workspace,user) DO UPDATE SET role=excluded.role').run(workspace,target,input.role);
+       action=old?'role':'add';details=`${old?'修改角色':'添加成员'}：${label}（${old?old.role+' → ':''}${input.role}）`;
+      }
+     }
+    }
+    db.prepare('INSERT INTO cloud_workspace_audit(id,workspace,actor,actor_name,action,details,created) VALUES (?,?,?,?,?,?,?)').run(randomUUID(),workspace,actor.id,actor.name,action,`空间“${space.name}”：${details}`,Date.now());
+   }).immediate();
+   this.disconnect(workspace);json({ok:true});return;
+  }
+  throw new RequestError('管理接口不存在',404);
+ }
  if(route==='/admin/users'&&req.method==='GET'){
   if(!user.serverAdmin)throw new RequestError('需要服务器管理员权限',403);
   const offset=Number(url.searchParams.get('offset')??0);if(!Number.isSafeInteger(offset)||offset<0)throw new RequestError('分页参数无效');
   const query=(url.searchParams.get('q')??'').trim().toLowerCase();if(query.length>254)throw new RequestError('搜索内容过长');
-  const workspace=url.searchParams.get('workspace');if(workspace)this.authorize(workspace,user.id);
+  const workspace=url.searchParams.get('workspace');if(workspace&&!this.database.db.prepare('SELECT 1 FROM cloud_workspaces WHERE id=?').get(workspace))throw new RequestError('工作空间不存在',404);
   const filter="(instr(lower(email),?)>0 OR instr(lower(name),?)>0)"+(workspace?' AND EXISTS(SELECT 1 FROM cloud_members m WHERE m.workspace=? AND m.user=cloud_users.id)':'');
   const params=workspace?[query,query,workspace]:[query,query];
   const users=this.database.db.prepare("SELECT id,email,name,verified,created AS createdAt,server_admin AS serverAdmin,EXISTS(SELECT 1 FROM cloud_bootstrap b WHERE b.user=cloud_users.id AND b.key='default-admin') AS defaultAdmin FROM cloud_users WHERE "+filter+" ORDER BY created,id LIMIT 100 OFFSET ?").all(...params,offset);

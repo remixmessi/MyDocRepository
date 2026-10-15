@@ -10,7 +10,7 @@ it('文档授权结构迁移有版本记录，重启保留既有授权和文档'
  const dir=mkdtempSync(join(tmpdir(),'mydoc-permission-migration-')),path=join(dir,'cloud.sqlite');let cloud=new CloudServer(path);
  try{cloud.database.db.prepare('INSERT INTO cloud_document_permissions VALUES (?,?,?,?)').run('workspace','doc:existing','member','viewer');cloud.database.db.prepare('INSERT INTO cloud_asset_owners VALUES (?,?,?,?)').run('workspace','asset','doc:existing','member');const doc=new Y.Doc();doc.getText('body').insert(0,'升级保留正文');cloud.database.append('cloud:workspace','doc:existing',Y.encodeStateAsUpdate(doc));doc.destroy();cloud.close();cloud=new CloudServer(path);
   expect(cloud.database.db.prepare('SELECT doc,user FROM cloud_asset_owners').get()).toEqual({doc:'doc:existing',user:'member'});
-  expect(cloud.database.db.prepare('SELECT version FROM cloud_migrations').all()).toEqual([{version:1},{version:2},{version:3},{version:4},{version:5},{version:6}]);expect(cloud.database.db.prepare('SELECT role FROM cloud_document_permissions').get()).toEqual({role:'viewer'});expect(cloud.database.load('cloud:workspace','doc:existing')).not.toBeNull();
+  expect(cloud.database.db.prepare('SELECT version FROM cloud_migrations').all()).toEqual([{version:1},{version:2},{version:3},{version:4},{version:5},{version:6},{version:7}]);expect(cloud.database.db.prepare('SELECT role FROM cloud_document_permissions').get()).toEqual({role:'viewer'});expect(cloud.database.load('cloud:workspace','doc:existing')).not.toBeNull();
  }finally{cloud.close();rmSync(dir,{recursive:true,force:true});}
 });
 

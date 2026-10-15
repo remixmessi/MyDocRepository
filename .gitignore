@@ -89,3 +89,9 @@ data/attachments/
 !/tests/markdown-export.test.ts
 
 !/tests/uninstall-data.test.ts
+
+!/tests/github-update-runtime.test.ts
+!/tests/github-releases.test.ts
+
+!/tests/global-workspace-admin.test.ts
+!/tests/e2e/global-workspace-admin.spec.ts

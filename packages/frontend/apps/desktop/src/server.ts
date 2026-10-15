@@ -1,3 +1,4 @@
+import {createGitHubReleaseFallback} from './github-release-fallback';
 import {DatabaseBackups} from '../../../../common/nbstore/server/backups';
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
@@ -9,7 +10,8 @@ import {clipperHandler} from '../../web/clipper-server';
 import {staticFile} from './policy';
 import {proxyCloudRequest,type CloudRequestFactory} from './cloud-proxy';
 const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon'};
-export async function startDesktopServer(root:string,database:SQLiteProjectDatabase,requestCloud?:CloudRequestFactory){
+export async function startDesktopServer(root:string,database:SQLiteProjectDatabase,requestCloud?:CloudRequestFactory,requestGitHub:typeof fetch=fetch){
+ const githubFallback=createGitHubReleaseFallback(requestGitHub);
  const backups=new DatabaseBackups(database,database.connect);backups.start();
  const token=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
  const server=createServer(async(req,res)=>{
@@ -19,6 +21,14 @@ export async function startDesktopServer(root:string,database:SQLiteProjectDatab
    if(url.pathname.startsWith('/api/storage/')){if(req.headers.authorization!=='Bearer '+token){res.writeHead(403);res.end();return;}req.url=url.pathname.slice('/api/storage'.length)+url.search;await storageHandler(database,false,backups)(req,res);return;}
    if(url.pathname==='/'&&url.searchParams.get('desktopKey')===cookieToken){res.writeHead(303,{'Set-Cookie':`mydoc-desktop=${cookieToken}; HttpOnly; SameSite=Strict; Path=/`,'Location':'/'});res.end();return;}
    if(!req.headers.cookie?.split(';').some(c=>c.trim()==='mydoc-desktop='+cookieToken)){res.writeHead(403);res.end();return;}
+   if(url.pathname==='/api/github-releases/latest'){
+    if(req.method!=='GET'){res.writeHead(405);res.end();return;}
+    if(req.headers.origin&&req.headers.origin!==origin||req.headers['sec-fetch-site']==='cross-site'){res.writeHead(403);res.end();return;}
+    res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
+    try {res.end(JSON.stringify(await githubFallback(url.searchParams.get('platform')??'',url.searchParams.get('arch')??'')));}
+    catch(error){res.writeHead(502);res.end(JSON.stringify({error:error instanceof Error&&error.name!=='TimeoutError'?error.message:'GitHub 页面连接超时，请检查网络或打开 Release 页面'}));}
+    return;
+   }
    if(url.pathname.startsWith('/api/cloud-proxy/')){proxyCloudRequest(req,res,origin,requestCloud);return;}
    if(url.pathname==='/api/clipper'){await clipperHandler(req,res);return;}
    if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);res.end();return;}

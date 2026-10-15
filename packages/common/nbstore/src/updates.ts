@@ -1,2 +1,2 @@
 export type UpdatePhase='disabled'|'idle'|'checking'|'up-to-date'|'available'|'downloading'|'downloaded'|'preparing'|'installing'|'error';
-export interface DesktopUpdateState {version:string;enabled:boolean;phase:UpdatePhase;automaticChecks:boolean;channel:string;message?:string;latestVersion?:string;releaseDate?:string;checkedAt?:number;percent?:number;transferred?:number;total?:number;retry?:'check'|'download'|'install';}
+export interface DesktopUpdateState {version:string;source?:'github'|'configured';releaseNotes?:string;enabled:boolean;phase:UpdatePhase;automaticChecks:boolean;channel:string;message?:string;latestVersion?:string;releaseDate?:string;checkedAt?:number;percent?:number;transferred?:number;total?:number;retry?:'check'|'download'|'install';}

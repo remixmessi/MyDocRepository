@@ -70,6 +70,6 @@
       "role": "Viewer"
     }
   ],
-  "publish": null,
+  "publish": [{"provider":"github","owner":"remixmessi","repo":"MyDocRepository","releaseType":"release"}],
   "afterPack": "../../../../scripts/desktop/verify-mac-architecture.cjs"
 }

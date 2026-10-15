@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {validateDatabase,type SQLiteConnection} from '../../../../common/nbstore/server/database';
 
-export const CLOUD_SCHEMA_VERSION=6;
+export const CLOUD_SCHEMA_VERSION=7;
 /** 由公共数据库启动事务调用；版本记录与 DDL 失败时一起回滚。 */
 export function upgradeCloudDatabase(db:SQLiteConnection){const columns=(table:string)=>new Set((db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name));
   const add=(table:string,column:string,definition:string)=>{if(!columns(table).has(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);};
@@ -25,8 +25,10 @@ export function upgradeCloudDatabase(db:SQLiteConnection){const columns=(table:s
    if(version<5)db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(5);
    add('cloud_releases','arch',"TEXT NOT NULL DEFAULT ''");
    if(version<6)db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(6);
+   db.exec('CREATE TABLE IF NOT EXISTS cloud_workspace_audit(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,actor TEXT NOT NULL,actor_name TEXT NOT NULL,action TEXT NOT NULL,details TEXT NOT NULL,created INTEGER NOT NULL);CREATE INDEX IF NOT EXISTS cloud_workspace_audit_space ON cloud_workspace_audit(workspace,created)');
+   if(version<7)db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(7);
    validateDatabase(db,{
-    cloud_migrations:'version',cloud_deleted:'workspace,id',cloud_users:'id,email,name,salt,password,server_admin,avatar,avatar_type,verified,created',
+    cloud_workspace_audit:'id,workspace,actor,actor_name,action,details,created',cloud_migrations:'version',cloud_deleted:'workspace,id',cloud_users:'id,email,name,salt,password,server_admin,avatar,avatar_type,verified,created',
     cloud_sessions:'token,user,expires,id,created,seen,agent,ip',cloud_workspaces:'id,name,created',cloud_members:'workspace,user,role',
     cloud_invites:'token,workspace,email,role,expires',cloud_tokens:'token,user,kind,payload,created,expires',
     cloud_releases:'id,version,platform,filename,notes,bytes,sha256,created,path,arch',cloud_bootstrap:'key,user',
