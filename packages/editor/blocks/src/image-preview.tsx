@@ -92,10 +92,12 @@ export function ImagePreview({
     }}
   >
     <div className="dialog-heading"><h2>图片预览</h2><button type="button" aria-label="关闭图片预览" onClick={onClose}>×</button></div>
-    <p className="image-preview-title">{displayName}</p>
-    {loading && <p className="image-preview-status" role="status">正在读取图片…</p>}
-    {error && <p className="image-preview-error" role="alert">{error} <button type="button" onClick={() => setRetry(value => value + 1)}>重试预览</button></p>}
-    {url && !error && <div className="image-preview-stage"><img src={url} alt={alt || displayName} /></div>}
+    <div className="image-preview-meta"><span className="image-preview-filename" title={displayName}>{displayName}</span></div>
+    <div className="image-preview-stage" aria-busy={loading}>
+      {loading && <p className="image-preview-status" role="status">正在读取图片…</p>}
+      {error && <p className="image-preview-error" role="alert">{error} <button type="button" onClick={() => setRetry(value => value + 1)}>重试预览</button></p>}
+      {url && !error && <img src={url} alt={alt || displayName} />}
+    </div>
     <div className="dialog-actions"><button type="button" disabled={!asset || !url} onClick={download}>下载原文件</button><button type="button" disabled={!url} onClick={open}>新窗口打开</button></div>
   </dialog>;
 }

@@ -29,6 +29,7 @@ import { DocumentEditor as MarkdownDocumentEditor, readEditorSettings, readDocum
 import { LocalWorkspace, type DocumentMeta, type OpenDocument, type FolderMeta } from './workspace';
 import { WorkspaceRegistry } from './workspaces';
 import { DocumentSidebar, FolderSelect } from './sidebar';
+import { DocumentOverview } from './document-overview';
 import { QuickSearch, ResourceDialog } from './dialogs';
 import { exportBackup, parseBackup, downloadFile } from './backup';
 import { DocumentOutline, DocumentOutlineRail, Backlinks } from './document-panels';
@@ -86,7 +87,7 @@ export function App() {
   const [settingsOpen,setSettingsOpen]=useState(false); const [settingsTab,setSettingsTab]=useState<SettingsTab>('local');
   const [registry, setRegistry] = useState<WorkspaceRegistry | null>(null); const [workspace, setWorkspace] = useState<LocalWorkspace | null>(null);
   const [bench, setBench] = useState(emptyWorkbench); const currentTab = activeTab(bench); const selected = currentTab?.docId ?? null;
-  const setSelected = (id: string | null) => { if (id) setBench(state => openTab(state, id)); };
+  const setSelected = (id: string | null) => { if (id) { setOverviewOpen(false); setBench(state => openTab(state, id)); } };
   const boardRequest = currentTab?.frameId ? {docId:currentTab.docId,workspaceId:workspace?.id ?? '',frameId:currentTab.frameId,tick:currentTab.tick ?? 0} : undefined;
   const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false); const [retry, setRetry] = useState(0); const [confirmDelete, setConfirmDelete] = useState(false); const [searchOpen, setSearchOpen] = useState(false);
   const [editorCommand,setEditorCommand]=useState<{docId:string;pane:PaneId;kind:'find'|'export'|'markdown';tick:number}>();const commandTick=useRef(0);
@@ -97,11 +98,11 @@ export function App() {
   const [importDialog,setImportDialog]=useState<{kind:ImportKind;files?:File[];folderId?:string}|null>(null);
   const [templateDialog,setTemplateDialog]=useState<{saveDocId?:string}|null>(null);
   const [permissionDoc,setPermissionDoc]=useState<string|null>(null);
-  const [trashOpen,setTrashOpen]=useState(false);const [journalDate,setJournalDate]=useState<string|null>(null);
+  const [trashOpen,setTrashOpen]=useState(false);const [journalDate,setJournalDate]=useState<string|null>(null);const [overviewOpen,setOverviewOpen]=useState(false);
   const [dialog, setDialog] = useState<{ kind: 'create' | 'rename' | 'delete' | 'folder'; folder?: FolderMeta; parentId?: string } | null>(null);
   const [documentAction, setDocumentAction] = useState<{id:string;kind:'rename'|'move'|'delete'}|null>(null);
   const [, refresh] = useReducer(value => value + 1, 0); const markdownInput = useRef<HTMLInputElement>(null); const backupInput = useRef<HTMLInputElement>(null);
-  const activate = (ws: LocalWorkspace, requested?: string | null) => { const saved = ws.uiPreferences.get('workbench'); let next = restoreWorkbench(saved, new Set(ws.list().map(doc=>doc.id))); const params=new URLSearchParams(location.hash.slice(1)); if(requested && ws.documents.has(requested)) next=openTab(next,requested,next.activePane,params.get('doc')===requested?params.get('frame')??undefined:undefined); else if(saved===undefined && ws.list()[0])next=openTab(next,ws.list()[0].id);  setWorkspace(ws); setBench(next); setConfirmDelete(false); setSearchOpen(false); setSettingsTab('local');setTrashOpen(false);setJournalDate(null);setTemplateDialog(null);setImportDialog(null);setClipperOpen(false);setDocumentAction(null); };
+  const activate = (ws: LocalWorkspace, requested?: string | null) => { const saved = ws.uiPreferences.get('workbench'); let next = restoreWorkbench(saved, new Set(ws.list().map(doc=>doc.id))); const params=new URLSearchParams(location.hash.slice(1)); if(requested && ws.documents.has(requested)) next=openTab(next,requested,next.activePane,params.get('doc')===requested?params.get('frame')??undefined:undefined); else if(saved===undefined && ws.list()[0])next=openTab(next,ws.list()[0].id);  setWorkspace(ws); setBench(next); setOverviewOpen(false); setConfirmDelete(false); setSearchOpen(false); setSettingsTab('local');setTrashOpen(false);setJournalDate(null);setTemplateDialog(null);setImportDialog(null);setClipperOpen(false);setDocumentAction(null); };
   useLayoutEffect(()=>{if(!workspace)return; const clean=reconcileWorkbench(bench,new Set(workspace.list().map(doc=>doc.id))); if(clean!==bench){setBench(clean);return;} workspace.uiPreferences.set('workbench',bench);},[workspace,bench,workspace?.list().map(doc=>doc.id).join(',')]);
 
   useEffect(() => {
@@ -124,6 +125,7 @@ export function App() {
     await projectPreferences.flush();
   }),[registry,busy,importBusy]);
   useEffect(() => registry?.subscribe(refresh), [registry]); useEffect(() => workspace?.subscribe(refresh), [workspace]);
+  useEffect(() => { const openOverview = () => setOverviewOpen(true); window.addEventListener('open-all-documents', openOverview); return () => window.removeEventListener('open-all-documents', openOverview); }, []);
   useEffect(()=>{const warn=(event:BeforeUnloadEvent)=>{if(workspace?.sync&&workspace.pendingDraft){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[workspace]);
   useEffect(()=>{if(workspace?.readOnly){setImportDialog(null);setClipperOpen(false);setTemplateDialog(null);setDialog(null);setConfirmDelete(false);}},[workspace?.readOnly]);
   const run = async (action: () => Promise<void>) => { setBusy(true); setError(''); setNotice(''); try { await action(); } catch (error) { setError(error instanceof Error ? error.message : '操作失败，请重试'); } finally { setBusy(false); } };
@@ -158,6 +160,7 @@ export function App() {
     }catch(error){if(id)await ws.delete(id).catch(()=>{});throw error;}finally{setBusy(false);}
   };
   const create = (folderId?: string) => run(async () => { if (workspace) setSelected(await workspace.create(undefined, undefined, folderId ?? null)); });
+  const toggleFavorite = (id: string) => void run(async () => { if (!workspace) return; if (workspace.persistence.state === 'error') await workspace.persistence.retry(); const before = !!workspace.documents.get(id)?.favorite; workspace.organization.setFavorite(id, !before); try { await workspace.persistence.flush(); } catch (error) { workspace.organization.setFavorite(id, before); throw error; } });
   const selectWorkspace = (id: string) => run(async () => { if (!registry || !workspace) return; await workspace.flush(); activate(await registry.select(id)); });
   const refreshCloudWorkspace = async () => {
     if (!registry) return;
@@ -204,6 +207,7 @@ export function App() {
       {!workspace && !error ? <div className="empty-state" role="status">正在打开本地工作区…</div> : workspace ? <>{!!docs.length && <Workbench workspace={workspace} state={bench} onChange={setBench} onCloseTab={(pane,id)=>void run(async()=>{await (await workspace.openDocument(id)).persistence.flush();setBench(state=>closeTab(state,pane,id));})} busy={busy} render={(opened, tab, pane)=>{ const entry=workspace.documents.get(tab.docId); if(!entry)return null;return <DocumentEditor onAttachFiles={createAttachmentDocument} loadWorkspace={id=>registry!.get(id)} key={`${workspace.id}:${pane}:${tab.docId}`} item={opened} meta={entry} workspace={workspace} name={workspaceName} active={bench.activePane===pane} tab={tab} onMode={mode=>setBench(state=>changeTabMode(state,pane,tab.docId,mode))} boardRequest={tab.frameId?{frameId:tab.frameId,tick:tab.tick??0}:undefined} onNavigate={(id, targetWorkspace, frameId, other)=>{ const targetPane:PaneId=other?(pane==='left'?'right':'left'):pane; if(targetWorkspace===workspace.id){if(!workspace.documents.has(id)){setError('引用的文档已删除，正文内容已保留。');return;}setBench(state=>openTab(state,id,targetPane,frameId));setConfirmDelete(false);}else void run(async()=>{if(!registry||!registry.entries.has(targetWorkspace))throw new Error('引用的工作区不存在，正文内容已保留。');const target=await registry.get(targetWorkspace);if(!target.documents.has(id))throw new Error('引用的文档已删除，正文内容已保留。');await workspace.flush();activate(await registry.select(targetWorkspace),id);});}} onMove={folder=>void run(async()=>{workspace.moveDocument(entry.id,folder||null);await workspace.persistence.flush();})} busy={busy} onCommandHandled={()=>setEditorCommand(undefined)} commandRequest={editorCommand?.docId===entry.id&&editorCommand.pane===pane?editorCommand:undefined} onSaveTemplate={()=>setTemplateDialog({saveDocId:entry.id})} onDelete={()=>setConfirmDelete(true)}/>;}} />}{!docs.length && busy && <div className="empty-state" role="status">正在保存变更…</div>}{!docs.length && !busy && <div className="empty-state"><FileText size={32}/><h1>开始你的第一篇文档</h1><p>{registry?.entries.get(workspace.id)?.cloud?'文档会同步到工作空间，与成员共同编辑。':'记录想法与资料，内容自动保存到本机。'}</p><button className="primary" disabled={busy} onClick={()=>void create()}>新建文档</button></div>}</> : null}
       {confirmDelete && <div className="delete-confirm" role="alert"><span>删除“{meta?.title || '无标题文档'}”？将移入回收站，可随时恢复。</span><button onClick={() => setConfirmDelete(false)}>取消</button><button className="danger" onClick={() => void remove()}>确认删除</button></div>}
     </main>
+    {overviewOpen && workspace && <div className="document-overview-layer"><DocumentOverview workspace={workspace} busy={busy || importBusy} onCreate={() => void create()} onSelect={id => setSelected(id)} onFavorite={toggleFavorite} onAction={(id, kind) => setDocumentAction({ id, kind })} /></div>}
     {clipperOpen&&workspace&&<WebClipperDialog key={workspace.id} workspace={workspace} onClose={()=>setClipperOpen(false)} onFinish={id=>{setClipperOpen(false);setSelected(id);}} onTrash={()=>{setClipperOpen(false);setTrashOpen(true);}}/>}
     {importDialog&&workspace&&<DocumentImportDialog onBusyChange={setImportBusy} key={workspace.id} workspace={workspace} initialKind={importDialog.kind} initialFiles={importDialog.files} initialFolderId={importDialog.folderId} onClose={()=>setImportDialog(null)} onFinish={id=>{setImportDialog(null);if(id)setSelected(id);}}/>}
     {templateDialog && workspace && <DocumentTemplateDialog key={workspace.id} workspace={workspace} saveDocId={templateDialog.saveDocId} onClose={()=>setTemplateDialog(null)} onCreate={id=>{setTemplateDialog(null);setSelected(id);setNotice('已从模板创建文档');}} />}

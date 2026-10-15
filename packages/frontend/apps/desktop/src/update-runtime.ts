@@ -18,6 +18,19 @@ export function githubUpdateError(error:unknown):string|undefined {
  if(['ERR_UPDATER_INVALID_SIGNATURE','ERR_UPDATER_INVALID_CHECKSUM','ERR_CHECKSUM_MISMATCH'].includes(code))return '更新包校验失败，已阻止安装，请重新下载或联系发布者。';
  return undefined;
 }
+export function serverUpdateError(error:unknown):string|undefined {
+ const details=error&&typeof error==='object'?error as {code?:unknown;statusCode?:unknown}:{};
+ const code=String(details.code??''),status=Number(details.statusCode??(/^HTTP_ERROR_(\d+)$/.exec(code)?.[1]));
+ if(code==='MYDOC_SERVER_PACKAGE_UNAVAILABLE')return '服务器返回的更新包与当前系统或架构不匹配，或缺少有效校验信息。';
+ if(status===401||status===403)return '服务器更新接口拒绝访问（HTTP '+status+'）。请管理员升级服务器程序并允许匿名访问 /api/cloud/releases/update/；应用内检查更新无需登录。';
+ if(code==='ERR_UPDATER_CHANNEL_FILE_NOT_FOUND'||status===404)return '服务器暂无匹配的正式更新包，或服务版本过旧。请管理员上传对应架构的 macOS ZIP / Windows EXE 并升级服务器。';
+ if(status===409)return '服务器最新版本的更新包尚未就绪或校验失败，请管理员上传正确的 macOS ZIP / Windows EXE。';
+ if(status>=500&&status<=599)return '服务器更新服务异常（HTTP '+status+'），请管理员检查服务日志后重试。';
+ if(code==='ERR_UPDATER_INVALID_UPDATE_INFO')return '服务器返回的更新清单无效，请管理员检查更新接口及反向代理配置。';
+ if(['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ERR_CONNECTION_REFUSED','ERR_NAME_NOT_RESOLVED','ERR_CONNECTION_TIMED_OUT'].includes(code))return '无法连接更新服务器，请检查服务器地址、端口及网络连接后重试。';
+ if(['ERR_UPDATER_INVALID_SIGNATURE','ERR_UPDATER_INVALID_CHECKSUM','ERR_CHECKSUM_MISMATCH'].includes(code))return '更新包校验失败，已阻止安装，请重新下载或联系管理员。';
+ return undefined;
+}
 export function createDesktopUpdates(options:{prepare:()=>Promise<void>;release:()=>void;notify:(state:DesktopUpdateState)=>void}){
  let config:{enabled?:boolean;channel?:string}={};try{config=JSON.parse(readFileSync(join(__dirname,'release-config.json'),'utf8'));}catch{}
  const supported=app.isPackaged&&['darwin','win32'].includes(process.platform);
@@ -32,7 +45,7 @@ export function createDesktopUpdates(options:{prepare:()=>Promise<void>;release:
  if(supported&&source==='server'){autoUpdater.setFeedURL({provider:'generic',url:serverUpdateFeed(savedServer,process.platform,process.arch),useMultipleRangeRequest:false});autoUpdater.disableDifferentialDownload=true;}else if(supported&&source==='github')autoUpdater.setFeedURL(githubUpdateFeed);
  const updates:DesktopUpdates=new DesktopUpdates({...options,version:app.getVersion(),enabled:supported,source,serverUrl:source==='server'?savedServer:undefined,channel:source==='server'?'服务器更新':source==='configured'?config.channel??'稳定版':'GitHub 正式版',disabledReason:supported?undefined:githubDisabledReason,automaticChecks,
   driver:{check:()=>autoUpdater.checkForUpdates(),download:()=>autoUpdater.downloadUpdate(),install:()=>autoUpdater.quitAndInstall(false,true)},
-  errorMessage:error=>{if(updates.status.source==='github')return githubUpdateError(error);if(updates.status.source==='server'){const code=error&&typeof error==='object'&&'code' in error?String(error.code):'';if(code==='MYDOC_SERVER_PACKAGE_UNAVAILABLE')return '服务器返回的更新包与当前系统或架构不匹配，或缺少有效校验信息。';if(code==='ERR_UPDATER_CHANNEL_FILE_NOT_FOUND')return '服务器暂无匹配的正式更新包，或服务版本过旧。请管理员上传对应架构的 macOS ZIP / Windows EXE 并升级服务器。';const status=error&&typeof error==='object'&&'statusCode' in error?error.statusCode:undefined;if(status===409)return '服务器最新版本的更新包尚未就绪或校验失败，请管理员上传正确的 macOS ZIP / Windows EXE。';}return undefined;},
+  errorMessage:error=>updates.status.source==='github'?githubUpdateError(error):updates.status.source==='server'?serverUpdateError(error):undefined,
   saveSettings(value){writeSettings(value,updates.status.source,updates.status.serverUrl);},
  });
  const available=(info:import('electron-updater').UpdateInfo)=>{if(updates.status.source==='github')info.files.splice(0,info.files.length,...githubUpdateFiles(info,process.platform,process.arch));if(updates.status.source==='server')serverUpdateFiles(info,process.platform,process.arch);updates.available(info.version,info.releaseDate,typeof info.releaseNotes==='string'?info.releaseNotes:info.releaseNotes?.map(note=>note.version+'\n'+note.note).join('\n\n'));};

@@ -62,6 +62,17 @@ it('server selection and automatic check preference survive restart',async()=>{
  runtime!.stop();mocks.readFileSync.mockImplementation((path:unknown)=>{if(String(path).endsWith('update-settings.json'))return settings;throw new Error('missing');});
  const restarted=setup();expect(restarted.updates.status).toMatchObject({source:'server',serverUrl:'https://docs.example.com',automaticChecks:false});expect(native.setFeedURL).toHaveBeenLastCalledWith(expect.objectContaining({provider:'generic',url:'https://docs.example.com/api/cloud/releases/update/darwin/arm64/'}));
 });
+it('old server authentication failures explain the required deployment instead of reporting a network failure',async()=>{
+ const {updates}=setup();native.checkForUpdates.mockRejectedValueOnce(Object.assign(new Error('sensitive provider response'),{statusCode:401,code:'HTTP_ERROR_401'}));
+ await runtime!.checkServer('http://192.168.0.85:19808');
+ expect(updates.status).toMatchObject({phase:'error',retry:'check',source:'server'});
+ expect(updates.status.message).toContain('升级服务器');expect(updates.status.message).toContain('HTTP 401');expect(updates.status.message).not.toContain('sensitive');
+});
+it('server error messages distinguish HTTP failures, malformed manifests and connection failures without exposing provider details',async()=>{
+ const {serverUpdateError}=await import('../packages/frontend/apps/desktop/src/update-runtime');
+ for(const [error,expected] of [[{code:'HTTP_ERROR_403'},'匿名访问'],[{statusCode:409},'尚未就绪'],[{statusCode:502},'HTTP 502'],[{code:'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND'},'升级服务器'],[{code:'ERR_UPDATER_INVALID_UPDATE_INFO'},'清单无效'],[{code:'ECONNREFUSED'},'地址、端口'],[{code:'ERR_CHECKSUM_MISMATCH'},'已阻止安装']] as const)expect(serverUpdateError(error)).toContain(expected);
+ expect(serverUpdateError(new Error('secret URL'))).toBeUndefined();
+});
 it('server cannot replace a channel while downloading or holding a downloaded update',async()=>{
  const {updates}=setup();await updates.check();let finish!:()=>void;native.downloadUpdate.mockImplementationOnce(()=>new Promise<void>(resolve=>{finish=resolve;}));const download=updates.download();const calls=native.setFeedURL.mock.calls.length;
  await runtime!.checkServer('https://other.example.com');expect(updates.status.source).toBe('github');expect(native.setFeedURL).toHaveBeenCalledTimes(calls);finish();await download;await runtime!.checkServer('https://other.example.com');expect(updates.status.source).toBe('github');
