@@ -1,3 +1,4 @@
+import {spawn} from 'node:child_process';
 import {createDesktopUpdates} from './update-runtime';
 import {DocumentLinkQueue,commandLineLinks} from './deep-links';
 import {OpenFileQueue,commandLineFiles} from './open-files';
@@ -53,6 +54,21 @@ async function saveBeforeClose(lock=false){
  return true;
 }
 async function requestQuit(){if(allowingQuit||closing)return;closing=true;try{if(await saveBeforeClose()){allowingQuit=true;app.quit();}}finally{closing=false;}}
+async function uninstallMac(){
+ if(!app.isPackaged||process.platform!=='darwin'||closing)return;
+ const application=resolve(app.getPath('exe'),'../../..');
+ if(!application.endsWith('/MyDoc.app')){dialog.showErrorBox('无法自动卸载','请先将应用恢复为 MyDoc.app 名称，再使用卸载入口。');return;}
+ const result=await dialog.showMessageBox({type:'warning',title:'卸载 MyDoc',message:'卸载 MyDoc 并删除本机全部数据？',detail:'将删除应用、本机数据库、附件、内部备份和设置。此操作不可撤销。自行导出的文件和服务端数据保留。',buttons:['取消','卸载并删除本机数据'],defaultId:0,cancelId:0,noLink:true});
+ if(result.response!==1||closing)return;
+ closing=true;
+ try{
+  if(!await saveBeforeClose(true))return;
+  const child=spawn('/bin/sh',[join(process.resourcesPath,'uninstall-macos.sh'),String(process.pid),app.getPath('userData'),application],{detached:true,stdio:'ignore'});
+  await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});child.unref();
+  allowingQuit=true;app.quit();
+ }catch(error){window?.webContents.send('mydoc:update-unlock');dialog.showErrorBox('卸载未完成',error instanceof Error?error.message:String(error));}
+ finally{if(!allowingQuit)window?.webContents.send('mydoc:update-unlock');closing=false;}
+}
 async function reload(){if(!closing&&await saveBeforeClose())window?.webContents.reload();}
 function makeWindow(){
  if(!server)return;
@@ -77,7 +93,7 @@ function makeWindow(){
 }
 function setMenu(){const mac=process.platform==='darwin';const menu:Electron.MenuItemConstructorOptions[]=[
  ...(mac?[{label:'MyDoc',submenu:[{role:'about' as const},{type:'separator' as const},{role:'hide' as const},{role:'hideOthers' as const},{role:'unhide' as const},{type:'separator' as const},{label:'退出 MyDoc',accelerator:'Cmd+Q',click:()=>void requestQuit()}]}]:[]),
- {label:'文件',submenu:[{label:'打开文件…',accelerator:'CmdOrCtrl+O',click:()=>{focusWindow();if(window)void dialog.showOpenDialog(window,{title:'打开文件并导入',properties:['openFile','multiSelections'],filters:[{name:'Markdown / 文本 / ZIP',extensions:['md','markdown','txt','zip']}]}).then(result=>{if(!result.canceled)enqueueFiles(result.filePaths);});}},{label:'重新载入',accelerator:'CmdOrCtrl+R',click:()=>void reload()},{label:'打开数据目录',click:()=>{if(database)void shell.openPath(resolve(database.path,'..'));}},{type:'separator'},mac?{role:'close'}:{label:'退出',accelerator:'Alt+F4',click:()=>void requestQuit()}]},
+ {label:'文件',submenu:[{label:'打开文件…',accelerator:'CmdOrCtrl+O',click:()=>{focusWindow();if(window)void dialog.showOpenDialog(window,{title:'打开文件并导入',properties:['openFile','multiSelections'],filters:[{name:'Markdown / 文本 / ZIP',extensions:['md','markdown','txt','zip']}]}).then(result=>{if(!result.canceled)enqueueFiles(result.filePaths);});}},{label:'重新载入',accelerator:'CmdOrCtrl+R',click:()=>void reload()},{label:'打开数据目录',click:()=>{if(database)void shell.openPath(resolve(database.path,'..'));}},...(mac&&app.isPackaged?[{label:'卸载 MyDoc 并删除本机数据…',click:()=>void uninstallMac()}]:[]),{type:'separator'},mac?{role:'close'}:{label:'退出',accelerator:'Alt+F4',click:()=>void requestQuit()}]},
  {label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
  {label:'视图',submenu:[{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{type:'separator'},{role:'togglefullscreen'}]},
  {label:'窗口',submenu:[{role:'minimize'},{role:'zoom'}]},

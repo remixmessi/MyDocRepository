@@ -1,3 +1,4 @@
+import {attachmentDirectory,embedAttachmentFiles} from '../../../../common/nbstore/server/attachment-files';
 import {createHash,randomUUID} from 'node:crypto';
 import {chmodSync,closeSync,existsSync,fsyncSync,mkdirSync,openSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
@@ -38,8 +39,10 @@ export function snapshotBeforeCloudMigration(path:string,db:SQLiteConnection,env
    // VACUUM INTO takes a consistent SQLite snapshot including committed WAL.
    // Copying cloud.sqlite alone can silently omit the latest committed pages.
    db.prepare('VACUUM INTO ?').run(temporary);
+   db.prepare('ATTACH DATABASE ? AS attachment_snapshot').run(temporary);
+   try{embedAttachmentFiles(db,attachmentDirectory(path),'attachment_snapshot');}finally{db.exec('DETACH DATABASE attachment_snapshot');}
    chmodSync(temporary,0o600);
-   const descriptor=openSync(temporary,'r');try{fsyncSync(descriptor);}finally{closeSync(descriptor);}
+   const descriptor=openSync(temporary,'r+');try{fsyncSync(descriptor);}finally{closeSync(descriptor);}
    renameSync(temporary,snapshot);
    writeFileSync(temporary,JSON.stringify({createdAt:new Date().toISOString(),imageVersion,schemaVersion:schema,cloudSchemaVersion:version,counts},null,2),{mode:0o600,flag:'wx'});
    renameSync(temporary,snapshot+'.json');

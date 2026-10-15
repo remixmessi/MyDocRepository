@@ -83,3 +83,9 @@ data/releases/
 
 !/tests/e2e/folder-actions.spec.ts
 !/tests/tag-colors.test.ts
+
+data/attachments/
+!/tests/attachment-files.test.ts
+!/tests/markdown-export.test.ts
+
+!/tests/uninstall-data.test.ts

@@ -19,7 +19,7 @@ it('恢复只替换业务表，保留本机待提交队列与草稿；版本 1 �
  const f=fixture();
  try{
   write(f.db,'备份正文');const backup=await f.manager.create();
-  expect(backup.schemaVersion).toBe(3);
+  expect(backup.schemaVersion).toBe(4);
   write(f.db,'恢复前正文');
   // 本机未提交状态：恢复不得删除或覆盖。
   f.db.db.prepare('INSERT INTO pending_updates(scope,server,workspace,doc,data,created,generation) VALUES (?,?,?,?,?,?,?)').run('user:a','https://one.example','ws-1','doc:a',Buffer.from([7]),1,f.db.generation);

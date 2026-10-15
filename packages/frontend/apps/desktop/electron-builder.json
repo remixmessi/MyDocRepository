@@ -9,6 +9,7 @@
     "dist/**/*",
     "package.json"
   ],
+  "extraResources": [{"from":"resources/uninstall-macos.sh","to":"uninstall-macos.sh"}],
   "asar": true,
   "npmRebuild": false,
   "electronDownload": {
@@ -46,7 +47,7 @@
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
-    "deleteAppDataOnUninstall": false
+    "deleteAppDataOnUninstall": true
   },
   "fileAssociations": [
     {

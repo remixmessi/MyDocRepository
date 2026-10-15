@@ -1,3 +1,4 @@
+import {AttachmentFiles} from './attachment-files';
 import {randomUUID} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
 import {dirname} from 'node:path';
@@ -20,10 +21,11 @@ export class SQLiteProjectDatabase {
  get generation(){let row=this.db.prepare("SELECT value FROM preferences WHERE scope='__system' AND key='restore-generation'").get() as {value:string}|undefined;if(!row){this.db.prepare("INSERT OR IGNORE INTO preferences VALUES ('__system','restore-generation',?)").run(randomUUID());row=this.db.prepare("SELECT value FROM preferences WHERE scope='__system' AND key='restore-generation'").get() as {value:string};}return row.value;}
  set generation(value:string){this.db.prepare("INSERT INTO preferences VALUES ('__system','restore-generation',?) ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value").run(value);}
  readonly db:SQLiteConnection;
+ readonly attachments:AttachmentFiles;
  readonly initializedThisStart:boolean;
  readonly schemaVersion=SCHEMA_VERSION;
  constructor(readonly path:string,readonly connect:(path:string)=>SQLiteConnection,upgrade?:(db:SQLiteConnection)=>void,protection:StartupProtection={}){
-  mkdirSync(dirname(path),{recursive:true});this.db=connect(path);
+  mkdirSync(dirname(path),{recursive:true});this.db=connect(path);this.attachments=new AttachmentFiles(this.db,path);
   try {
    this.db.pragma('busy_timeout = 5000');
    const initialVersion=this.db.pragma('user_version',{simple:true}) as number;
@@ -35,6 +37,7 @@ export class SQLiteProjectDatabase {
     const version=this.db.pragma('user_version',{simple:true}) as number;
     if(version>this.schemaVersion)throw new Error('数据库版本高于当前程序，请升级程序后再启动');
     if(!Number.isSafeInteger(version)||version<0)throw new Error('数据库版本无效');
+    if(version>=4&&!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_files'").get()&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assets'").get()&&this.db.prepare('SELECT 1 FROM assets LIMIT 1').get())throw new Error('附件文件索引缺失，拒绝生成空附件，请恢复完整备份');
     // Keep exact original values inside the same write transaction, including
     // binary Yjs updates and attachments. A destructive migration must roll back.
     const retained=retainRows(this.db,{...Object.fromEntries(BUSINESS_TABLES),...protection.preserve});
@@ -48,6 +51,7 @@ export class SQLiteProjectDatabase {
     validateDatabase(this.db,SCHEMA_COLUMNS);
     upgrade?.(this.db);
     retained();
+    this.attachments.migrate();
     this.db.exec('PRAGMA user_version='+this.schemaVersion+';');
     return version===0;
    }).immediate();

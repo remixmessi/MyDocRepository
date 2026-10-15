@@ -119,11 +119,11 @@ corepack yarn desktop:dist:win
 | Web 本地开发 / 预览 | 项目内 `data/mydoc.sqlite` |
 | 独立 Web 协作服务 | 项目内 `data/cloud.sqlite`；Docker 内为 `/app/data/cloud.sqlite` |
 | 桌面源码开发 | 项目内 `data/mydoc.sqlite` |
-| 已安装桌面应用 | 应用所在目录的 `data/mydoc.sqlite`，可从「文件 → 打开数据目录」查看 |
+| 已安装桌面应用 | Electron 用户数据目录的 `data/mydoc.sqlite`，可从「文件 → 打开数据目录」查看 |
 
 Web 服务需要 SQLite 接口，不能只将前端构建产物上传到静态主机。浏览器在整个服务不可达时没有独立持久化通道，关闭页面前应导出未保存草稿。
 
-迁移单个工作区可使用 `.mydoc.json` 备份；整库恢复会替换全部工作区数据。直接复制 SQLite 文件前先停止服务；安装后的桌面应用数据库位于 Electron 用户数据目录，卸载默认保留，仍建议定期保留独立备份。具体步骤见[使用指南](docs/使用指南.md#自动备份与整库恢复)。
+迁移单个工作区可使用 `.mydoc.json` 备份；整库恢复会替换全部工作区数据。直接复制 SQLite 文件前先停止服务；安装后的桌面应用数据库位于 Electron 用户数据目录，Windows 卸载会清理本机数据，macOS 使用应用内卸载入口清理；更新保留数据。附件在数据库同级 `attachments/`，历史附件启动时自动迁移。请定期保留独立备份。具体步骤见[使用指南](docs/使用指南.md#自动备份与整库恢复)。
 
 ## 开发与验证
 

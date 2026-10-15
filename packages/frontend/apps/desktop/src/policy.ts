@@ -1,5 +1,5 @@
 import {dirname,resolve,sep} from 'node:path';
-import {copyFileSync,existsSync,mkdirSync,renameSync,unlinkSync} from 'node:fs';
+import {cpSync,copyFileSync,existsSync,mkdirSync,renameSync,unlinkSync} from 'node:fs';
 import type {DesktopStorageRequest} from '../../../../common/nbstore/src/desktop';
 export function safeExternalUrl(value:string){try{const u=new URL(value);return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password?u.href:null;}catch{return null;}}
 export function validStorageRequest(value:unknown):value is DesktopStorageRequest {
@@ -28,6 +28,8 @@ export function migrateLegacyDesktopDatabase(applicationDirectory:string,userDat
  try{
   copyFileSync(legacy,temp);
   for(const suffix of sidecars)if(existsSync(legacy+suffix))copyFileSync(legacy+suffix,temp+suffix);
+  const legacyAttachments=resolve(applicationDirectory,'data/attachments');
+  if(existsSync(legacyAttachments))cpSync(legacyAttachments,resolve(userDataDirectory,'data/attachments'),{recursive:true,dereference:false});
   renameSync(temp,target);
   for(const suffix of sidecars)if(existsSync(temp+suffix))renameSync(temp+suffix,target+suffix);
   return true;

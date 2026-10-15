@@ -1,0 +1,6 @@
+import {it,expect} from 'vitest';
+import {unzipSync,strFromU8} from 'fflate';
+import {markdownParser} from '../packages/editor/blocks/src/document-format';
+import {markdownExport} from '../packages/editor/blocks/src/markdown-export';
+it('Markdown 带图和附件导出相对链接 ZIP，同名去重且代码样例不改写',async()=>{const source='![图片](asset:img)\n\n[文件](asset:file) [再次](asset:file)\n\n```text\n[例子](asset:missing)\n```';const result=await markdownExport(markdownParser.parse(source),'导出测试',{get:async id=>({id,name:'同名 文件.txt',mime:'text/plain',size:1,bytes:new Uint8Array([id==='img'?1:2])})});expect(result.name).toBe('导出测试.zip');const files=unzipSync(result.bytes);expect(Object.keys(files)).toHaveLength(3);const md=strFromU8(files['导出测试.md']);expect(md).toContain('./assets/1-');expect(md).toContain('./assets/2-');expect(md).toContain('[例子](asset:missing)');expect(md).not.toContain('](asset:img)');});
+it('无附件保持 md，缺失附件中止，不导出残缺文件',async()=>{const source='普通正文\n';const plain=await markdownExport(markdownParser.parse(source),'正文',undefined,source);expect(plain.name).toBe('正文.md');expect(strFromU8(plain.bytes)).toBe(source);await expect(markdownExport(markdownParser.parse('[文件](asset:missing)'),'缺失',{get:async()=>null})).rejects.toThrow('附件缺失');});

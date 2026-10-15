@@ -1,3 +1,4 @@
+import {markdownExport} from './markdown-export';
 import {documentAwareness} from '@mydoc/crdt';
 import {documentDragHandle} from './document-drag-handle';
 import {documentReading,readingJump} from './document-reading';
@@ -186,11 +187,18 @@ export function DocumentEditor({ blockRequest, store, documentId, workspaceId = 
     try { const parsed = preserveCodeMetadata(view.state.doc, markdownParser.parse(value)); view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, parsed.content)); setSource(value); setError(''); }
     catch { setSource(value); setError('Markdown 解析失败，请检查源码。'); }
   };
-  const download = () => {
-    if (!editor.current) return;
-    const content = mode === 'source' ? source : markdownSerializer.serialize(editor.current.state.doc);
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = `${(store.meta.get('title') || '无标题文档').replace(/[\\/:*?"<>|]/g, '_')}.md`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const [exportingMarkdown,setExportingMarkdown]=useState(false);
+  const markdownExportBusy=useRef(false);
+  const download = async () => {
+    if (!editor.current||markdownExportBusy.current) return;
+    markdownExportBusy.current=true;setExportingMarkdown(true);setError('');
+    try{
+      const doc=mode==='source'?markdownParser.parse(source):editor.current.state.doc;
+      const result=await markdownExport(doc,store.meta.get('title')||'无标题文档',assets,mode==='source'?source:undefined);
+      const url=URL.createObjectURL(new Blob([result.bytes as BlobPart],{type:result.type}));
+      const link=document.createElement('a');link.href=url;link.download=result.name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(error){setError(error instanceof Error?error.message:'Markdown 导出失败');}
+    finally{markdownExportBusy.current=false;setExportingMarkdown(false);}
   };
   useEffect(()=>{if(!commandRequest||!focusAllowed.current)return;onCommandHandled?.();
     if(commandRequest.kind==='markdown'){download();return;}
@@ -202,7 +210,7 @@ export function DocumentEditor({ blockRequest, store, documentId, workspaceId = 
   return <div onClickCapture={event=>{if(readOnly&&(event.target as HTMLElement).closest('button,input[type=checkbox]')&&!(event.target as HTMLElement).closest('.document-find,.document-tools,.document-options,dialog,.pdf-preview,.document-comments-panel,.comment-controls,[data-readonly-action]')){event.preventDefault();event.stopPropagation();}}} onKeyDownCapture={event=>{if(readOnly&&(event.metaKey||event.ctrlKey)&&!['c','a','f'].includes(event.key.toLowerCase())){event.preventDefault();event.stopPropagation();}}} className={"markdown-document"+(commentsOpen&&mode==='edit'?' comments-open':'')}>
     {pdfAssetId&&assets&&<PdfPreview assetId={pdfAssetId} assets={assets} onClose={()=>{setPdfAssetId(undefined);requestAnimationFrame(()=>{if(focusAllowed.current)editor.current?.focus();});}}/>}
     {exportRequest&&<DocumentExportDialog request={exportRequest} assets={assets} resolveTitle={(id,ws)=>ws===workspaceId?documents.find(d=>d.id===id)?.title:undefined} onClose={()=>{setExportRequest(undefined);requestAnimationFrame(()=>{if(!focusAllowed.current)return;if(modeRef.current==='edit')editor.current?.focus();else host.current?.closest('.markdown-document')?.querySelector<HTMLTextAreaElement>('.markdown-source')?.focus();});}} />}
-    <details className="document-options"><summary aria-label="文档选项" title="文档选项">···</summary><div className="document-tools"><div role="group" aria-label="编辑模式"><button aria-pressed={mode === 'edit'} onClick={() => switchMode('edit')}>编辑</button><button aria-pressed={mode === 'source'} onClick={() => switchMode('source')}>Markdown 源码</button></div><button disabled={mode!=='edit'} onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;openFind();}}>页内查找</button><button disabled={mode==='source'&&!!error} onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;const view=editor.current;if(view)setExportRequest({doc:view.state.doc,title:store.meta.get('title')||'无标题文档'});}}>导出 PDF / HTML</button><button onClick={download}>导出 Markdown</button>{readingError&&<button onClick={()=>reading.current?.retry()}>重试保存阅读位置</button>}<button disabled={readOnly||mode!=='edit'} onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;footnotes.current?.open();}}>插入脚注</button>{onOpenSettings&&<button onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;onOpenSettings();}}>编辑器设置</button>}</div></details>
+    <details className="document-options"><summary aria-label="文档选项" title="文档选项">···</summary><div className="document-tools"><div role="group" aria-label="编辑模式"><button aria-pressed={mode === 'edit'} onClick={() => switchMode('edit')}>编辑</button><button aria-pressed={mode === 'source'} onClick={() => switchMode('source')}>Markdown 源码</button></div><button disabled={mode!=='edit'} onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;openFind();}}>页内查找</button><button disabled={mode==='source'&&!!error} onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;const view=editor.current;if(view)setExportRequest({doc:view.state.doc,title:store.meta.get('title')||'无标题文档'});}}>导出 PDF / HTML</button><button disabled={exportingMarkdown} onClick={()=>void download()}>{exportingMarkdown?'正在导出…':'导出 Markdown'}</button>{readingError&&<button onClick={()=>reading.current?.retry()}>重试保存阅读位置</button>}<button disabled={readOnly||mode!=='edit'} onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;footnotes.current?.open();}}>插入脚注</button>{onOpenSettings&&<button onClick={event=>{(event.currentTarget.closest('details') as HTMLDetailsElement).open=false;onOpenSettings();}}>编辑器设置</button>}</div></details>
     {assets && !readOnly && <div className="media-upload-controls" role="group" aria-label="本地文件"><button disabled={readOnly||!!uploadProgress} onClick={() => imageInput.current?.click()}>上传图片</button><button disabled={readOnly||!!uploadProgress} onClick={() => attachmentInput.current?.click()}>添加附件</button><button onClick={() => { setMode('edit'); web.current?.open('bookmark'); }}>添加书签</button><button onClick={() => { setMode('edit'); web.current?.open('embed'); }}>嵌入网页</button><button onClick={() => { setMode('edit'); embeds.current?.open(); }}>嵌入文档</button><button onClick={()=>{setMode('edit');surfaces.current?.open();}}>引用画布</button><span role="status">{uploadProgress}</span><input ref={imageInput} type="file" hidden multiple accept="image/png,image/jpeg,image/gif,image/webp" aria-label="上传本地图片" onChange={event => selectedFiles(event.target, 'image')} /><input ref={attachmentInput} type="file" hidden multiple aria-label="添加本地附件" onChange={event => selectedFiles(event.target, 'attachment')} /></div>}
     {find.open && focusEnabled && mode==='edit' && <DocumentFindBar state={find} view={()=>editor.current} onClose={()=>closeFind()} />}
     {error && <div className="error-banner" role="alert">{error}</div>}{readingError&&<div className="error-banner" role="alert">{readingError}</div>}

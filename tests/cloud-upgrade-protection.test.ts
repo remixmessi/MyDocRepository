@@ -1,7 +1,7 @@
 import {it,expect} from 'vitest';
 import Database from 'better-sqlite3';
 import {existsSync,mkdtempSync,readdirSync,rmSync,writeFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import * as Y from 'yjs';
 import {SQLiteProjectDatabase,type SQLiteConnection} from '../packages/common/nbstore/server/database';
@@ -17,7 +17,7 @@ const protection=(path:string)=>({beforeMigration:(db:SQLiteConnection)=>snapsho
 it('升级前快照包含尚在 WAL 的正文及附件，保留旧结构供旧镜像回滚；重复启动不重复备份',()=>{
  const f=fixture();try{
   const open=()=>new SQLiteProjectDatabase(f.path,path=>new Database(path,{fileMustExist:true}),upgradeCloudDatabase,protection(f.path));
-  let db=open();expect(db.schemaVersion).toBe(3);db.close();
+  let db=open();expect(db.schemaVersion).toBe(4);db.close();
   let files=readdirSync(join(f.dir,'upgrade-backups')).filter(file=>file.endsWith('.sqlite'));expect(files).toHaveLength(1);
   const snapshot=new Database(join(f.dir,'upgrade-backups',files[0]),{readonly:true,fileMustExist:true});
   expect(snapshot.pragma('user_version',{simple:true})).toBe(2);expect(snapshot.pragma('quick_check',{simple:true})).toBe('ok');
@@ -76,6 +76,6 @@ it('容器数据库路径环境变量覆盖旧配置文件，不会随工作目�
  const dir=mkdtempSync(join(tmpdir(),'mydoc-path-')),path=join(dir,'server-config.json');
  try{
   writeFileSync(path,JSON.stringify({cloudDbPath:'data/old.sqlite',host:'127.0.0.1',port:9090}));
-  expect(serverConfig({MYDOC_CONFIG_PATH:path,MYDOC_CLOUD_DB_PATH:'/app/data/cloud.sqlite',MYDOC_HOST:'0.0.0.0',MYDOC_PORT:'8080'})).toMatchObject({cloudDbPath:'/app/data/cloud.sqlite',host:'0.0.0.0',port:8080});
+  expect(serverConfig({MYDOC_CONFIG_PATH:path,MYDOC_CLOUD_DB_PATH:'/app/data/cloud.sqlite',MYDOC_HOST:'0.0.0.0',MYDOC_PORT:'8080'})).toMatchObject({cloudDbPath:resolve('/app/data/cloud.sqlite'),host:'0.0.0.0',port:8080});
  }finally{rmSync(dir,{recursive:true,force:true});}
 });

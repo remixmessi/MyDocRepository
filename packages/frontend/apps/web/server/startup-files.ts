@@ -4,7 +4,8 @@ import {closeSync,copyFileSync,existsSync,fsyncSync,mkdirSync,mkdtempSync,openSy
 import {dirname,join} from 'node:path';
 
 const suffixes=['','-wal','-shm','-journal'];
-function syncFile(path:string){const fd=openSync(path,'r');try{fsyncSync(fd);}finally{closeSync(fd);}}
+// Windows FlushFileBuffers requires a writable handle; r+ preserves existing bytes.
+function syncFile(path:string){const fd=openSync(path,'r+');try{fsyncSync(fd);}finally{closeSync(fd);}}
 function checksum(path:string){
  const hash=createHash('sha256'),fd=openSync(path,'r'),buffer=Buffer.allocUnsafe(1024*1024);
  try{for(;;){const bytes=readSync(fd,buffer,0,buffer.length,null);if(!bytes)break;hash.update(buffer.subarray(0,bytes));}}finally{closeSync(fd);}

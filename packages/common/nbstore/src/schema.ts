@@ -4,11 +4,12 @@
  * 版本 1：documents、assets、preferences 三张业务表。
  * 版本 2：新增 pending_updates（待提交 Yjs 更新队列）与 drafts（草稿恢复条目）。
  * 版本 3：将本地账号和会话表纳入启动迁移（兼容此前请求时创建的表）。
+ * 版本 4：附件文件索引；启动将历史 BLOB 校验迁移到数据库同级 attachments/。
  *
  * 业务表参与完整备份恢复；队列与草稿属于本机未提交状态，恢复时保留不被覆盖，
  * 以 generation 列标记写入时的数据库代际，供恢复后识别旧代际条目。
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 /** 完整备份覆盖的业务表及其列顺序。恢复只替换这些表。 */
 export const BUSINESS_TABLES: [string, string][] = [
   ['documents', 'scope,id,data'],
@@ -35,10 +36,12 @@ CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY,scope TEXT NOT NULL,server
 CREATE INDEX IF NOT EXISTS drafts_target ON drafts(scope,server,workspace,created);`,
   3: `CREATE TABLE IF NOT EXISTS local_accounts(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,salt TEXT NOT NULL,password TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS local_account_sessions(token TEXT PRIMARY KEY,user TEXT NOT NULL,expires INTEGER NOT NULL);`,
+  4: `CREATE TABLE IF NOT EXISTS asset_files(scope TEXT NOT NULL,workspace TEXT NOT NULL,id TEXT NOT NULL,path TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(scope,workspace,id));`,
 };
 
 /** 每次启动检查的列契约；新增字段时同时追加迁移并更新这里。 */
 export const SCHEMA_COLUMNS: Record<string, string> = {
+ asset_files:'scope,workspace,id,path,size,sha256',
  documents:'scope,id,data', assets:'scope,workspace,id,name,mime,data', preferences:'scope,key,value',
  pending_updates:'seq,scope,server,workspace,doc,data,created,attempts,retryAt,error,generation',
  drafts:'id,scope,server,workspace,doc,title,summary,data,missingAssets,created,generation',
@@ -46,4 +49,4 @@ export const SCHEMA_COLUMNS: Record<string, string> = {
 };
 
 /** 仅用于补建当前表/索引，不重放未来的 ALTER 或数据迁移。 */
-export const SCHEMA_CREATE_SQL = [SCHEMA_MIGRATIONS[1],SCHEMA_MIGRATIONS[2],SCHEMA_MIGRATIONS[3]].join('\n');
+export const SCHEMA_CREATE_SQL = [SCHEMA_MIGRATIONS[1],SCHEMA_MIGRATIONS[2],SCHEMA_MIGRATIONS[3],SCHEMA_MIGRATIONS[4]].join('\n');
