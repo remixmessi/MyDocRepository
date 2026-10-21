@@ -40,6 +40,7 @@ ENV NODE_ENV=production \
     MYDOC_CLOUD_DB_PATH=/app/data/cloud.sqlite
 COPY --from=build /app/packages/frontend/apps/web/dist ./packages/frontend/apps/web/dist
 COPY --from=build /app/packages/frontend/apps/web/server-dist ./packages/frontend/apps/web/server-dist
+# server-dist/fonts holds the PDF export Unicode font (Noto Sans SC, SIL OFL 1.1) copied by the server build.
 # The server bundle leaves only the native SQLite module external.
 COPY --from=build /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
 COPY --from=build /app/node_modules/bindings ./node_modules/bindings

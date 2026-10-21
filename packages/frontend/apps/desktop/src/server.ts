@@ -1,3 +1,4 @@
+import {CloudServer} from '../../web/server/cloud';
 import {createGitHubReleaseFallback} from './github-release-fallback';
 import {DatabaseBackups} from '../../../../common/nbstore/server/backups';
 import {createServer} from 'node:http';
@@ -11,6 +12,7 @@ import {staticFile} from './policy';
 import {proxyCloudRequest,type CloudRequestFactory} from './cloud-proxy';
 const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon'};
 export async function startDesktopServer(root:string,database:SQLiteProjectDatabase,requestCloud?:CloudRequestFactory,requestGitHub:typeof fetch=fetch){
+ const office=new CloudServer(database.path,{database});
  const githubFallback=createGitHubReleaseFallback(requestGitHub);
  const backups=new DatabaseBackups(database,database.connect);backups.start();
  const token=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
@@ -18,7 +20,7 @@ export async function startDesktopServer(root:string,database:SQLiteProjectDatab
   try{
    const url=new URL(req.url??'/','http://local');
    if(req.headers.host!==origin.slice(7)){res.writeHead(403);res.end();return;}
-   if(url.pathname.startsWith('/api/storage/')){if(req.headers.authorization!=='Bearer '+token){res.writeHead(403);res.end();return;}req.url=url.pathname.slice('/api/storage'.length)+url.search;await storageHandler(database,false,backups)(req,res);return;}
+   if(url.pathname.startsWith('/api/storage/')){if(req.headers.authorization!=='Bearer '+token){res.writeHead(403);res.end();return;}req.url=url.pathname.slice('/api/storage'.length)+url.search;await storageHandler(database,false,backups,undefined,(request,response,scope,check)=>office.localOffice(request,response,scope,check))(req,res);return;}
    if(url.pathname==='/'&&url.searchParams.get('desktopKey')===cookieToken){res.writeHead(303,{'Set-Cookie':`mydoc-desktop=${cookieToken}; HttpOnly; SameSite=Strict; Path=/`,'Location':'/'});res.end();return;}
    if(!req.headers.cookie?.split(';').some(c=>c.trim()==='mydoc-desktop='+cookieToken)){res.writeHead(403);res.end();return;}
    if(url.pathname==='/api/github-releases/latest'){
@@ -39,5 +41,5 @@ export async function startDesktopServer(root:string,database:SQLiteProjectDatab
   }catch{if(!res.headersSent){res.writeHead(404);res.end();}}
  });
  let origin='';await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',()=>resolve());});origin='http://127.0.0.1:'+(server.address() as {port:number}).port;
- return {backups,origin,url:origin+'/?desktopKey='+cookieToken,token,close:()=>new Promise<void>(resolve=>{backups.stop();server.close(()=>resolve());server.closeIdleConnections();})};
+ return {backups,origin,url:origin+'/?desktopKey='+cookieToken,token,close:()=>new Promise<void>(resolve=>{backups.stop();office.close();server.close(()=>resolve());server.closeIdleConnections();})};
 }

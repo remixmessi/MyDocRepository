@@ -3,7 +3,7 @@ import {test,expect} from '@playwright/test';
 test('缺少 crypto.subtle 时导入、重复识别与刷新保存正常',async({page,context})=>{
  await context.setExtraHTTPHeaders({'X-Mydoc-Test-Scope':crypto.randomUUID()});
  await page.goto('/');
- await expect(page.getByRole('button',{name:'新建文档'}).first()).toBeEnabled();
+ await expect(page.getByRole('button',{name:'新建文件'}).first()).toBeEnabled();
  const open=async()=>{
   await page.getByLabel('工作区选项').click();
   await page.getByRole('button',{name:'导入 Markdown',exact:true}).click();

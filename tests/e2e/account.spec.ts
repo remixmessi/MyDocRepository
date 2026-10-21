@@ -12,9 +12,9 @@ test('账户设置：改名、头像、邮箱验证、改密与登录设备注�
   // 第二个浏览器上下文登录同一账户，用来验证“登录设备”列表与注销。
   const other=await second.newPage();
   expect((await other.request.post(root+'/api/cloud/login',{data:{email,password:'account-password-1'}})).ok()).toBe(true);
-  await other.goto(root);await expect(other.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();
+  await other.goto(root);await expect(other.getByRole('button',{name:'新建文件',exact:true}).first()).toBeVisible();
   await other.getByLabel('当前工作区',{exact:true}).selectOption(space.id);
-  await other.getByRole('button',{name:'新建文档',exact:true}).first().click();
+  await other.getByRole('button',{name:'新建文件',exact:true}).first().click();
   await other.getByLabel('文档标题',{exact:true}).fill('会话失效前的文档');
   await expect(other.getByRole('status').filter({hasText:'已同步到工作空间'}).first()).toBeVisible();
 

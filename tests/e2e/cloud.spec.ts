@@ -27,9 +27,9 @@ test('独立 Web 服务：两个账户、邀请加入、正文实时协作和独
         await page.getByLabel('邮箱', { exact: true }).fill((name === '甲' ? 'a' : 'b') + suffix + '@example.com');
         await page.getByLabel('密码', { exact: true }).fill('test-password-12345');
         await page.getByRole('button', { name: '注册并登录' }).click();
-        await expect(page.getByRole('button', { name: '新建文档', exact: true }).first()).toBeVisible();
+        await expect(page.getByRole('button', { name: '新建文件', exact: true }).first()).toBeVisible();
     }
-    await a.getByRole('button', { name: '新建文档', exact: true }).first().click();
+    await a.getByRole('button', { name: '新建文件', exact: true }).first().click();
     await a.getByLabel('文档标题', { exact: true }).fill('甲的私人文档');
     const privateId = new URLSearchParams(new URL(a.url()).hash.slice(1)).get('doc')!, account = (await (await b.request.get('http://127.0.0.1:4180/api/cloud/session')).json()).user;
     expect((await b.request.get('http://127.0.0.1:4180/api/storage/document?id=doc:' + privateId, { headers: { 'X-Mydoc-Account': account.id } })).status()).toBe(204);
@@ -49,7 +49,7 @@ test('独立 Web 服务：两个账户、邀请加入、正文实时协作和独
     const token = await manager.getByLabel('邀请口令（7 天有效，仅指定邮箱可接受）').inputValue();
     await manager.getByRole('button', { name: '返回工作空间列表' }).click();
     await manager.getByRole('button', { name: '打开', exact: true }).click();
-    await a.getByRole('button', { name: '新建文档', exact: true }).first().click();
+    await a.getByRole('button', { name: '新建文件', exact: true }).first().click();
     await a.getByLabel('文档标题', { exact: true }).fill('共享文档');
     await a.getByRole('textbox', { name: '文档正文' }).fill('共同编辑的起点');
     await expect(a.getByRole('status').filter({ hasText: '正在保存' })).toHaveCount(0);
@@ -102,7 +102,7 @@ test('独立 Web 服务：两个账户、邀请加入、正文实时协作和独
         await expect(page.getByRole('textbox', { name: '文档正文' })).toContainText('甲在线改动');
     }
     await expect(b.getByRole('status').filter({ hasText: '已同步到工作空间' })).toHaveCount(2);
-    await a.getByRole('button', { name: '新建文档', exact: true }).first().click();
+    await a.getByRole('button', { name: '新建文件', exact: true }).first().click();
     await a.getByLabel('文档标题', { exact: true }).fill('另一个共享文档');
     await expect(b.getByLabel('文档标题', { exact: true })).toHaveValue('共享文档');
     manager = await dialog(a);
@@ -125,7 +125,7 @@ test('独立 Web 服务：两个账户、邀请加入、正文实时协作和独
     await manager.getByRole('button', { name: '确认调整角色' }).click();
     await expect(b.getByLabel('文档标题', { exact: true })).toBeDisabled();
     await expect(b.getByRole('textbox', { name: '文档正文' })).toHaveAttribute('contenteditable', 'false');
-    await expect(b.getByRole('button', { name: '新建文档', exact: true }).first()).toBeDisabled();
+    await expect(b.getByRole('button', { name: '新建文件', exact: true }).first()).toBeDisabled();
     await b.getByRole('button', { name: '白板', exact: true }).click();
     const canvas = b.getByLabel('白板画布', { exact: true }), beforeView = await canvas.getAttribute('data-viewport');
     await canvas.hover();

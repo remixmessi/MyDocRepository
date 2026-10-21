@@ -1,3 +1,4 @@
+import {FileTypeIcon} from './file-type-icon';
 import { useMemo, useState } from 'react';
 import { FileText, Grid2X2, List, MoreHorizontal, Plus, Star } from 'lucide-react';
 import type { LocalWorkspace, DocumentMeta } from './workspace';
@@ -33,7 +34,7 @@ export function DocumentOverview({ workspace, busy, onCreate, onSelect, onFavori
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [tagId, setTagId] = useState('');
   const tag = tagId && workspace.organization.tags.has(tagId) ? tagId : '';
-  const documents = workspace.list()
+  const documents = workspace.files()
     .filter(meta => (!favoriteOnly || !!meta.favorite) && (!tag || meta.tagIds?.includes(tag)))
     .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
   const groups = useMemo(() => {
@@ -80,7 +81,7 @@ export function DocumentOverview({ workspace, busy, onCreate, onSelect, onFavori
           const itemTags = (meta.tagIds ?? []).map(id => workspace.organization.tags.get(id)).filter(Boolean);
           return <article className="overview-item" key={meta.id}>
             <button className="overview-open" disabled={busy} onClick={() => onSelect(meta.id)}>
-              <span className="overview-icon"><FileText size={18} /></span>
+              <span className="overview-icon"><FileTypeIcon resource={workspace.officeResources.get(meta.id)} size={18}/></span>
               <span className="overview-copy"><strong>{title}</strong><small>{text || '暂无正文预览'}</small></span>
               {itemTags.length > 0 && <span className="overview-tags">{itemTags.slice(0, 2).map(tag => <TagBadge key={tag!.id} tag={tag!} />)}</span>}
               <time dateTime={new Date(meta.createdAt).toISOString()}>{timeLabel(meta.createdAt)}</time>

@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {validateDatabase,type SQLiteConnection} from '../../../../common/nbstore/server/database';
 
-export const CLOUD_SCHEMA_VERSION=7;
+export const CLOUD_SCHEMA_VERSION=13;
 /** 由公共数据库启动事务调用；版本记录与 DDL 失败时一起回滚。 */
 export function upgradeCloudDatabase(db:SQLiteConnection){const columns=(table:string)=>new Set((db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[]).map(column=>column.name));
   const add=(table:string,column:string,definition:string)=>{if(!columns(table).has(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);};
@@ -27,11 +27,36 @@ export function upgradeCloudDatabase(db:SQLiteConnection){const columns=(table:s
    if(version<6)db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(6);
    db.exec('CREATE TABLE IF NOT EXISTS cloud_workspace_audit(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,actor TEXT NOT NULL,actor_name TEXT NOT NULL,action TEXT NOT NULL,details TEXT NOT NULL,created INTEGER NOT NULL);CREATE INDEX IF NOT EXISTS cloud_workspace_audit_space ON cloud_workspace_audit(workspace,created)');
    if(version<7)db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(7);
-   validateDatabase(db,{
+   if(version<8){db.exec("CREATE TABLE IF NOT EXISTS cloud_office_resources(workspace TEXT NOT NULL,id TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('word','spreadsheet','pdf','presentation','text')),name TEXT NOT NULL,mime TEXT NOT NULL,source_format TEXT NOT NULL,original_asset_id TEXT,model_version INTEGER NOT NULL DEFAULT 1,generation TEXT NOT NULL,created_by TEXT NOT NULL,created INTEGER NOT NULL,updated INTEGER NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(workspace,id));CREATE INDEX IF NOT EXISTS cloud_office_resources_space ON cloud_office_resources(workspace,deleted,updated);CREATE UNIQUE INDEX IF NOT EXISTS cloud_office_resources_asset ON cloud_office_resources(workspace,original_asset_id) WHERE original_asset_id IS NOT NULL");db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(8);}
+   if(version<9){db.exec('CREATE TABLE IF NOT EXISTS cloud_office_restores(workspace TEXT NOT NULL,user TEXT NOT NULL,operation TEXT NOT NULL,sha256 TEXT NOT NULL,resource TEXT NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(workspace,user,operation))');db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(9);}
+   if(version<10){db.exec('CREATE TABLE IF NOT EXISTS cloud_workspace_restores(user TEXT NOT NULL,operation TEXT NOT NULL,sha256 TEXT NOT NULL,workspace TEXT NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(user,operation))');db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(10);}
+   if(version<11){db.exec('CREATE TABLE IF NOT EXISTS cloud_office_versions(workspace TEXT NOT NULL,resource TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,user TEXT NOT NULL,operation TEXT NOT NULL,created INTEGER NOT NULL,data BLOB,sha256 TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),PRIMARY KEY(workspace,resource,id),UNIQUE(workspace,resource,user,operation));CREATE INDEX IF NOT EXISTS cloud_office_versions_space ON cloud_office_versions(workspace,resource,deleted,created)');db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(11);}
+   // 版本 12：持久导出任务。输入快照在完成后清空，只保留产物；重启时运行中的任务重新排队。
+   if(version<12){db.exec(OFFICE_EXPORTS_SQL);db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(12);}
+   db.exec(OFFICE_EXPORTS_SQL);
+   // 版本 13：协作通知（@提及、回复）与办公文件编辑记录。均为新表，不改动既有数据。
+   if(version<13){db.exec(COLLABORATION_SQL);db.prepare('INSERT INTO cloud_migrations(version) VALUES (?)').run(13);}
+   db.exec(COLLABORATION_SQL);
+   validateDatabase(db,CLOUD_SCHEMA_COLUMNS);
+}
+
+const OFFICE_EXPORTS_SQL="CREATE TABLE IF NOT EXISTS cloud_office_exports(workspace TEXT NOT NULL,resource TEXT NOT NULL,id TEXT NOT NULL,user TEXT NOT NULL,operation TEXT NOT NULL,format TEXT NOT NULL,scope TEXT NOT NULL,sheet TEXT NOT NULL DEFAULT '',status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed')),created INTEGER NOT NULL,finished INTEGER,snapshot TEXT NOT NULL,input BLOB,output BLOB,sha256 TEXT,bytes INTEGER NOT NULL DEFAULT 0,filename TEXT NOT NULL,mime TEXT NOT NULL,error TEXT,PRIMARY KEY(workspace,resource,id),UNIQUE(workspace,resource,user,operation));CREATE INDEX IF NOT EXISTS cloud_office_exports_space ON cloud_office_exports(workspace,resource,created);CREATE INDEX IF NOT EXISTS cloud_office_exports_status ON cloud_office_exports(status,created)";
+const COLLABORATION_SQL="CREATE TABLE IF NOT EXISTS cloud_notifications(id TEXT PRIMARY KEY,user TEXT NOT NULL,workspace TEXT NOT NULL,resource TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('mention','reply')),actor TEXT NOT NULL,actor_name TEXT NOT NULL,thread TEXT NOT NULL,excerpt TEXT NOT NULL,created INTEGER NOT NULL,read INTEGER NOT NULL DEFAULT 0 CHECK(read IN (0,1)));CREATE INDEX IF NOT EXISTS cloud_notifications_user ON cloud_notifications(user,read,created);CREATE INDEX IF NOT EXISTS cloud_notifications_space ON cloud_notifications(workspace,resource);CREATE TABLE IF NOT EXISTS cloud_office_activity(workspace TEXT NOT NULL,resource TEXT NOT NULL,user TEXT NOT NULL,user_name TEXT NOT NULL,started INTEGER NOT NULL,last INTEGER NOT NULL,edits INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(workspace,resource,user,started));CREATE INDEX IF NOT EXISTS cloud_office_activity_recent ON cloud_office_activity(workspace,resource,last)";
+export const CLOUD_SCHEMA_COLUMNS:Record<string,string>={cloud_notifications:'id,user,workspace,resource,kind,actor,actor_name,thread,excerpt,created,read',cloud_office_activity:'workspace,resource,user,user_name,started,last,edits',cloud_office_exports:'workspace,resource,id,user,operation,format,scope,sheet,status,created,finished,snapshot,input,output,sha256,bytes,filename,mime,error',cloud_office_versions:'workspace,resource,id,name,user,operation,created,data,sha256,deleted',cloud_workspace_restores:'user,operation,sha256,workspace,created',cloud_office_restores:'workspace,user,operation,sha256,resource,created',
     cloud_workspace_audit:'id,workspace,actor,actor_name,action,details,created',cloud_migrations:'version',cloud_deleted:'workspace,id',cloud_users:'id,email,name,salt,password,server_admin,avatar,avatar_type,verified,created',
     cloud_sessions:'token,user,expires,id,created,seen,agent,ip',cloud_workspaces:'id,name,created',cloud_members:'workspace,user,role',
     cloud_invites:'token,workspace,email,role,expires',cloud_tokens:'token,user,kind,payload,created,expires',
     cloud_releases:'id,version,platform,filename,notes,bytes,sha256,created,path,arch',cloud_bootstrap:'key,user',
     cloud_document_permissions:'workspace,doc,user,role',cloud_asset_owners:'workspace,id,doc,user',
-   });
-}
+   cloud_office_resources:'workspace,id,kind,name,mime,source_format,original_asset_id,model_version,generation,created_by,created,updated,deleted',
+   };
+
+/** Only personal databases opt in. Account/team databases retain their separate restore policy. */
+/** Tables a personal physical backup may lack (added after version 11) or must not carry (regenerable or team-only). */
+const PERSONAL_OPTIONAL=['cloud_office_exports','cloud_notifications','cloud_office_activity'];
+export const LOCAL_OFFICE_BACKUP={columns:CLOUD_SCHEMA_COLUMNS,optional:PERSONAL_OPTIONAL,prepareSnapshot:(db:SQLiteConnection)=>{for(const table of PERSONAL_OPTIONAL)if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))db.exec(`DELETE FROM ${table}`);},validate:(db:SQLiteConnection)=>{
+ const version=(db.prepare('SELECT max(version) version FROM cloud_migrations').get() as {version:number}).version;
+ // 版本 11–13 只差可选的导出任务、通知与编辑记录表，旧个人备份仍可恢复；恢复后启动迁移会补齐版本记录。
+ if(version!==CLOUD_SCHEMA_VERSION&&version!==11&&version!==12)throw new Error('本地办公备份版本不支持，请先用对应版本升级');
+ for(const table of ['cloud_users','cloud_sessions','cloud_workspaces','cloud_members','cloud_invites','cloud_tokens','cloud_releases','cloud_bootstrap','cloud_workspace_audit','cloud_document_permissions','cloud_workspace_restores'])if(db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get())throw new Error('不能将团队账号数据库恢复为个人工作区');
+}};

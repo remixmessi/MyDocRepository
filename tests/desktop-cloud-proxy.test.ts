@@ -34,6 +34,19 @@ it('桌面代理隔离服务器 Cookie，转发二进制和实时流，支持会
       const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
       res.setHeader('Content-Type','application/octet-stream');res.end(Buffer.concat(chunks));return;
     }
+    if(path.endsWith('/office-text-import')){
+      const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
+      res.setHeader('Content-Type','application/json');res.end(JSON.stringify({bytes:[...Buffer.concat(chunks)]}));return;
+    }
+    if(path.endsWith('/office-export')){
+      res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.wordprocessingml.document');res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''copy.docx");res.setHeader('X-MyDoc-Snapshot','a'.repeat(64));res.end(Buffer.from([80,75,3,4]));return;
+    }
+    if(path.endsWith('/office-restore')||path.endsWith('/workspace-restore')){const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));res.setHeader('Content-Type','application/json');res.end(Buffer.concat(chunks));return;}
+    if(path.endsWith('/workspace-backup')){res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''team.mydoc-team.json");res.end('{"type":"mydoc-team-workspace"}');return;}
+    if(path.endsWith('/office-backup')){res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''file.mydoc-office.json");res.end('{"version":1}');return;}
+    if(path.endsWith('/office-original')){
+      res.setHeader('Content-Type','application/octet-stream');res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''original.txt");res.end(Buffer.from([9,8,7]));return;
+    }
     if(path.endsWith('/admin/release')){
       const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({arch:req.headers['x-mydoc-arch'],version:req.headers['x-mydoc-version'],filename:req.headers['x-mydoc-filename'],bytes:[...Buffer.concat(chunks)]}));return;
@@ -71,6 +84,14 @@ it('桌面代理隔离服务器 Cookie，转发二进制和实时流，支持会
     const bytes=new Uint8Array([0,255,1,128]);
     const asset=await call('/asset?id=file',{method:'PUT',body:bytes,headers:{'Content-Type':'application/octet-stream'}});
     expect(new Uint8Array(await asset.arrayBuffer())).toEqual(bytes);
+    const imported=await call('/office-text-import?workspace=test&name=原件.txt',{method:'POST',body:bytes,headers:{'Content-Type':'application/octet-stream'}});
+    expect(await imported.json()).toEqual({bytes:[...bytes]});
+    const original=await call('/office-original?workspace=test&id=doc:test');
+    expect(original.headers.get('content-disposition')).toContain("filename*=UTF-8''original.txt");expect(new Uint8Array(await original.arrayBuffer())).toEqual(new Uint8Array([9,8,7]));
+    const archive=await call('/office-backup?workspace=test&id=doc:test');expect(archive.headers.get('content-type')).toContain('application/json');expect(archive.headers.get('content-disposition')).toContain('mydoc-office.json');expect(await archive.json()).toEqual({version:1});const recovery=await call('/office-restore?workspace=test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'mydoc-office-resource'})});expect(await recovery.json()).toEqual({type:'mydoc-office-resource'});
+    const full=await call('/workspace-backup?workspace=test');expect(full.headers.get('content-disposition')).toContain('mydoc-team.json');expect(await full.json()).toEqual({type:'mydoc-team-workspace'});const restored=await call('/workspace-restore?operationId=test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:1})});expect(await restored.json()).toEqual({version:1});
+    const exported=await call('/office-export?workspace=test&id=doc:test&format=docx&scope=paragraphs');
+    expect(exported.status).toBe(200);expect(exported.headers.get('content-type')).toContain('wordprocessingml');expect(exported.headers.get('content-disposition')).toContain('copy.docx');expect(exported.headers.get('x-mydoc-snapshot')).toBe('a'.repeat(64));expect([...new Uint8Array(await exported.arrayBuffer())]).toEqual([80,75,3,4]);
     const publication=await call('/admin/release',{method:'POST',body:bytes,headers:{'X-MyDoc-Version':'1.2.3','X-MyDoc-Arch':'arm64','X-MyDoc-Platform':'darwin','X-MyDoc-Filename':'MyDoc-arm64.dmg'}});
     expect(await publication.json()).toEqual({arch:'arm64',version:'1.2.3',filename:'MyDoc-arm64.dmg',bytes:[...bytes]});
     expect((await call('/admin/releases')).status).toBe(200);expect((await call('/releases/latest?platform=darwin&arch=arm64')).status).toBe(200);

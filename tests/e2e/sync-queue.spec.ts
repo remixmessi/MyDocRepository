@@ -3,10 +3,10 @@ const root='http://127.0.0.1:4180';
 test('SQLite 待提交队列：同步失败刷新恢复，重试后确认清理；不使用浏览器业务持久化',async({page})=>{
  const suffix=Date.now();const registration=await page.request.post(root+'/api/cloud/register',{data:{email:`queue-${suffix}@example.com`,name:'队列测试',password:'queue-password-12345'}});expect(registration.ok()).toBe(true);
  await page.addInitScript(()=>{indexedDB.open=()=>{throw new Error('禁止浏览器持久化');};Storage.prototype.setItem=()=>{throw new Error('禁止浏览器持久化');};});
- await page.goto(root);await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeVisible();
+ await page.goto(root);await expect(page.getByRole('button',{name:'新建文件',exact:true}).first()).toBeVisible();
  const response=await page.request.post(root+'/api/cloud/workspaces',{data:{name:'持久队列测试'}});const space=await response.json();
  await page.reload();await page.getByLabel('当前工作区',{exact:true}).selectOption(space.id);
- await page.getByRole('button',{name:'新建文档',exact:true}).first().click();await page.getByLabel('文档标题',{exact:true}).fill('队列恢复文档');
+ await page.getByRole('button',{name:'新建文件',exact:true}).first().click();await page.getByLabel('文档标题',{exact:true}).fill('队列恢复文档');
  const body=page.getByRole('textbox',{name:'文档正文'});await body.fill('远端初始正文');
  await expect(page.locator('.save-status').filter({hasText:'正在保存'})).toHaveCount(0);
  await page.route('**/api/cloud/document?**',async route=>{if(route.request().method()==='POST')await route.fulfill({status:503,json:{error:'测试同步中断'}});else await route.continue();});

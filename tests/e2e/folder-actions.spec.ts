@@ -35,7 +35,7 @@ test('文件夹内新建、导入，文档重命名、移动和回收均保留�
   await expect(page.getByRole('textbox', { name: '文档标题' })).toHaveValue('项目笔记');
   await page.getByRole('button', { name: '项目', exact: true }).click();
   // Moving the selected document must reopen a collapsed destination.
-  await page.getByRole('button', { name: '新建文档', exact: true }).first().click();
+  await page.getByRole('button', { name: '新建文件', exact: true }).first().click();
   await documentActions(page, '无标题文档', '移动文档');
   await page.getByLabel('目标文件夹').selectOption({ label: '项目 / 资料' });
   await page.getByRole('button', { name: '保存', exact: true }).click();

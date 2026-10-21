@@ -1,0 +1,12 @@
+import {validatePdfFields} from '../../../../common/nbstore/src/pdf-forms';
+import {validateOfficeComments} from '../../../../common/nbstore/src/office-comments';
+import * as Y from 'yjs';
+import {validPdfAnnotation,pdfAnnotationId} from '../../../../common/nbstore/src/office-pdf';
+export const MAX_PDF_ANNOTATIONS=50_000;
+export function emptyPdfUpdate(){const doc=new Y.Doc();doc.getArray<Y.Map<unknown>>('annotations');doc.getMap('pdfOperations').set('$schema','0'.repeat(64));return {doc,update:Y.encodeStateAsUpdate(doc)};}
+export function validatePdfUpdate(current:Uint8Array|null,update:Uint8Array){const doc=new Y.Doc();try{
+ if(current)Y.applyUpdate(doc,current);Y.applyUpdate(doc,update);if(doc.store.pendingDs||doc.store.pendingStructs)throw new Error('PDF 更新缺少依赖');if(Y.encodeStateAsUpdate(doc).length>16*1024*1024)throw new Error('PDF 批注状态超过 16 MB');validateOfficeComments(doc);validatePdfFields(doc);if([...doc.share.keys()].some(key=>!['officeComments','officeCommentOperations','pdfFields','annotations','pdfOperations','pdfSource'].includes(key)))throw new Error('PDF 更新包含非法根结构');const annotations=doc.getArray('annotations');if(annotations.length>MAX_PDF_ANNOTATIONS)throw new Error('PDF 批注数量超过 5 万');const ids=new Set<string>();
+ for(const value of annotations.toArray()){if(!(value instanceof Y.Map)||!validPdfAnnotation(value.toJSON())||[...value.keys()].some(key=>!['id','author','page','type','x','y','content','width','height','points'].includes(key)))throw new Error('PDF 批注字段无效');const id=pdfAnnotationId(value);if(!id||ids.has(id)||id.length>100||value.has('id')&&! /^[a-zA-Z0-9-]{1,100}$/.test(id)||value.has('author')&&(typeof value.get('author')!=='string'||String(value.get('author')).length>100))throw new Error('PDF 批注编号无效');ids.add(id);}
+ if(doc.share.has('pdfSource')){const source=doc.getMap('pdfSource');if(source._start||source.size>5001||!source.has('$imported')||source.get('$imported')!==1||[...source].some(([key,value])=>key!=='$imported'&&(!/^(?:r\d+-\d+-R|p\d+-i\d+)$/.test(key)||typeof value!=='string'||!/^[a-zA-Z0-9-]{1,100}$/.test(value))))throw new Error('PDF 原件批注导入记录无效');}
+ if(doc.share.has('pdfOperations')){const receipts=doc.getMap('pdfOperations');if(receipts.size>10000||[...receipts].some(([key,value])=>key.length>200||typeof value!=='string'||! /^[a-f0-9]{64}$/.test(value)))throw new Error('PDF 操作回执无效');}
+}finally{doc.destroy();}}
