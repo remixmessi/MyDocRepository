@@ -83,6 +83,7 @@ export function parseDraft(text: string): DraftPreview {
     return { kind: 'document', documents: [describe(data.id, bytes(data.update, '草稿文档'))] };
   }
   if (data.format !== 'mydoc-workspace-draft') throw new Error('不是支持的草稿文件，或草稿版本不受支持');
+  if(data.office!==undefined&&(!Array.isArray(data.office)||data.office.length))throw new Error('该草稿包含办公文件，当前恢复器仅支持笔记。TXT 内容仍保存在草稿的 office 字段中，请保留原文件。');
   if (typeof data.workspaceId !== 'string' || !data.workspaceId) throw new Error('草稿工作空间标识无效');
   if (data.createdAt !== undefined && (typeof data.createdAt !== 'number' || !Number.isFinite(data.createdAt))) throw new Error('草稿创建时间无效');
   if (!Array.isArray(data.documents) || data.documents.length > MAX_DRAFT_DOCUMENTS) throw new Error('草稿文档列表无效');

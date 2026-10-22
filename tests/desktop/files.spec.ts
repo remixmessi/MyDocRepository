@@ -26,7 +26,7 @@ test('open-file 和 second-instance 排队、不覆盖弹窗、重载恢复待�
 });
 test('无效与超限文件反馈、沙箱不暴露任意路径读取',async()=>{
  const huge=join(directory,'huge.zip');await writeFile(huge,'');await truncate(huge,51*1024*1024);const app=await launch([join(directory,'missing.md'),huge]);try{const page=await app.firstWindow();await expect(page.locator('.error-banner')).toContainText('文件不存在');await expect(page.locator('.error-banner')).toContainText('50 MB');expect(await page.evaluate(()=>Object.keys(window.mydocDesktop!))).not.toContain('readFile');
- await expect(page.getByRole('dialog',{name:'导入文档',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'新建文档',exact:true}).first()).toBeEnabled();
+ await expect(page.getByRole('dialog',{name:'导入文档',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'新建文件',exact:true}).first()).toBeEnabled();
  }finally{await app.close();}
 });
 test('导入写入进行中阻止退出，完成后正常保存关闭',async()=>{

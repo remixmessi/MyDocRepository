@@ -26,7 +26,7 @@ function nameFor(name: string, items: TagMeta[], id?: string) {
 }
 export class DocumentOrganization {
   readonly tags: Y.Map<TagMeta>; readonly collections: Y.Map<CollectionMeta>;
-  constructor(private doc: Y.Doc, private documents: Y.Map<DocumentMeta>, private text: (id: string) => string,private assertWritable:()=>void=()=>{}) { this.tags = doc.getMap('tags'); this.collections = doc.getMap('collections'); }
+  constructor(private doc: Y.Doc, private documents: {get:(id:string)=>DocumentMeta|undefined;has:(id:string)=>boolean;values:()=>IterableIterator<DocumentMeta>;set:(id:string,meta:DocumentMeta)=>unknown}, private text: (id: string) => string,private assertWritable:()=>void=()=>{}) { this.tags = doc.getMap('tags'); this.collections = doc.getMap('collections'); }
   tagList() { return [...this.tags.values()].sort((a,b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id)); }
   collectionList() { return [...this.collections.values()].sort((a,b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)); }
   saveTag(name: string, id?: string, color?: TagColor) { this.assertWritable();

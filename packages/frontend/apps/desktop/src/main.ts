@@ -1,3 +1,4 @@
+import {upgradeCloudDatabase,LOCAL_OFFICE_BACKUP} from '../../web/server/schema';
 import {spawn} from 'node:child_process';
 import {createDesktopUpdates} from './update-runtime';
 import {DocumentLinkQueue,commandLineLinks} from './deep-links';
@@ -34,8 +35,8 @@ ipcMain.handle('mydoc:update-server',(event,address:unknown)=>{if(!trusted(event
 ipcMain.handle('mydoc:update-settings',(event,value:unknown)=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.updates.configure(value);});
 ipcMain.handle('mydoc:storage',async(event,input):Promise<DesktopStorageReply>=>{
  if(!trusted(event)||!validStorageRequest(input)||!server)throw new Error('桌面存储请求无效');
- const response=await fetch(server.origin+'/api/storage'+input.path,{method:input.method,headers:{Authorization:'Bearer '+server.token,...(input.generation?{'X-Mydoc-Generation':input.generation}:{}),...(input.contentType?{'Content-Type':input.contentType}:{})},body:input.body?.slice().buffer});
- return {status:response.status,contentType:response.headers.get('content-type')??'application/octet-stream',body:new Uint8Array(await response.arrayBuffer())};
+ const response=await fetch(server.origin+'/api/storage'+input.path,{method:input.method,headers:{Authorization:'Bearer '+server.token,...(input.generation?{'X-Mydoc-Generation':input.generation}:{}),...(input.officeGeneration?{'X-Mydoc-Office-Generation':input.officeGeneration}:{}),...(input.contentType?{'Content-Type':input.contentType}:{})},body:input.body?.slice().buffer});
+ return {status:response.status,officeGeneration:response.headers.get('x-mydoc-office-generation')??undefined,contentType:response.headers.get('content-type')??'application/octet-stream',body:new Uint8Array(await response.arrayBuffer())};
 });
 ipcMain.handle('mydoc:choose-backup-directory',async event=>{if(!trusted(event)||!server||!window)throw new Error('备份目录请求无效');const result=await dialog.showOpenDialog(window,{title:'选择备份目录',properties:['openDirectory','createDirectory']});return result.canceled?undefined:server.backups.setDirectory(result.filePaths[0]);});
 ipcMain.handle('mydoc:open-backup-directory',async event=>{if(!trusted(event)||!server)throw new Error('备份目录请求无效');mkdirSync(server.backups.settings.directory,{recursive:true});const error=await shell.openPath(server.backups.settings.directory);if(error)throw new Error('无法打开备份目录');});
@@ -112,7 +113,7 @@ if(!app.requestSingleInstanceLock())app.quit();else{
   // Packaged applications register the protocol; development leaves installed ownership intact.
   if(app.isPackaged)app.setAsDefaultProtocolClient('mydoc');
   if(process.platform==='darwin')app.dock?.setIcon(appIcon);
-  while(!database){try{const path=!app.isPackaged&&process.env.MYDOC_DESKTOP_DB_PATH?resolve(process.env.MYDOC_DESKTOP_DB_PATH):desktopDatabasePath(app.isPackaged,resolve(__dirname,'../../../../..'),app.getPath('userData'));if(app.isPackaged)migrateLegacyDesktopDatabase(dirname(app.getPath('exe')),app.getPath('userData'));database=new SQLiteProjectDatabase(path,connectDesktopDatabase);}catch(error){const result=await dialog.showMessageBox({type:'error',title:'数据库打开失败',message:'无法打开本地数据库',detail:error instanceof Error?error.message:String(error),buttons:['重试','退出'],defaultId:0,cancelId:1});if(result.response===1){allowingQuit=true;app.quit();return;}}}
+  while(!database){try{const path=!app.isPackaged&&process.env.MYDOC_DESKTOP_DB_PATH?resolve(process.env.MYDOC_DESKTOP_DB_PATH):desktopDatabasePath(app.isPackaged,resolve(__dirname,'../../../../..'),app.getPath('userData'));if(app.isPackaged)migrateLegacyDesktopDatabase(dirname(app.getPath('exe')),app.getPath('userData'));database=new SQLiteProjectDatabase(path,connectDesktopDatabase,upgradeCloudDatabase,{backupExtension:LOCAL_OFFICE_BACKUP});}catch(error){const result=await dialog.showMessageBox({type:'error',title:'数据库打开失败',message:'无法打开本地数据库',detail:error instanceof Error?error.message:String(error),buttons:['重试','退出'],defaultId:0,cancelId:1});if(result.response===1){allowingQuit=true;app.quit();return;}}}
   try{server=await startDesktopServer(join(__dirname,'renderer'),database,electronCloudRequest,(url,options)=>net.fetch(url instanceof URL?url.href:url,options));updater=createDesktopUpdates({
    notify:state=>{if(state.phase==='installing'){allowingQuit=true;if(database){database.restoring=true;updateOwnsDatabaseLock=true;}}window?.webContents.send('mydoc:update-state',state);},
    release:()=>{if(!updateOwnsClose)return;updateOwnsClose=false;allowingQuit=false;closing=false;if(updateOwnsDatabaseLock&&database)database.restoring=false;updateOwnsDatabaseLock=false;window?.webContents.send('mydoc:update-unlock');},

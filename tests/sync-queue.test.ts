@@ -135,3 +135,10 @@ it('尚未落盘的后续改动不会被旧条目的成功确认清除；重试�
   await persistence.retry();expect(persistence.state).toBe('saved');expect(client.memoryOnly).toBe(false);expect(read(f.db.load('remote',target.doc)!)).toBe('已落盘未落盘');
  }finally{await persistence?.destroy();await f.close();}
 });
+
+it('办公代际封包与原始草稿同时落盘；归档旧队列保留旧草稿且不混入新代际',async()=>{
+ const {packOfficeUpdate,unpackOfficeUpdate}=await import('../packages/common/nbstore/src/office-generation');const dir=mkdtempSync(join(tmpdir(),'mydoc-office-queue-')),db=new SQLiteProjectDatabase(join(dir,'db.sqlite'),p=>new Database(p));try{
+  const queue=new SQLiteSyncQueue(db),old=update('旧代际草稿'),fresh=update('新代际内容');queue.enqueue(target,packOfficeUpdate(old,'old-generation-12345'),old);expect(unpackOfficeUpdate(queue.list(target)[0].data).generation).toBe('old-generation-12345');expect(read((db.db.prepare('SELECT data FROM drafts').get() as {data:Buffer}).data)).toBe('旧代际草稿');expect(queue.archiveOffice(target,'old-generation-12345')).toBe(1);expect(queue.list(target)).toHaveLength(0);
+  const seq=queue.enqueue(target,packOfficeUpdate(fresh,'epoch-new-generation-12345'),fresh);expect(db.db.prepare('SELECT count(*) n FROM drafts').get()).toEqual({n:2});const newer=db.db.prepare("SELECT data FROM drafts WHERE generation LIKE '%@office:epoch-%'").get() as {data:Buffer};expect(read(newer.data)).toBe('新代际内容');queue.acknowledge(target,seq);expect(db.db.prepare('SELECT count(*) n FROM drafts').get()).toEqual({n:1});expect(read((db.db.prepare('SELECT data FROM drafts').get() as {data:Buffer}).data)).toBe('旧代际草稿');
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});

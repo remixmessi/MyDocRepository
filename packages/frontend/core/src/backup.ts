@@ -1,3 +1,5 @@
+import {cloudRequest} from '../../../common/nbstore/src/cloud';
+import {isCloudWorkspaceArchive,type CloudWorkspaceArchive} from '../../../common/nbstore/src/workspace-archive';
 import {validWebClip} from './clip-source';
 import {validJournalDate} from './journal';
 import {validCommentThread,MAX_COMMENT_THREADS,type CommentThread} from '../../../editor/blocks/src/comment-model';
@@ -14,22 +16,26 @@ import { BlockStore } from '@mydoc/editor-framework';
 import { validWebCard, validDocEmbed, validSurfaceRef } from '@mydoc/editor-blocks';
 import { readDocument, documentAssets } from '@mydoc/editor-blocks';
 import type { LocalWorkspace, FolderMeta, DocumentMeta } from './workspace';
-export interface WorkspaceBackup { type: 'mydoc-workspace'; version: 1; workspaceId?: string; name: string; exportedAt: number; folders: FolderMeta[]; templates?: DocumentTemplate[]; tags?: TagMeta[]; collections?: CollectionMeta[]; assets?: { id: string; name: string; mime: string; size: number; data: string }[]; documents: { meta: DocumentMeta; update: string }[]; trash?: { meta: DocumentMeta; update: string; deletedAt: number; collectionIds: string[] }[] }
+export interface WorkspaceBackup { type: 'mydoc-workspace'; version: 1|2; office?:CloudWorkspaceArchive; officeOrganization?:{id:string;folderId?:string|null;favorite?:boolean;tagIds?:string[]}[]; workspaceId?: string; name: string; exportedAt: number; folders: FolderMeta[]; templates?: DocumentTemplate[]; tags?: TagMeta[]; collections?: CollectionMeta[]; assets?: { id: string; name: string; mime: string; size: number; data: string }[]; documents: { meta: DocumentMeta; update: string }[]; trash?: { meta: DocumentMeta; update: string; deletedAt: number; collectionIds: string[] }[] }
 export function encodeBinary(bytes: Uint8Array) { let value = ''; for (let index = 0; index < bytes.length; index += 8192) value += String.fromCharCode(...bytes.subarray(index, index + 8192)); return btoa(value); }
 export function decodeBinary(value: string) { if (!value || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error('备份包含无效的文档数据'); const text = atob(value); return Uint8Array.from(text, char => char.charCodeAt(0)); }
 export async function exportBackup(workspace: LocalWorkspace, name: string): Promise<WorkspaceBackup> {
+  await workspace.prepareWorkspaceBackup();
+  const office=!workspace.sync&&workspace.officeAvailable?await (await cloudRequest('/office-workspace-backup?'+new URLSearchParams({workspace:workspace.id}))).json() as CloudWorkspaceArchive:undefined;
+  if(workspace.officeResources.size&&!office)throw new Error('当前存储无法生成办公文件完整备份');
   await workspace.flush(); const documents: WorkspaceBackup['documents'] = []; const trash: NonNullable<WorkspaceBackup['trash']> = []; const assetIds = new Set<string>(); const assets: NonNullable<WorkspaceBackup['assets']> = [];
   const assetOwners=new Map<string,string>();
   for (const meta of workspace.allDocuments()) { const item = await workspace.openDocument(meta.id); documentAssets(readDocument(item.store)).forEach(id => {assetIds.add(id);assetOwners.set(id,meta.id);}); for(const image of item.store.doc.getMap<SurfaceElement>('surface').values()) if(image.kind==='image'){assetIds.add(image.assetId);assetOwners.set(image.assetId,meta.id);} for(const template of item.store.doc.getMap<BoardTemplate>('whiteboardTemplates').values()){if(!validTemplate(template))throw new Error('白板模板无效');templateAssets(template).forEach(id=>{assetIds.add(id);assetOwners.set(id,meta.id);});} const update=encodeBinary(Y.encodeStateAsUpdate(item.store.doc));const recycled=workspace.trash.get(meta.id);if(recycled)trash.push({...recycled,update});else documents.push({meta,update}); }
   for (const id of assetIds) { const asset = await (assetOwners.has(id)?workspace.documentAssets(assetOwners.get(id)!).get(id):workspace.assets.get(id)); if (!asset) throw new Error('本地文件缺失，无法生成完整备份，请先恢复文件'); assets.push({ id, name: asset.name, mime: asset.mime, size: asset.size, data: encodeBinary(asset.bytes) }); }
   for(const template of workspace.templates.values()){const store=templateStore(template);try{for(const id of snapshotAssets(store))if(!assetIds.has(id)){const asset=await workspace.assets.get(id);if(!asset)throw new Error('模板文件缺失，无法生成完整备份');assetIds.add(id);assets.push({id,name:asset.name,mime:asset.mime,size:asset.size,data:encodeBinary(asset.bytes)});}}finally{disposeTemplate(store);}}
-  const result: WorkspaceBackup = { type: 'mydoc-workspace', version: 1, assets, workspaceId: workspace.id, name, exportedAt: Date.now(), templates:[...workspace.templates.values()], folders: workspace.folderList(), tags: workspace.organization.tagList(), collections: workspace.organization.collectionList(), documents, trash };
+  const result: WorkspaceBackup = { type: 'mydoc-workspace', version: office?2:1, ...(office?{office,officeOrganization:[...workspace.officeOrganization].filter(([id])=>office.office.some(r=>r.id===id&&!r.deleted)).map(([id,value])=>({id,...value}))}:{}), assets, workspaceId: workspace.id, name, exportedAt: Date.now(), templates:[...workspace.templates.values()], folders: workspace.folderList(), tags: workspace.organization.tagList(), collections: workspace.organization.collectionList(), documents, trash };
   if (new Blob([JSON.stringify(result)]).size > 50 * 1024 * 1024) throw new Error('完整备份超过 50 MB，请将文档分到不同工作区后备份'); return result;
 }
 function record(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 export function parseBackup(text: string): WorkspaceBackup {
+  if(new Blob([text]).size>50*1024*1024)throw new Error('完整备份超过 50 MB');
   let data: unknown; try { data = JSON.parse(text); } catch { throw new Error('无法读取备份 JSON 文件'); }
-  if (!record(data) || (data.workspaceId !== undefined && typeof data.workspaceId !== 'string') || data.type !== 'mydoc-workspace' || data.version !== 1 || typeof data.name !== 'string' || !data.name.trim() || !Array.isArray(data.documents) || !Array.isArray(data.folders) || data.documents.length > 10000 || data.folders.length > 10000) throw new Error('不是支持的文档库备份文件');
+  if (!record(data) || (data.workspaceId !== undefined && typeof data.workspaceId !== 'string') || data.type !== 'mydoc-workspace' || ![1,2].includes(Number(data.version)) || typeof data.name !== 'string' || !data.name.trim() || !Array.isArray(data.documents) || !Array.isArray(data.folders) || data.documents.length > 10000 || data.folders.length > 10000) throw new Error('不是支持的文档库备份文件');
   if(data.trash!==undefined&&(!Array.isArray(data.trash)||data.trash.length+data.documents.length>10000))throw new Error('备份回收站无效');
   for(const entry of (data.trash??[]) as unknown[])if(!record(entry)||typeof entry.deletedAt!=='number'||!Number.isFinite(entry.deletedAt)||entry.deletedAt<=0||!uniqueIds(entry.collectionIds))throw new Error('备份回收站状态无效');
     if(data.templates!==undefined&&(!Array.isArray(data.templates)||data.templates.length>MAX_TEMPLATES))throw new Error('备份文档模板无效');
@@ -74,6 +80,12 @@ export function parseBackup(text: string): WorkspaceBackup {
       }); }
     catch { throw new Error('备份包含损坏的文档数据'); } finally { store?.destroy(); doc.destroy(); }
   }
+  if(data.version===2){
+    if(!isCloudWorkspaceArchive(data.office)||!Array.isArray(data.officeOrganization)||data.officeOrganization.length>10000)throw new Error('个人办公备份信息无效');
+    const officeIds=new Set<string>();
+    for(const r of data.office.office){if(!record(r)||typeof r.id!=='string'||!r.id.startsWith('doc:')||officeIds.has(r.id)||ids.has(r.id)||![0,1].includes(Number(r.deleted)))throw new Error('办公文件标识无效或重复');officeIds.add(r.id);if(!r.deleted)ids.add(r.id);}
+    const seen=new Set<string>();for(const entry of data.officeOrganization){if(!record(entry)||typeof entry.id!=='string'||!officeIds.has(entry.id)||seen.has(entry.id)||Object.keys(entry).some(key=>!['id','folderId','favorite','tagIds'].includes(key))||entry.folderId!=null&&!folders.has(String(entry.folderId))||entry.favorite!==undefined&&typeof entry.favorite!=='boolean'||entry.tagIds!==undefined&&(!uniqueIds(entry.tagIds)||entry.tagIds.some(id=>!tagIds.has(id))))throw new Error('办公文件目录信息无效');seen.add(entry.id);}
+  }else if(data.office!==undefined||data.officeOrganization!==undefined)throw new Error('旧版备份不能包含办公文件');
   const collectionIds = new Set<string>(); const collectionNames = new Set<string>();
   if (data.collections !== undefined && (!Array.isArray(data.collections) || data.collections.length > 10000)) throw new Error('备份集合无效');
   for (const value of (data.collections ?? []) as unknown[]) { if (!validCollection(value) || collectionIds.has(value.id) || collectionNames.has(value.name.trim().toLocaleLowerCase()) || value.documentIds.some(id => !ids.has(id)) || value.rules.tagIds.some(id => !tagIds.has(id))) throw new Error('备份集合或规则无效'); collectionIds.add(value.id); collectionNames.add(value.name.trim().toLocaleLowerCase()); }

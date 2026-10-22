@@ -5,8 +5,11 @@ import {fileURLToPath} from 'node:url';
 import {resolve,dirname} from 'node:path';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..'),desktop=resolve(root,'packages/frontend/apps/desktop'),output=resolve(desktop,'dist');
 await rm(output,{recursive:true,force:true});await mkdir(output,{recursive:true});
-for(const entry of ['main','preload'])await build({entryPoints:[resolve(desktop,'src',entry+'.ts')],outfile:resolve(output,entry+'.cjs'),bundle:true,platform:'node',format:'cjs',target:'node24',external:['electron','electron-updater'],sourcemap:true});
+const parser=await build({entryPoints:[resolve(root,'packages/frontend/apps/web/server/office-parser-child.ts')],write:false,bundle:true,platform:'node',format:'cjs',target:'node24'});
+for(const entry of ['main','preload'])await build({entryPoints:[resolve(desktop,'src',entry+'.ts')],outfile:resolve(output,entry+'.cjs'),bundle:true,platform:'node',format:'cjs',target:'node24',external:['electron','electron-updater','better-sqlite3'],define:{__MYDOC_OFFICE_PARSER_SOURCE__:JSON.stringify(parser.outputFiles[0].text)},sourcemap:true});
 await cp(resolve(root,'packages/frontend/apps/web/dist'),resolve(output,'renderer'),{recursive:true});
 await cp(resolve(desktop,'resources/icon.png'),resolve(output,'icon.png'));
+// PDF export Unicode font, read next to main.cjs (inside the asar) and passed to the parser process.
+await cp(resolve(root,'packages/frontend/apps/web/server/fonts'),resolve(output,'fonts'),{recursive:true});
 const feed=updateFeed(process.env.MYDOC_UPDATE_URL);await writeFile(resolve(output,'release-config.json'),JSON.stringify({enabled:process.env.MYDOC_SIGNED_RELEASE==='1'&&!!feed,channel:feed?'稳定版':'未配置'}));
 console.log('Desktop main, preload and renderer built.');

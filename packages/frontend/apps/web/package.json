@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@mydoc/frontend-core": "workspace:*",
+    "@pdf-lib/fontkit": "1.1.1",
     "better-sqlite3": "12.4.1",
+    "pdf-lib": "1.17.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }

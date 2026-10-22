@@ -1,5 +1,5 @@
-export interface DesktopStorageRequest {path:string;method:string;body?:Uint8Array;generation?:string;contentType?:string;}
-export interface DesktopStorageReply {status:number;contentType:string;body:Uint8Array;}
+export interface DesktopStorageRequest {path:string;method:string;body?:Uint8Array;generation?:string;contentType?:string;officeGeneration?:string;}
+export interface DesktopStorageReply {status:number;contentType:string;officeGeneration?:string;body:Uint8Array;}
 export interface DesktopOpenFiles {id:string;files:{name:string;bytes:Uint8Array;modified:number}[];errors:string[];}
 export interface DesktopBridge {
  readonly platform:string;
@@ -30,6 +30,7 @@ export async function sqliteFetch(path:string,init?:RequestInit):Promise<Respons
  if(!window.mydocDesktop)return fetch('/api/storage'+path,{...init,headers:{...Object.fromEntries(new Headers(init?.headers)),...(storageGeneration?{'X-Mydoc-Generation':storageGeneration}:{}),...(storageAccount?{'X-Mydoc-Account':storageAccount}:{})}});
  const body=init?.body===undefined?undefined:new Uint8Array(await new Response(init.body).arrayBuffer());
  const contentType=new Headers(init?.headers).get('Content-Type')??undefined;
- const reply=await window.mydocDesktop.storage({path,method:init?.method??'GET',body,generation:storageGeneration,contentType});
- return new Response([204,304].includes(reply.status)?null:reply.body.slice().buffer,{status:reply.status,headers:{'Content-Type':reply.contentType}});
+ const officeGeneration=new Headers(init?.headers).get('X-Mydoc-Office-Generation')??undefined;
+ const reply=await window.mydocDesktop.storage({path,method:init?.method??'GET',body,generation:storageGeneration,contentType,officeGeneration});
+ return new Response([204,304].includes(reply.status)?null:reply.body.slice().buffer,{status:reply.status,headers:{'Content-Type':reply.contentType,...(reply.officeGeneration?{'X-Mydoc-Office-Generation':reply.officeGeneration}:{})}});
 }

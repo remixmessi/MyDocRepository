@@ -11,7 +11,10 @@ export interface SQLiteConnection {
  transaction<T>(fn:()=>T):{immediate:()=>T};
  close():void;
 }
+/** `optional` tables may be absent from older backups; `prepareSnapshot` strips regenerable data from a fresh snapshot. */
+export interface BackupExtension {columns:Record<string,string>;validate:(db:SQLiteConnection)=>void;optional?:string[];prepareSnapshot?:(db:SQLiteConnection)=>void}
 export interface StartupProtection {
+ backupExtension?:BackupExtension;
  /** Runs before any migration or schema writes; a failed snapshot stops startup. */
  beforeMigration?:(db:SQLiteConnection)=>void;
  preserve?:Record<string,string>;
@@ -20,11 +23,13 @@ export class SQLiteProjectDatabase {
  restoring=false;
  get generation(){let row=this.db.prepare("SELECT value FROM preferences WHERE scope='__system' AND key='restore-generation'").get() as {value:string}|undefined;if(!row){this.db.prepare("INSERT OR IGNORE INTO preferences VALUES ('__system','restore-generation',?)").run(randomUUID());row=this.db.prepare("SELECT value FROM preferences WHERE scope='__system' AND key='restore-generation'").get() as {value:string};}return row.value;}
  set generation(value:string){this.db.prepare("INSERT INTO preferences VALUES ('__system','restore-generation',?) ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value").run(value);}
+ readonly backupExtension?:BackupExtension;
  readonly db:SQLiteConnection;
  readonly attachments:AttachmentFiles;
  readonly initializedThisStart:boolean;
  readonly schemaVersion=SCHEMA_VERSION;
  constructor(readonly path:string,readonly connect:(path:string)=>SQLiteConnection,upgrade?:(db:SQLiteConnection)=>void,protection:StartupProtection={}){
+  this.backupExtension=protection.backupExtension;
   mkdirSync(dirname(path),{recursive:true});this.db=connect(path);this.attachments=new AttachmentFiles(this.db,path);
   try {
    this.db.pragma('busy_timeout = 5000');

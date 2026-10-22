@@ -1,5 +1,8 @@
+import {packOfficeUpdate,unpackOfficeUpdate} from './office-generation';
+import type {DelimitedImportOptions} from './office-delimited-import';
 import {DurableCloudQueue,type QueueSnapshot} from './sync-queue';
-import {getStorageAccount} from './desktop';
+import {sqliteFetch,getStorageAccount} from './desktop';
+import type {TextEncoding,TextLineEnding} from './office';
 import {Y,createDocumentAwareness,applyPresence,documentAwareness as importAwareness} from '@mydoc/crdt';import type {DocumentStorage} from './index';import type {AssetRecord,AssetStorage} from './assets';
 export const CLOUD_ORIGIN=Symbol('mydoc-cloud');
 let configuredCloudServer='';
@@ -14,10 +17,38 @@ export interface CloudAccount {id:string;email:string;name:string;serverAdmin?:b
 /** 邮件服务状态：未配置时界面要如实说明口令改为当场显示或由运维转交。 */
 export interface CloudMailStatus {configured:boolean;reason?:string;}
 export interface CloudWorkspace {id:string;name:string;createdAt:number;role:'owner'|'admin'|'member'|'viewer';}
+export type CloudOfficeKind='word'|'spreadsheet'|'pdf'|'presentation'|'text';
+export interface CloudOfficeResource {id:string;kind:CloudOfficeKind;name:string;mime:string;sourceFormat:string;originalAssetId:string|null;modelVersion:number;generation:string;createdBy:string;created:number;updated:number;deleted:number;}
 export class CloudError extends Error {constructor(message:string,readonly status:number){super(message);}}
 export function cloudUrl(path:string,base=configuredCloudServer){return base&&globalThis.window?.mydocDesktop?'/api/cloud-proxy/'+encodeURIComponent(base)+'/api/cloud'+path:base+'/api/cloud'+path;}
-export async function cloudRequest(path:string,init?:RequestInit,server=configuredCloudServer){const response=await fetch(cloudUrl(path,server),{...init,credentials:'include',headers:{...Object.fromEntries(new Headers(init?.headers)),...(!server&&getStorageAccount()?{'X-Mydoc-Account':getStorageAccount()!}:{})}});if(!response.ok){let message='工作空间服务不可用';try{message=(await response.json()).error??message;}catch{}throw new CloudError(message,response.status);}return response;}
-export async function cloudJson<T>(path:string,method='GET',value?:unknown,server=configuredCloudServer):Promise<T>{return (await cloudRequest(path,{method,...(value===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})},server)).json();}
+const officeGenerations=new Map<string,string>(),blockedOfficeGenerations=new Set<string>();
+const generationKey=(workspace:string,id:string)=>JSON.stringify([localOfficeWorkspaces.has(workspace)?'local':configuredCloudServer,getStorageAccount()??'',workspace,id]);
+export function officeDocumentGeneration(workspace:string,id:string){return officeGenerations.get(generationKey(workspace,id));}
+export function officeGenerationBlocked(workspace:string,id:string){return blockedOfficeGenerations.has(generationKey(workspace,id));}
+export function clearOfficeGenerations(workspace:string){for(const key of officeGenerations.keys())if(JSON.parse(key)[2]===workspace){officeGenerations.delete(key);blockedOfficeGenerations.delete(key);}}
+export function blockOfficeGeneration(workspace:string,id:string){blockedOfficeGenerations.add(generationKey(workspace,id));globalThis.dispatchEvent?.(new Event('office-generation-changed'));}
+export function acceptOfficeGeneration(workspace:string,id:string,generation?:string|null){
+ if(!generation)return;
+ const key=generationKey(workspace,id),previous=officeGenerations.get(key);
+ if(blockedOfficeGenerations.has(key)||previous&&previous!==generation){blockOfficeGeneration(workspace,id);throw new CloudError('文件已原位恢复，旧代际草稿已保留；请导出草稿并重新载入页面',409);}
+ officeGenerations.set(key,generation);
+}
+const localOfficeWorkspaces=new Map<string,number>();
+export function registerLocalOffice(workspace:string){localOfficeWorkspaces.set(workspace,(localOfficeWorkspaces.get(workspace)??0)+1);return()=>{const count=(localOfficeWorkspaces.get(workspace)??1)-1;if(count)localOfficeWorkspaces.set(workspace,count);else localOfficeWorkspaces.delete(workspace);};}
+export async function cloudRequest(path:string,init?:RequestInit,server=configuredCloudServer){const account=getStorageAccount(),url=new URL(path,'http://local'),workspace=url.searchParams.get('workspace'),id=url.searchParams.get('id');if(workspace&&id&&url.pathname!=='/document'&&url.pathname!=='/sync'){const generation=officeDocumentGeneration(workspace,url.searchParams.get('doc')??id);if(generation)init={...init,headers:{...Object.fromEntries(new Headers(init?.headers)),'X-Mydoc-Office-Generation':generation}};}const response=workspace&&localOfficeWorkspaces.has(workspace)?await sqliteFetch('/office'+path,init):await fetch(cloudUrl(path,server),{...init,credentials:'include',headers:{...Object.fromEntries(new Headers(init?.headers)),...(!server&&getStorageAccount()?{'X-Mydoc-Account':getStorageAccount()!}:{})}});if(account!==getStorageAccount())throw new CloudError('账户已变更，请保留草稿并重新打开页面',409);if(!response.ok){let message='工作空间服务不可用';try{const value=await response.json();message=value.error??message;if(value.code==='office-generation'&&workspace&&id)blockOfficeGeneration(workspace,id);}catch{}throw new CloudError(message,response.status);}if(url.pathname==='/document'&&(!init?.method||init.method==='GET')&&workspace&&id)acceptOfficeGeneration(workspace,id,response.headers.get('x-mydoc-office-generation'));return response;}
+export async function cloudJson<T>(path:string,method='GET',value?:unknown,server=configuredCloudServer):Promise<T>{const url=new URL(path,'http://local'),workspace=url.searchParams.get('workspace'),id=url.searchParams.get('id');if(method==='POST'&&/^\/office-(sheet|pdf|pdf-form|presentation|comment|word-table)-operation$|^\/office-pdf-native-annotations$/.test(url.pathname)&&workspace&&id&&value&&typeof value==='object'&&!Array.isArray(value)&&!Object.hasOwn(value,'officeGeneration')){const generation=officeDocumentGeneration(workspace,id);if(generation)(value as Record<string,unknown>).officeGeneration=generation;}return (await cloudRequest(path,{method,...(value===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})},server)).json();}
+export function officeResourcePath(workspace:string,id?:string){const query='?workspace='+encodeURIComponent(workspace)+(id?'&id='+encodeURIComponent(id):'');return id?'/office-resource'+query:'/office-resources'+query;}
+export async function listCloudOfficeResources(workspace:string,server=configuredCloudServer){return cloudJson<CloudOfficeResource[]>(officeResourcePath(workspace),'GET',undefined,server);}
+export async function createCloudOfficeResource(workspace:string,input:Pick<CloudOfficeResource,'kind'|'name'|'mime'|'sourceFormat'> & {originalAssetId?:string|null},server=configuredCloudServer){return cloudJson<CloudOfficeResource>(officeResourcePath(workspace),'POST',input,server);}
+export async function importCloudOfficeText(workspace:string,file:File,encoding?:TextEncoding,lineEnding?:TextLineEnding){
+ const query=new URLSearchParams({workspace,name:file.name});if(encoding)query.set('encoding',encoding);if(lineEnding)query.set('lineEnding',lineEnding);
+ return (await cloudRequest('/office-text-import?'+query,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file})).json() as Promise<CloudOfficeResource>;
+}
+export async function importCloudOfficeFile(workspace:string,file:File,options?:DelimitedImportOptions){
+ const query=new URLSearchParams({workspace,name:file.name});if(options){if(options.encoding)query.set('encoding',options.encoding);query.set('delimiter',options.delimiter===','?'comma':'tab');query.set('quoteMode',options.quoteMode);}
+ return (await cloudRequest('/office-import?'+query,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file})).json() as Promise<CloudOfficeResource>;
+}
+export function getCloudOfficeOriginal(workspace:string,id:string){return cloudRequest('/office-original?'+new URLSearchParams({workspace,id}));}
 export type SyncStatus='connecting'|'connected'|'offline'|'blocked';
 const decode=(value:string)=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
 export class CloudStorage implements DocumentStorage {
@@ -28,6 +59,8 @@ export class CloudStorage implements DocumentStorage {
  private readonly durable:DurableCloudQueue;
  private snapshots=new Map<string,QueueSnapshot>();
  private documentReadOnly=new Map<string,boolean>();
+ private serverManaged=new Set<string>();
+ manageServerDocument(id:string){this.serverManaged.add(id);}
  isReadOnly(id:string){return this.readOnly||this.documentReadOnly.get(id)===true;}
  private sending=new Map<string,Promise<void>>();
  private retryTimer?:ReturnType<typeof setTimeout>;
@@ -51,51 +84,63 @@ export class CloudStorage implements DocumentStorage {
  private async request(path:string,init?:RequestInit,id?:string){try{this.checkAccount();return await cloudRequest(path,init);}catch(error){if(id?.startsWith('doc:')&&error instanceof CloudError&&error.status===403){this.documentReadOnly.set(id,true);this.status='offline';this.reason=error.message;this.notify();}else this.fail(error);throw error;}}
  private async refreshAccess(id:string){const access=await (await this.request(this.path('/access',id))).json() as {role:CloudWorkspace['role']};if(id.startsWith('doc:'))this.documentReadOnly.set(id,access.role==='viewer');else{this.role=access.role;this.readOnly=access.role==='viewer';}this.notify();}
  private async snapshot(id:string){this.checkAccount();const snapshot=await this.durable.list(id);this.snapshots.set(id,snapshot);this.notify();return snapshot;}
- async load(id:string){await this.refreshAccess(id);const response=await this.request(this.path('/document',id));const remote=response.status===204?null:new Uint8Array(await response.arrayBuffer());const snapshot=await this.snapshot(id);const updates=snapshot.rows.filter(row=>row.generation===snapshot.generation).map(row=>decode(row.data));return updates.length?Y.mergeUpdates([...(remote?[remote]:[]),...updates]):remote;}
- async append(id:string,update:Uint8Array){this.checkAccount();if(this.isReadOnly(id))throw new CloudError(this.reason||'该文档为只读，未提交内容可导出为草稿',403);const doc=this.docs.get(id)?.doc,snapshot=doc?Y.encodeStateAsUpdate(doc):update;try{await this.durable.append(id,this.undurable.has(id)?snapshot:update,snapshot);this.undurable.delete(id);}catch(error){this.undurable.add(id);throw error;}await this.snapshot(id);await this.drain(id).catch(error=>{this.failed.add(id);this.docs.get(id)?.error(error);});}
+ async load(id:string){await this.refreshAccess(id);const response=await this.request(this.path('/document',id));const remote=response.status===204?null:new Uint8Array(await response.arrayBuffer());const snapshot=await this.snapshot(id);if(this.serverManaged.has(id)&&snapshot.rows.length)throw new CloudError('此表格保留了旧版待提交更新，请先保留草稿；新版表格仅接受语义操作',409);const updates=snapshot.rows.filter(row=>row.generation===snapshot.generation).map(row=>{const packet=unpackOfficeUpdate(decode(row.data)),current=officeDocumentGeneration(this.workspace,id);if(current&&(!packet.generation&&current.startsWith('epoch-')||packet.generation&&packet.generation!==current)){blockOfficeGeneration(this.workspace,id);const error=new CloudError('文件已恢复，离线队列属于旧代际，请先导出草稿',409);this.fail(error);throw error;}return packet.update;});return updates.length?Y.mergeUpdates([...(remote?[remote]:[]),...updates]):remote;}
+ async append(id:string,update:Uint8Array){this.checkAccount();if(this.serverManaged.has(id))throw new CloudError('表格必须通过语义操作提交',409);if(this.isReadOnly(id))throw new CloudError(this.reason||'该文档为只读，未提交内容可导出为草稿',403);const doc=this.docs.get(id)?.doc,snapshot=doc?Y.encodeStateAsUpdate(doc):update;try{await this.durable.append(id,packOfficeUpdate(this.undurable.has(id)?snapshot:update,officeDocumentGeneration(this.workspace,id)),snapshot);this.undurable.delete(id);}catch(error){this.undurable.add(id);throw error;}await this.snapshot(id);await this.drain(id).catch(error=>{this.failed.add(id);this.docs.get(id)?.error(error);});}
  private scheduleRetry(delay:number){if(this.retryTimer||this.disposed||this.blocked()||this.readOnly)return;this.retryTimer=setTimeout(()=>{this.retryTimer=undefined;for(const id of this.snapshots.keys())void this.drain(id).catch(error=>this.docs.get(id)?.error(error));},Math.max(1000,delay));}
  private drain(id:string,force=false):Promise<void>{const previous=this.sending.get(id)??Promise.resolve();const operation=previous.catch(()=>{}).then(async()=>{
-  this.checkAccount();if(this.disposed||this.blocked()||this.isReadOnly(id))return;
+  this.checkAccount();if(this.disposed||this.blocked()||this.isReadOnly(id)||this.serverManaged.has(id))return;
   const snapshot=await this.snapshot(id);
   if(snapshot.rows.some(row=>row.generation!==snapshot.generation)){const error=new CloudError('数据库已恢复，旧代际草稿已保留，自动提交已暂停',409);this.fail(error);throw error;}
   for(const row of snapshot.rows){
-   this.checkAccount();if(this.disposed||this.blocked()||this.isReadOnly(id))return;
+   this.checkAccount();if(this.disposed||this.blocked()||this.isReadOnly(id)||this.serverManaged.has(id))return;
    if(!force&&row.retryAt>Date.now()){this.status='offline';this.notify();this.scheduleRetry(row.retryAt-Date.now());return;}
    try{await this.request(this.path('/document',id),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:decode(row.data).slice().buffer},id);await this.durable.acknowledge(id,row.seq);}
    catch(error){await this.durable.fail(id,row.seq,error instanceof Error?error.message:'提交失败').catch(()=>{});await this.snapshot(id).catch(()=>{});if(!this.blocked())this.scheduleRetry(Math.min(60000,1000*2**Math.min(row.attempts,6)));throw error;}
   }
   const current=await this.snapshot(id);if(!current.rows.length){this.failed.delete(id);this.docs.get(id)?.error(undefined);if(!this.failed.size&&!this.synchronizing&&!this.blocked()){this.status='connected';this.reason='';}this.notify();}
  });this.sending.set(id,operation);void operation.finally(()=>{if(this.sending.get(id)===operation)this.sending.delete(id);}).catch(()=>{});return operation;}
+ async archiveOldOfficeQueue(id:string){
+  this.checkAccount();const current=await cloudJson<CloudOfficeResource>(officeResourcePath(this.workspace,id));const snapshot=await this.snapshot(id),old=new Set(snapshot.rows.map(row=>unpackOfficeUpdate(decode(row.data)).generation??'legacy').filter(generation=>generation!==current.generation));
+  for(const generation of old)await this.durable.request(id,'DELETE',JSON.stringify({archiveOfficeGeneration:generation}));await this.snapshot(id);
+ }
  async remove(id:string){if(this.isReadOnly(id))throw new CloudError('该文档为只读',403);await this.request(this.path('/document',id),{method:'DELETE'},id);}
  private synchronize(id:string){const target=this.docs.get(id);if(!target)return Promise.resolve();
  target.queue=target.queue.catch(()=>{}).then(async()=>{if(this.disposed||this.status==='blocked')return;this.synchronizing++;this.status='connecting';this.notify();
- try{const response=await this.request(this.path('/sync',id),{method:'POST',body:Y.encodeStateVector(target.doc).slice().buffer});const value=await response.json() as {role:CloudWorkspace['role'];update:string;vector:string};
+ try{const response=await this.request(this.path('/sync',id),{method:'POST',headers:officeDocumentGeneration(this.workspace,id)?{'X-Mydoc-Office-Generation':officeDocumentGeneration(this.workspace,id)!}:undefined,body:Y.encodeStateVector(target.doc).slice().buffer});const value=await response.json() as {role:CloudWorkspace['role'];update:string;vector:string;generation?:string};acceptOfficeGeneration(this.workspace,id,value.generation);
  if(this.disposed||this.blocked()||!this.docs.has(id))return;
  if(id.startsWith('doc:'))this.documentReadOnly.set(id,value.role==='viewer');else{this.role=value.role;this.readOnly=value.role==='viewer';}Y.applyUpdate(target.doc,decode(value.update),CLOUD_ORIGIN);
- if(!this.isReadOnly(id)){const update=Y.encodeStateAsUpdate(target.doc,decode(value.vector));if(update.length>2)await this.append(id,update);await this.drain(id);}
+ if(!this.isReadOnly(id)&&!this.serverManaged.has(id)){const update=Y.encodeStateAsUpdate(target.doc,decode(value.vector));if(update.length>2)await this.append(id,update);await this.drain(id);}
  if(this.blocked()||this.snapshots.get(id)?.rows.length)return;this.failed.delete(id);target.error(undefined);
  }catch(error){this.failed.add(id);target.error(error);}finally{this.synchronizing--;if(!this.disposed&&!this.blocked()&&!this.synchronizing){if(this.failed.size||this.pendingCount){this.status='offline';}else{this.status='connected';this.reason='';}}this.notify();}});return target.queue;
  }
  async reconnect(){if(this.disposed)return;try{const access=await (await this.request(this.path('/access'))).json() as {role:CloudWorkspace['role']};this.role=access.role;this.readOnly=access.role==='viewer';this.status='connecting';this.reason='';this.needsLogin=false;this.notify();if(!this.readOnly)for(const id of this.snapshots.keys()){await this.refreshAccess(id);await this.drain(id,true);}this.events?.close();this.events=undefined;this.startEvents();}catch(error){this.fail(error);}}
+ private async loadPresence(id:string){
+  const target=this.docs.get(id);if(!target)return;
+  try{this.checkAccount();const entries=await (await cloudRequest(this.path('/presence',id))).json() as {client:number;clock:number;state:unknown}[];
+   this.checkAccount();if(this.disposed||this.docs.get(id)!==target)return;const awareness=importAwareness(target.doc);if(awareness)for(const entry of entries)applyPresence(awareness,entry.client,entry.clock,entry.state);
+  }catch{/* Ephemeral presence must not block document synchronization. */}
+ }
  private startEvents(){if(this.events||this.disposed||this.status==='blocked')return;
  const events=this.events=new EventSource(cloudUrl(this.path('/events','*')+(!configuredCloudServer?'&account='+encodeURIComponent(this.account??''):'')),{withCredentials:true});
- events.onmessage=event=>{try{const value=JSON.parse(event.data) as {id:string;data?:string;presence?:{client:number;clock:number;state:unknown}};const target=this.docs.get(value.id);if(target&&value.presence){const awareness=importAwareness(target.doc);if(awareness)applyPresence(awareness,value.presence.client,value.presence.clock,value.presence.state);}else if(target&&value.data)Y.applyUpdate(target.doc,decode(value.data),CLOUD_ORIGIN);}catch(error){for(const target of this.docs.values())target.error(error);}};
- events.onopen=()=>{this.status='connecting';this.notify();for(const id of this.docs.keys())void this.synchronize(id);};
+ events.onmessage=event=>{try{const value=JSON.parse(event.data) as {id:string;data?:string;generation?:string;presence?:{client:number;clock:number;state:unknown}};const target=this.docs.get(value.id);if(target&&value.presence){const awareness=importAwareness(target.doc);if(awareness)applyPresence(awareness,value.presence.client,value.presence.clock,value.presence.state);}else if(target&&value.data){acceptOfficeGeneration(this.workspace,value.id,value.generation);Y.applyUpdate(target.doc,decode(value.data),CLOUD_ORIGIN);}else if((value as {exports?:boolean}).exports)globalThis.dispatchEvent?.(new CustomEvent('office-exports-changed',{detail:{workspace:this.workspace,id:value.id}}));else if((value as {notifications?:boolean}).notifications)globalThis.dispatchEvent?.(new Event('cloud-notifications-changed'));}catch(error){for(const target of this.docs.values())target.error(error);}};
+ events.onopen=()=>{this.status='connecting';this.notify();for(const id of this.docs.keys()){void this.synchronize(id);void this.loadPresence(id);}};
  events.onerror=()=>{if(this.disposed||this.events!==events)return;this.status='offline';this.notify();void this.request(this.path('/access')).then(r=>r.json()).then((access:{role:CloudWorkspace['role']})=>{if(this.disposed||this.blocked())return;this.role=access.role;this.readOnly=access.role==='viewer';this.notify();}).catch(error=>this.fail(error));};
  }
  connect(id:string,doc:Y.Doc,onError:(error:unknown)=>void){const awareness=createDocumentAwareness(doc);this.docs.set(id,{doc,error:onError,queue:Promise.resolve()});
- const send=()=>{if(this.status==='blocked')return;const state=awareness.getLocalState();void this.request(this.path('/presence',id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client:doc.clientID,clock:awareness.meta.get(doc.clientID)?.clock??0,cursor:state?.cursor??null,active:!!state})}).catch(()=>{});};
- const changed=(_change:unknown,origin:unknown)=>{if(origin!=='remote')send();};awareness.on('update',changed);awareness.setLocalStateField('user',{name:'我',color:'#3159cb'});
- this.startEvents();if(this.events?.readyState===EventSource.OPEN)void this.synchronize(id);
- return()=>{awareness.setLocalState(null);awareness.off('update',changed);awareness.destroy();this.docs.delete(id);this.failed.delete(id);if(!this.docs.size){this.events?.close();this.events=undefined;}};
+ let leaving=false;const send=(keepalive=false)=>{if(this.status==='blocked')return;try{this.checkAccount();}catch{return;}const state=awareness.getLocalState();void cloudRequest(this.path('/presence',id),{method:'POST',keepalive,headers:{'Content-Type':'application/json'},body:JSON.stringify({client:doc.clientID,clock:awareness.meta.get(doc.clientID)?.clock??0,cursor:state?.cursor??null,focus:state?.focus??null,active:!!state})}).catch(()=>{});};
+ // Announce departure when the page closes instead of waiting for the server's 30-second expiry.
+ const leave=()=>{if(!awareness.getLocalState())return;leaving=true;awareness.setLocalState(null);leaving=false;send(true);};globalThis.addEventListener?.('pagehide',leave);
+ const changed=(_change:unknown,origin:unknown)=>{if(origin!=='remote'&&!leaving)send();};awareness.on('update',changed);awareness.setLocalStateField('user',{name:'我',color:'#3159cb'});
+ this.startEvents();void this.loadPresence(id);if(this.events?.readyState===EventSource.OPEN)void this.synchronize(id);
+ return()=>{globalThis.removeEventListener?.('pagehide',leave);awareness.setLocalState(null);awareness.off('update',changed);awareness.destroy();this.docs.delete(id);this.failed.delete(id);if(!this.docs.size){this.events?.close();this.events=undefined;}};
  }
  close(){globalThis.removeEventListener?.('online',this.online);this.disposed=true;if(this.retryTimer)clearTimeout(this.retryTimer);this.events?.close();this.docs.clear();this.listeners.clear();}
 }
 export class CloudAssets implements AssetStorage {
  constructor(readonly workspace:string){}private path(id?:string){return (id?'/asset':'/assets')+'?workspace='+encodeURIComponent(this.workspace)+(id?'&id='+encodeURIComponent(id):'');}
- async get(_workspace:string,id:string):Promise<AssetRecord|null>{const response=await fetch(cloudUrl(this.path(id)),{credentials:'include',headers:!configuredCloudServer&&getStorageAccount()?{'X-Mydoc-Account':getStorageAccount()!}:{}});if(response.status===404)return null;if(!response.ok)throw new Error('共享附件读取失败');const a=await response.json();return {...a,bytes:Uint8Array.from(atob(a.data),c=>c.charCodeAt(0))};}
+ async get(_workspace:string,id:string):Promise<AssetRecord|null>{return this.getScoped(id);}
  async getForDocument(_workspace:string,id:string,doc:string){return this.getScoped(id,doc);}
- private async getScoped(id:string,doc:string):Promise<AssetRecord|null>{const response=await fetch(cloudUrl(this.path(id)+'&doc='+encodeURIComponent(doc)),{credentials:'include',headers:!configuredCloudServer&&getStorageAccount()?{'X-Mydoc-Account':getStorageAccount()!}:{}});if(response.status===404)return null;if(!response.ok)throw new Error('共享附件读取失败');const a=await response.json();return {...a,bytes:Uint8Array.from(atob(a.data),c=>c.charCodeAt(0))};}
+ private async getScoped(id:string,doc?:string):Promise<AssetRecord|null>{try{const a=await(await cloudRequest(this.path(id)+(doc?'&doc='+encodeURIComponent(doc):''))).json();return {...a,bytes:Uint8Array.from(atob(a.data),c=>c.charCodeAt(0))};}catch(error){if(error instanceof CloudError&&error.status===404)return null;throw error;}}
  async put(_workspace:string,a:AssetRecord){await cloudRequest(this.path(a.id)+'&name='+encodeURIComponent(a.name)+'&mime='+encodeURIComponent(a.mime),{method:'PUT',body:a.bytes.slice().buffer});}
  async putForDocument(_workspace:string,a:AssetRecord,doc:string){await cloudRequest(this.path(a.id)+'&name='+encodeURIComponent(a.name)+'&mime='+encodeURIComponent(a.mime)+'&doc='+encodeURIComponent(doc),{method:'PUT',body:a.bytes.slice().buffer});}
  async remove(_workspace:string,id:string){await cloudRequest(this.path(id),{method:'DELETE'});}

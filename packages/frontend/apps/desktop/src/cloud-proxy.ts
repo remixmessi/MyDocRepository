@@ -40,7 +40,7 @@ export function proxyCloudRequest(req:IncomingMessage,res:ServerResponse,origin:
   const headers:Record<string,string>={};
   // Forward only cloud credentials, never the desktop bootstrap cookie or IPC token.
   if(cookie)headers.Cookie='mydoc_session='+cookie.slice(cookieName.length+1);
-  for(const name of ['content-type','x-mydoc-account','user-agent','x-mydoc-version','x-mydoc-platform','x-mydoc-arch','x-mydoc-filename','x-mydoc-notes']){
+  for(const name of ['content-type','x-mydoc-office-generation','x-mydoc-account','user-agent','x-mydoc-version','x-mydoc-platform','x-mydoc-arch','x-mydoc-filename','x-mydoc-notes']){
     const value=req.headers[name];if(typeof value==='string')headers[name]=value;
   }
   const fail=(error:NodeJS.ErrnoException)=>{
@@ -59,6 +59,8 @@ export function proxyCloudRequest(req:IncomingMessage,res:ServerResponse,origin:
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Content-Type',response.headers['content-type']??'application/octet-stream');
     if(response.headers['content-disposition'])res.setHeader('Content-Disposition',response.headers['content-disposition']);
+    if(response.headers['x-mydoc-office-generation'])res.setHeader('X-Mydoc-Office-Generation',response.headers['x-mydoc-office-generation']);
+    if(response.headers['x-mydoc-snapshot'])res.setHeader('X-MyDoc-Snapshot',response.headers['x-mydoc-snapshot']);
     const cookies=(response.headers['set-cookie']??[]).filter(value=>value.startsWith('mydoc_session=')).map(value=>{
       const parts=value.split(';').map(part=>part.trim());
       const expiry=parts.filter(part=>/^(Max-Age|Expires)=/i.test(part));

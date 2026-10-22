@@ -1,10 +1,11 @@
+import {createNote} from './helpers';
 import {test,expect,_electron as electron,type Page} from '@playwright/test';
 import {mkdtemp,rm,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join,resolve} from 'node:path';import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {createRequire} from 'node:module';
 import {documentLink} from '../../packages/common/nbstore/src/deep-link';
 let directory:string;const project=resolve('packages/frontend/apps/desktop');
 const env=()=>({...process.env,MYDOC_DESKTOP_DB_PATH:join(directory,'data','mydoc.sqlite'),MYDOC_DESKTOP_PROFILE:join(directory,'profile')});
 const launch=(args:string[]=[])=>electron.launch({args:[project,...args],env:env(),timeout:30000});
-async function create(page:Page,title:string){await page.getByRole('button',{name:'新建文档',exact:true}).first().click();await page.getByRole('textbox',{name:'文档标题',exact:true}).fill(title);return page.evaluate(()=>Object.fromEntries(new URLSearchParams(location.hash.slice(1))));}
+async function create(page:Page,title:string){await createNote(page);await page.getByRole('textbox',{name:'文档标题',exact:true}).fill(title);return page.evaluate(()=>Object.fromEntries(new URLSearchParams(location.hash.slice(1))));}
 test.beforeEach(async()=>{directory=await mkdtemp(join(tmpdir(),'mydoc-links-'));});test.afterEach(async()=>{await rm(directory,{recursive:true,force:true});});
 test('冷启动定位、桌面链接复制、真实第二进程复用与导航历史',async()=>{
  let app=await launch();try{let page=await app.firstWindow();const a=await create(page,'深链甲');await page.getByRole('textbox',{name:'文档正文'}).fill('甲正文');const b=await create(page,'深链乙');await page.getByRole('textbox',{name:'文档正文'}).fill('乙正文');await app.close();

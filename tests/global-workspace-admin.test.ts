@@ -76,7 +76,7 @@ it('读取请求体期间取消管理员权限，管理请求重新鉴权并拒�
 it('版本 6 升级保留空间和账号，重复启动、迁移失败回滚、高版本拒绝、完整快照保留审计',async()=>{
  const f=await fixture();try{
   const owner=await f.account('owner@example.com'),space=await(await f.call('/workspaces','POST',{name:'迁移空间'},owner.cookie)).json();
-  f.cloud.database.db.exec('DROP TABLE cloud_workspace_audit;DELETE FROM cloud_migrations WHERE version=7');
+  f.cloud.database.db.exec('DROP TABLE cloud_workspace_audit;DELETE FROM cloud_migrations WHERE version>=7');
   const before=f.cloud.database.db.prepare('SELECT * FROM cloud_users').all();
   expect(()=>new SQLiteProjectDatabase(f.path,p=>new Database(p),db=>{upgradeCloudDatabase(db);throw new Error('migration failed');})).toThrow('migration failed');
   expect(f.cloud.database.db.prepare("SELECT name FROM sqlite_master WHERE name='cloud_workspace_audit'").get()).toBeUndefined();

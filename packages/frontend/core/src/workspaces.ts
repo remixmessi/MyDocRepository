@@ -1,4 +1,4 @@
-import {CloudStorage,CloudAssets,cloudJson,cloudServerUrl,type CloudWorkspace,type CloudAccount} from '../../../common/nbstore/src/cloud';
+import {CLOUD_ORIGIN,registerLocalOffice,CloudStorage,CloudAssets,cloudRequest,cloudJson,cloudServerUrl,type CloudWorkspace,type CloudAccount} from '../../../common/nbstore/src/cloud';
 import { templateStore, disposeTemplate, snapshotAssets } from './document-templates';
 import { encodeBinary } from './backup';
 import { Y, LOCAL_ORIGIN } from '@mydoc/crdt';
@@ -8,6 +8,7 @@ import { LocalWorkspace } from './workspace';
 import { decodeBinary, type WorkspaceBackup } from './backup';
 export interface WorkspaceMeta { id: string; name: string; createdAt: number; cloud?:boolean; userId?:string;role?:CloudWorkspace['role'] }
 export class WorkspaceRegistry {
+  private pendingPersonalRestore?:{source:string;id:string;operation:string};
   private server=cloudServerUrl()||globalThis.location?.origin||'http://localhost';
   private doc = new Y.Doc(); readonly entries = this.doc.getMap<WorkspaceMeta>('workspaces'); private preferences = this.doc.getMap<string>('preferences');
   readonly persistence: PersistentDocument; private opened = new Map<string, Promise<LocalWorkspace>>();
@@ -90,6 +91,10 @@ export class WorkspaceRegistry {
     await ws.purgeAllDocuments(); await ws.assets.clear(); await ws.destroy(); this.opened.delete(id); await this.storage.remove(`workspace:${id}`);
   }
   async restore(backup: WorkspaceBackup) {
+    if(backup.office){
+      const source=JSON.stringify(backup);if(!this.pendingPersonalRestore||this.pendingPersonalRestore.source!==source)this.pendingPersonalRestore={source,id:crypto.randomUUID(),operation:crypto.randomUUID()};const pending=this.pendingPersonalRestore;await this.flush();const unregister=registerLocalOffice(pending.id);
+      try{const response=await cloudRequest('/office-workspace-full-restore?'+new URLSearchParams({workspace:pending.id,operationId:pending.operation}),{method:'POST',headers:{'Content-Type':'application/json'},body:source}),result=await response.json() as {id:string;registryUpdate:string};Y.applyUpdate(this.doc,decodeBinary(result.registryUpdate),CLOUD_ORIGIN);const ws=await this.select(result.id);this.pendingPersonalRestore=undefined;return ws;}finally{unregister();}
+    }
     const previousActive = this.activeId; const id = crypto.randomUUID(); const ws = new LocalWorkspace(this.storage, id, false, this.assets); await ws.open(); const folderIds = new Map(backup.folders.map(folder => [folder.id, crypto.randomUUID()]));
     try {
       for (const asset of backup.assets ?? []) await ws.assets.put({ ...asset, bytes: asset.data ? decodeBinary(asset.data) : new Uint8Array() });
@@ -104,12 +109,13 @@ export class WorkspaceRegistry {
       ws.documents.doc!.transact(() => {
         for (const tag of backup.tags ?? []) ws.organization.tags.set(tagIds.get(tag.id)!, { ...tag, id: tagIds.get(tag.id)! });
         for (const entry of entries) { const newId = docIds.get(entry.meta.id)!; const meta={...(ws.documents.get(newId)??ws.trash.get(newId)!.meta),tagIds:(entry.meta.tagIds??[]).map(id=>tagIds.get(id)!),favorite:entry.meta.favorite??false,...(entry.meta.journalDate?{journalDate:entry.meta.journalDate}:{}),...(entry.meta.webClip?{webClip:entry.meta.webClip}:{}),...(entry.meta.importSource?{importSource:entry.meta.importSource}:{})};const trash=ws.trash.get(newId);if(trash)ws.trash.set(newId,{...trash,meta});else ws.documents.set(newId,meta); }
+        for(const entry of backup.officeOrganization??[]){const {id:resourceId,...value}=entry;ws.officeOrganization.set(resourceId,{...value,folderId:value.folderId?folderIds.get(value.folderId)!:null,tagIds:(value.tagIds??[]).map(id=>tagIds.get(id)!)});}
         for (const collection of backup.collections ?? []) { const key = collectionIds.get(collection.id)!; ws.organization.collections.set(key, { ...collection, id: key, documentIds: collection.documentIds.map(id => docIds.get(id)!), rules: { ...collection.rules, tagIds: collection.rules.tagIds.map(id => tagIds.get(id)!) } }); }
       }, LOCAL_ORIGIN);
       for(const template of backup.templates??[]){const store=templateStore(template);try{remapReferences(store,backup.workspaceId||'local',id,docIds);const next={...template,id:crypto.randomUUID(),sourceWorkspaceId:template.sourceWorkspaceId===(backup.workspaceId||'local')?id:template.sourceWorkspaceId,sourceDocId:template.sourceWorkspaceId===(backup.workspaceId||'local')?(docIds.get(template.sourceDocId)??template.sourceDocId):template.sourceDocId,update:encodeBinary(Y.encodeStateAsUpdate(store.doc))};ws.templates.set(next.id,next);}finally{disposeTemplate(store);}}
-      for (const newId of docIds.values()) remapReferences((await ws.openDocument(newId)).store, backup.workspaceId || 'local', id, docIds); await ws.flush();
+      for (const newId of docIds.values()) if(!ws.isOfficeResource(newId))remapReferences((await ws.openDocument(newId)).store, backup.workspaceId || 'local', id, docIds); await ws.flush();
       this.doc.transact(() => { this.entries.set(id, { id, name: `${backup.name}（恢复）`, createdAt: Date.now() }); this.preferences.set('active', id); }, LOCAL_ORIGIN); await this.persistence.flush(); this.opened.set(id, Promise.resolve(ws)); return ws;
-    } catch (error) { this.doc.transact(() => { this.entries.delete(id); this.preferences.set('active', previousActive); }, LOCAL_ORIGIN); await ws.purgeAllDocuments().catch(() => {}); await ws.assets.clear().catch(() => {}); await ws.destroy(); await this.storage.remove(`workspace:${id}`).catch(() => {}); throw error; }
+    } catch (error) { this.doc.transact(() => { this.entries.delete(id); this.preferences.set('active', previousActive); }, LOCAL_ORIGIN); await this.persistence.flush().catch(()=>{}); await ws.purgeAllDocuments().catch(() => {}); await ws.assets.clear().catch(() => {}); await ws.destroy(); await this.storage.remove(`workspace:${id}`).catch(() => {}); throw error; }
   }
   async flush() { for(const promise of this.opened.values()){const ws=await promise;if(ws.assets.saving)throw new Error('附件正在上传，请完成后再关闭。');await ws.flush();}await this.persistence.flush(); }
   async destroy() { for (const promise of this.opened.values()) { try { await (await promise).destroy(); } catch { /* failed opens are disposed */ } } await this.persistence.destroy(); this.storage.close(); this.assets.close(); }

@@ -76,7 +76,7 @@ export class PersistentDocument {
       if (update) Y.applyUpdate(this.doc, update);
       this.doc.on('update', this.onUpdate);
       this.state = 'saved';
-      this.disconnect=this.storage.connect?.(this.id,this.doc,error=>{const previous=this.connectionError;this.connectionError=error;if(error===undefined&&this.storage instanceof CloudStorage){if(!this.storage.memoryOnly)this.error=undefined;}else if(error===undefined||this.error===previous||!this.error)this.error=error;this.state=this.error?'error':this.pending?'saving':'saved';this.notify();});
+      this.disconnect=this.storage.connect?.(this.id,this.doc,error=>{const previous=this.connectionError;this.connectionError=error;if(error===undefined&&this.storage instanceof CloudStorage){if(!this.storage.memoryOnly)this.error=undefined;}else if(this.error===previous||!this.error)this.error=error;this.state=this.error?'error':this.pending?'saving':'saved';this.notify();});
       this.notify();
     } catch (error) { this.error = error; this.state = 'error'; this.notify(); throw error; }
   }
@@ -115,5 +115,7 @@ export class PersistentDocument {
 export { IndexedDBAssetStorage, WorkspaceAssets, MAX_ASSET_SIZE, imageMime } from './assets';
 export type { AssetStorage, AssetRecord } from './assets';
 export {SQLiteStorage,SQLiteAssetStorage,projectPreferences,initializeProjectStorage} from './sqlite';
+export {officeKindFromFilename,decodeOfficeText,encodeOfficeText,parseDelimited,encodeDelimited} from './office';
+export type {OfficeKind,TextEncoding,DelimitedOptions} from './office';
 
 export type {DesktopBridge} from './desktop';
