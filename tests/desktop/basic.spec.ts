@@ -60,4 +60,38 @@ test('桌面 SQLite 待提交队列在真实进程重启后保留并按序确认
  }finally{await stop();}
 });
 
-test('桌面 PDF worker 和独立无权限预览、白板编辑与重新载入恢复',async()=>{const app=await launch();try{const page=await app.firstWindow();await expect(page.getByRole('button',{name:'新建文件',exact:true}).first()).toBeVisible();await createNote(page);await page.getByLabel('添加本地附件').setInputFiles({name:'报告.pdf',mimeType:'application/pdf',buffer:await readFile('tests/fixtures/pdf-preview.pdf')});await page.getByRole('button',{name:'预览 PDF 报告.pdf',exact:true}).click();const preview=page.getByRole('dialog',{name:'PDF 附件预览'});await expect(preview.getByRole('img',{name:'PDF 第 1 页',exact:true})).toBeVisible();const viewerEvent=app.waitForEvent('window');await preview.getByRole('button',{name:'新窗口打开',exact:true}).click();const viewer=await viewerEvent;expect(await viewer.evaluate(()=>({bridge:!!window.mydocDesktop,node:typeof (window as unknown as {require?:unknown}).require}))).toEqual({bridge:false,node:'undefined'});await viewer.close();await page.getByLabel('关闭 PDF 预览').click();await page.getByRole('button',{name:'白板',exact:true}).click();await page.getByRole('button',{name:'矩形',exact:true}).click();const canvas=page.getByLabel('白板画布',{exact:true}),box=(await canvas.boundingBox())!;await page.mouse.move(box.x+120,box.y+120);await page.mouse.down();await page.mouse.move(box.x+320,box.y+240,{steps:5});await page.mouse.up();await page.getByLabel('元素文字').fill('桌面白板');await expect(page.getByText('正在保存…')).toHaveCount(0);await page.reload();await page.getByRole('button',{name:'白板',exact:true}).click();await page.getByLabel('白板元素',{exact:true}).selectOption({label:'1. 桌面白板'});await expect(page.getByLabel('元素文字')).toHaveValue('桌面白板');}finally{await app.close();}});
+test('桌面 PDF worker 和独立无权限预览、白板编辑与重新载入恢复',async()=>{
+ const app=await launch();
+ try{
+  const page=await app.firstWindow();
+  await expect(page.getByRole('button',{name:'新建文件',exact:true}).first()).toBeVisible();
+  await createNote(page);
+  await page.getByLabel('添加本地附件').setInputFiles({name:'报告.pdf',mimeType:'application/pdf',buffer:await readFile('tests/fixtures/pdf-preview.pdf')});
+  await page.getByRole('button',{name:'预览 PDF 报告.pdf',exact:true}).click();
+  const preview=page.getByRole('dialog',{name:'PDF 附件预览'});
+  // The first PDF preview loads the engine and worker before rendering. On CI
+  // this can exceed the default 5s assertion timeout; wait for its ready state.
+  await expect(preview.getByLabel('PDF 页面',{exact:true})).toHaveAttribute('aria-busy','false',{timeout:20000});
+  await expect(preview.getByRole('alert')).toHaveCount(0);
+  await expect(preview.getByRole('img',{name:'PDF 第 1 页',exact:true})).toBeVisible();
+  const viewerEvent=app.waitForEvent('window');
+  await preview.getByRole('button',{name:'新窗口打开',exact:true}).click();
+  const viewer=await viewerEvent;
+  expect(await viewer.evaluate(()=>({bridge:!!window.mydocDesktop,node:typeof (window as unknown as {require?:unknown}).require}))).toEqual({bridge:false,node:'undefined'});
+  await viewer.close();
+  await page.getByLabel('关闭 PDF 预览').click();
+  await page.getByRole('button',{name:'白板',exact:true}).click();
+  await page.getByRole('button',{name:'矩形',exact:true}).click();
+  const canvas=page.getByLabel('白板画布',{exact:true}),box=(await canvas.boundingBox())!;
+  await page.mouse.move(box.x+120,box.y+120);
+  await page.mouse.down();
+  await page.mouse.move(box.x+320,box.y+240,{steps:5});
+  await page.mouse.up();
+  await page.getByLabel('元素文字').fill('桌面白板');
+  await expect(page.getByText('正在保存…')).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button',{name:'白板',exact:true}).click();
+  await page.getByLabel('白板元素',{exact:true}).selectOption({label:'1. 桌面白板'});
+  await expect(page.getByLabel('元素文字')).toHaveValue('桌面白板');
+ }finally{await app.close();}
+});
