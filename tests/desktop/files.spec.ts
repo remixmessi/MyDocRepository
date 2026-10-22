@@ -42,3 +42,17 @@ test('导入写入进行中阻止退出，完成后正常保存关闭',async()=>
  await app.evaluate(()=>(globalThis as unknown as {releaseImport?:()=>void}).releaseImport?.());await page.getByRole('button',{name:'完成',exact:true}).click();await expect(page.getByRole('textbox',{name:'文档正文'})).toHaveText('导入结束后保存正文');
  }finally{await app.evaluate(()=>(globalThis as unknown as {releaseImport?:()=>void}).releaseImport?.()).catch(()=>{});await app.close();}
 });
+test('启动参数与“打开文件”直接导入 Word / Excel，Markdown 与办公文件分批处理',async()=>{
+ const {zipSync,strToU8}=await import('fflate');
+ const doc=join(directory,'桌面报告.docx'),md=join(directory,'同批笔记.md'),sheet=join(directory,'菜单表格.xlsx');
+ await writeFile(doc,Buffer.from(zipSync({'word/document.xml':strToU8('<w:document><w:body><w:p><w:r><w:t>启动参数Word</w:t></w:r></w:p></w:body></w:document>')})));await writeFile(md,'同批正文');
+ await writeFile(sheet,Buffer.from(zipSync({'xl/worksheets/sheet1.xml':strToU8('<worksheet><sheetData><row><c t="inlineStr"><is><t>菜单打开表格</t></is></c></row></sheetData></worksheet>')})));
+ const app=await launch([doc,md]);try{const page=await app.firstWindow();const list=page.getByRole('navigation',{name:'文档列表'});
+  await expect(page.getByLabel('导入预览')).toContainText('同批笔记');await finish(page);
+  await expect(list.getByRole('button',{name:'桌面报告.docx',exact:true})).toBeVisible();await expect(page.getByLabel('第 1 段',{exact:true})).toHaveText('启动参数Word');
+  await app.evaluate(({dialog},path)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[path]});},sheet);
+  await app.evaluate(({Menu,BrowserWindow})=>{const item=Menu.getApplicationMenu()!.items.find(item=>item.label==='文件')!.submenu!.items.find(item=>item.label==='打开文件…')!;item.click(item,BrowserWindow.getAllWindows()[0],{ctrlKey:false,metaKey:false,shiftKey:false,altKey:false});});
+  await expect(list.getByRole('button',{name:'菜单表格.xlsx',exact:true})).toBeVisible();await expect(page.getByLabel('第 1 行第 1 列',{exact:true})).toHaveValue('菜单打开表格');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+ }finally{await app.close();}
+});

@@ -8,9 +8,10 @@ import { Modal, ResourceDialog } from './dialogs';
 import { FolderSelect } from './sidebar';
 import type { LocalWorkspace } from './workspace';
 import { downloadFile } from './backup';
+import { useFileDrop, FileDropHint } from '../../../editor/blocks/src/file-drop';
 import { builtinDocumentTemplates, templateStore, disposeTemplate, saveDocumentTemplate, renameDocumentTemplate, deleteDocumentTemplate, instantiateDocumentTemplate, exportDocumentTemplate, parseTemplateBundle, importDocumentTemplate, type DocumentTemplate } from './document-templates';
 
-export function DocumentTemplateDialog({workspace,saveDocId,onClose,onCreate}:{workspace:LocalWorkspace;saveDocId?:string;onClose:()=>void;onCreate:(id:string)=>void}) {
+export function DocumentTemplateDialog({workspace,saveDocId,initialFile,onClose,onCreate}:{workspace:LocalWorkspace;saveDocId?:string;initialFile?:File;onClose:()=>void;onCreate:(id:string)=>void}) {
   const [,refresh]=useState(0);useEffect(()=>workspace.subscribe(()=>refresh(n=>n+1)),[workspace]);
   const [selected,setSelected]=useState(builtinDocumentTemplates()[0].id);
   const [query,setQuery]=useState('');const [title,setTitle]=useState('会议记录');const [folder,setFolder]=useState('');
@@ -21,11 +22,15 @@ export function DocumentTemplateDialog({workspace,saveDocId,onClose,onCreate}:{w
   const template=entries.find(t=>t.id===selected);const custom=!!template&&workspace.templates.has(template.id);
   useEffect(()=>{if(!entries.some(t=>t.id===selected)){const first=entries[0];setSelected(first?.id??'');setTitle(first?.name??'');setConfirm(false);setRenaming(false);}},[selected,entries.map(t=>t.id).join(',')]);
   const perform=async(action:()=>Promise<void>)=>{if(busy)return;setBusy(true);setError('');try{await action();}catch(e){setError(e instanceof Error?e.message:'模板操作失败，请重试');}finally{setBusy(false);}};
+  const importFile=(file:File)=>void perform(async()=>{if(file.size>50*1024*1024)throw new Error('模板文件超过 50 MB');const t=await importDocumentTemplate(workspace,parseTemplateBundle(await file.text()));setQuery('');setSelected(t.id);setTitle(t.name);setConfirm(false);setRenaming(false);});
+  const imported=useRef(false);useEffect(()=>{if(initialFile&&!imported.current&&!saveDocId){imported.current=true;importFile(initialFile);}},[initialFile]);
+  const {dragging,props:dropProps}=useFileDrop({disabled:busy,onFiles:files=>importFile(files[0]),onError:setError});
   if(saveDocId)return <ResourceDialog title="保存为文档模板" nameLabel="模板名称" initialName={workspace.documents.get(saveDocId)?.title??''} onClose={onClose} action={async name=>{await saveDocumentTemplate(workspace,saveDocId,name);}}><p className="organization-help">保存当前正文、白板和附件快照。以后修改文档不会改变模板；文件夹、收藏及标签不作为模板内容。</p></ResourceDialog>;
-  return <Modal title="文档模板" wide onClose={()=>{if(!busy)onClose();}}>
+  return <Modal title="文档模板" wide onClose={()=>{if(!busy)onClose();}} drop={dropProps}>
     <p className="organization-help">选择模板新建文档，或从文档工具栏保存自己的模板。</p>
     <div className="template-toolbar"><label className="sr-only" htmlFor="template-query">搜索文档模板</label><input id="template-query" className="search-input" type="search" placeholder="搜索模板名称" disabled={busy} value={query} onChange={e=>{setQuery(e.target.value);setConfirm(false);setRenaming(false);}}/><button disabled={busy} onClick={()=>fileInput.current?.click()}>导入文档模板</button></div>
-    <input ref={fileInput} type="file" hidden aria-label="导入文档模板文件" accept=".json,application/json" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;void perform(async()=>{if(file.size>50*1024*1024)throw new Error('模板文件超过 50 MB');const t=await importDocumentTemplate(workspace,parseTemplateBundle(await file.text()));setQuery('');setSelected(t.id);setTitle(t.name);setConfirm(false);setRenaming(false);});}}/>
+    <input ref={fileInput} type="file" hidden aria-label="导入文档模板文件" accept=".json,application/json" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)importFile(file);}}/>
+    <FileDropHint dragging={dragging} disabled={busy} label="文档模板拖放区" hint="拖入导出的 .文档模板.json 导入模板"/>
     {busy&&<p role="status">正在处理模板…</p>}{error&&<p className="form-error" role="alert">{error}</p>}
     <div className="trash-layout"><div className="trash-list" aria-label="文档模板列表">{entries.map(t=><button type="button" key={t.id} disabled={busy} aria-pressed={selected===t.id} className={selected===t.id?'selected':''} onClick={()=>{setSelected(t.id);setTitle(t.name);setConfirm(false);setRenaming(false);setError('');}}><strong>{t.name}</strong><small>{workspace.templates.has(t.id)?'自定义模板':'内置模板'}</small></button>)}{!entries.length&&<p className="organization-help">没有匹配的模板，可清除搜索或导入模板。</p>}</div>
       {template&&<div className="trash-detail"><h3>{template.name}</h3><TemplatePreview key={template.id+template.update} workspace={workspace} template={template}/>

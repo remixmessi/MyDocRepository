@@ -5,6 +5,17 @@ export interface OfficeTextSettings {encoding:TextEncoding;bom:boolean;lineEndin
 export const DEFAULT_TEXT_SETTINGS:OfficeTextSettings={encoding:'utf-8',bom:false,lineEnding:'lf'};
 export const MAX_OFFICE_TEXT_LENGTH=1_000_000;
 export const MAX_OFFICE_FILE_BYTES=20*1024*1024;
+/** Formats accepted by the office import endpoint; TXT has its own wizard. */
+export const OFFICE_IMPORT_EXTENSIONS=['docx','docm','dotx','dotm','xlsx','xlsm','xltx','xltm','csv','tsv','pdf','pptx','pptm','potx','potm'];
+const extension=(name:string)=>name.includes('.')?name.toLowerCase().split('.').pop()!:'';
+export function officeImportable(name:string){return OFFICE_IMPORT_EXTENSIONS.includes(extension(name));}
+export function officeDelimited(name:string){return ['csv','tsv'].includes(extension(name));}
+export function officeImportProblem(name:string,size:number){
+ if(['doc','xls','ppt','dot','xlt','pot'].includes(extension(name)))return '暂不支持旧版 .doc / .xls / .ppt，请在 Office 中另存为 .docx / .xlsx / .pptx 后导入';
+ if(!officeImportable(name))return '仅支持 Word、Excel、CSV/TSV、PowerPoint 和 PDF 文件';
+ if(size>MAX_OFFICE_FILE_BYTES)return '原件超过 20 MB';
+ return undefined;
+}
 export function validTextSettings(value:unknown):value is OfficeTextSettings{
  if(!value||typeof value!=='object'||Array.isArray(value))return false;
  const data=value as Record<string,unknown>;

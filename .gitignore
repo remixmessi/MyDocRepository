@@ -100,6 +100,8 @@ data/attachments/
 !/tests/office-text.test.ts
 !/tests/office-observer.test.ts
 !/tests/e2e/office-text.spec.ts
+!/tests/e2e/import-drop.spec.ts
+!/tests/import-drop.test.ts
 
 !/tests/office-package.test.ts
 

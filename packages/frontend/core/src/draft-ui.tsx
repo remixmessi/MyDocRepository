@@ -4,6 +4,7 @@ import {Modal} from './dialogs';
 import {FolderSelect} from './sidebar';
 import {parseDraft,restoreDraft,MAX_DRAFT_SIZE,type DraftPreview,type DraftRestoreResult} from './draft';
 import type {LocalWorkspace} from './workspace';
+import {useFileDrop,FileDropHint} from '../../../editor/blocks/src/file-drop';
 
 /**
  * 草稿恢复对话框：选择草稿文件、预览内容、恢复为当前个人工作区中的新文档。
@@ -19,15 +20,17 @@ export function DraftRestoreDialog({workspace,initialFile,onClose,onFinish,onBus
   void file.text().then(text=>{if(!alive.current)return;const value=parseDraft(text);setPreview(value);setSelected(new Set(value.documents.map(entry=>entry.sourceId)));}).catch(e=>{if(alive.current)setError(e instanceof Error?e.message:'无法读取草稿文件');});
  };
  useEffect(()=>{if(initialFile)read(initialFile);},[initialFile]);
+ const {dragging,props:dropProps}=useFileDrop({disabled:busy||!!results,onFiles:files=>read(files[0]),onError:setError});
  const readStored=async()=>{setBusy(true);setError('');try{const rows=await (await storageRequest('/sync-drafts')).json() as {id:string;data:string}[];if(!rows.length)throw new Error('当前账户没有暂存文档草稿');const value=parseDraft(JSON.stringify({format:'mydoc-workspace-draft',version:1,workspaceId:'sqlite-drafts',documents:rows.map(row=>({id:row.id,update:Array.from(atob(row.data),c=>c.charCodeAt(0))}))}));if(alive.current){setResults(undefined);setPreview(value);setSelected(new Set(value.documents.map(entry=>entry.sourceId)));}}catch(e){if(alive.current)setError(e instanceof Error?e.message:'无法读取暂存草稿');}finally{if(alive.current)setBusy(false);}};
  const start=async()=>{if(!preview||busy)return;setBusy(true);setError('');
   try{const output=await restoreDraft(workspace,preview.documents.filter(entry=>selected.has(entry.sourceId)),folderId||null);if(alive.current)setResults(output);}
   catch(e){if(alive.current)setError(e instanceof Error?e.message:'草稿恢复失败，请重试');}
   finally{if(alive.current)setBusy(false);}
  };
- return <Modal title="从草稿恢复" wide onClose={()=>{if(!busy)onClose();}} restoreFocus={()=>!finished.current}>
+ return <Modal title="从草稿恢复" wide onClose={()=>{if(!busy)onClose();}} restoreFocus={()=>!finished.current} drop={dropProps}>
   <p className="organization-help">读取状态区导出的工作空间草稿或单文档草稿。恢复会在当前个人工作区创建新文档，不写回原文档，也不恢复原工作空间的访问权限。草稿不含附件字节，缺失的文件会在恢复后提示。</p>
   {workspace.sync&&<p className="form-error" role="alert">当前是团队工作空间，草稿只能恢复到个人工作区。请先切换到个人工作区再恢复。</p>}
+  {!results&&<FileDropHint dragging={dragging} disabled={busy} hint="支持导出的工作空间草稿或单文档草稿 JSON"/>}
   {!results&&<div className="import-file-actions"><button disabled={busy} onClick={()=>picker.current?.click()}>选择草稿文件</button><span>{preview?`已读取 ${preview.documents.length} 篇文档`:'尚未选择草稿'}</span><input ref={picker} hidden type="file" accept=".json,application/json" aria-label="选择草稿文件" onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)read(file);}}/></div>}
   {error&&<p className="form-error" role="alert">{error}</p>}
   {!results&&<div className="import-file-actions"><button disabled={busy||!!workspace.sync} onClick={()=>void readStored()}>读取暂存草稿</button></div>}

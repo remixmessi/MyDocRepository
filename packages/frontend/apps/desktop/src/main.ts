@@ -2,7 +2,8 @@ import {upgradeCloudDatabase,LOCAL_OFFICE_BACKUP} from '../../web/server/schema'
 import {spawn} from 'node:child_process';
 import {createDesktopUpdates} from './update-runtime';
 import {DocumentLinkQueue,commandLineLinks} from './deep-links';
-import {OpenFileQueue,commandLineFiles} from './open-files';
+import {OpenFileQueue,commandLineFiles,OPEN_FILE_EXTENSIONS} from './open-files';
+import {OFFICE_IMPORT_EXTENSIONS} from '../../../../common/nbstore/src/office';
 import {app,BrowserWindow,Menu,ipcMain,dialog,shell,net} from 'electron';
 import {dirname,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -95,7 +96,7 @@ function makeWindow(){
 }
 function setMenu(){const mac=process.platform==='darwin';const menu:Electron.MenuItemConstructorOptions[]=[
  ...(mac?[{label:'MyDoc',submenu:[{role:'about' as const},{type:'separator' as const},{role:'hide' as const},{role:'hideOthers' as const},{role:'unhide' as const},{type:'separator' as const},{label:'退出 MyDoc',accelerator:'Cmd+Q',click:()=>void requestQuit()}]}]:[]),
- {label:'文件',submenu:[{label:'打开文件…',accelerator:'CmdOrCtrl+O',click:()=>{focusWindow();if(window)void dialog.showOpenDialog(window,{title:'打开文件并导入',properties:['openFile','multiSelections'],filters:[{name:'Markdown / 文本 / ZIP',extensions:['md','markdown','txt','zip']}]}).then(result=>{if(!result.canceled)enqueueFiles(result.filePaths);});}},{label:'重新载入',accelerator:'CmdOrCtrl+R',click:()=>void reload()},{label:'打开数据目录',click:()=>{if(database)void shell.openPath(resolve(database.path,'..'));}},...(mac&&app.isPackaged?[{label:'卸载 MyDoc 并删除本机数据…',click:()=>void uninstallMac()}]:[]),{type:'separator'},mac?{role:'close'}:{label:'退出',accelerator:'Alt+F4',click:()=>void requestQuit()}]},
+ {label:'文件',submenu:[{label:'打开文件…',accelerator:'CmdOrCtrl+O',click:()=>{focusWindow();if(window)void dialog.showOpenDialog(window,{title:'打开文件并导入',properties:['openFile','multiSelections'],filters:[{name:'Markdown / 文本 / ZIP / 办公文件',extensions:OPEN_FILE_EXTENSIONS},{name:'Word / Excel / PPT / PDF',extensions:OFFICE_IMPORT_EXTENSIONS},{name:'Markdown / 文本 / ZIP',extensions:['md','markdown','txt','zip']}]}).then(result=>{if(!result.canceled)enqueueFiles(result.filePaths);});}},{label:'重新载入',accelerator:'CmdOrCtrl+R',click:()=>void reload()},{label:'打开数据目录',click:()=>{if(database)void shell.openPath(resolve(database.path,'..'));}},...(mac&&app.isPackaged?[{label:'卸载 MyDoc 并删除本机数据…',click:()=>void uninstallMac()}]:[]),{type:'separator'},mac?{role:'close'}:{label:'退出',accelerator:'Alt+F4',click:()=>void requestQuit()}]},
  {label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
  {label:'视图',submenu:[{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{type:'separator'},{role:'togglefullscreen'}]},
  {label:'窗口',submenu:[{role:'minimize'},{role:'zoom'}]},
