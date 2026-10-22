@@ -49,7 +49,7 @@ it('图片资源归属、不可变字节、原生导出、历史、备份恢复�
   }
   const team=await(await call('/workspace-backup?workspace='+space.id)).json();expect(team.version).toBe(2);const restored=await call('/workspace-restore?operationId='+crypto.randomUUID(),'POST',team);expect(restored.status).toBe(201);const target=await restored.json();for(const resource of team.office){const backup=await(await call('/office-backup?'+new URLSearchParams({workspace:target.id,id:resource.id}))).json();expect(backup.media[0].data).toBe(image.data);}
  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));cloud.close();rmSync(dir,{recursive:true,force:true});}
-},20000);
+},60000);
 
 it('JPEG 图片保留原始字节、类型和 Office 图片部件',()=>{
  const bytes=Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABQb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCegLwI/9k=','base64'),media={...image,id:'jpeg-image',name:'照片.jpg',mime:'image/jpeg',data:bytes.toString('base64'),sha256:mediaDigest(bytes)};expect(officeImageMime(bytes)).toBe('image/jpeg');

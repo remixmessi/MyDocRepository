@@ -1,3 +1,4 @@
+import {createNote} from './helpers';
 import {test,expect,_electron as electron,type ElectronApplication,type Page} from '@playwright/test';
 import {createServer} from 'node:http';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -55,7 +56,7 @@ test('桌面端通过 HTTP IP 登录，重新载入与进程重启保持会话�
     expect(session.httpOnly).toBe(true);expect(session.secure).toBe(false);expect(session.sameSite).toBe('Strict');
     await dialog.getByRole('button',{name:'打开',exact:true}).click();
     await expect(dialog).toHaveCount(0);
-    await page.getByRole('button',{name:'新建文件',exact:true}).first().click();
+    await createNote(page);
     await page.getByLabel('文档标题',{exact:true}).fill('IP 同步文档');
     await page.getByRole('textbox',{name:'文档正文'}).fill('桌面 IP 连接后的同步正文');
     await page.getByLabel('添加本地附件').setInputFiles({name:'IP附件.txt',mimeType:'text/plain',buffer:Buffer.from('IP附件字节')});
