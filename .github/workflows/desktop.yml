@@ -137,7 +137,7 @@ jobs:
         with:
           node-version: '22'
       - run: corepack enable
-      - run: corepack yarn install --immutable --mode=skip-builds
+      - run: corepack yarn install --immutable --mode=skip-build
       - name: Merge update manifests and verify installers
         shell: bash
         run: |
