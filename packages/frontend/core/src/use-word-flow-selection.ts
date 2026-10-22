@@ -1,14 +1,17 @@
 import {useEffect,useRef,useState,type RefObject} from 'react';
+import type {WordAuthor} from '../../../common/nbstore/src/office-word-revision';
 import {Y} from '@mydoc/crdt';
 import {readWordFlowDom,restoreWordFlowDom,wordDomPoint} from './word-flow-dom';
 import {formatWordFlow,replaceWordFlow,wordFlowPlainText,type WordFlowSelection} from './word-flow-selection';
 import {wordTextIdentity} from './office-word-flow';
 import type {WordMark,WordFontKey} from './office-word-format';
 import type {WordBlock} from '../../../common/nbstore/src/office-word-table';
-export function useWordFlowSelection(root:RefObject<HTMLElement>,doc:Y.Doc,readOnly:boolean,assertWritable:()=>void,focus:(text:Y.Text,offset?:number)=>void,boundary:()=>void){
+/** `tracking` (track changes on) turns cross-paragraph replace, cut and delete into revisions by that author. */
+export function useWordFlowSelection(root:RefObject<HTMLElement>,doc:Y.Doc,readOnly:boolean,assertWritable:()=>void,focus:(text:Y.Text,offset?:number)=>void,boundary:()=>void,tracking?:WordAuthor){
+ const author=useRef(tracking);author.current=tracking;
  const range=useRef<WordFlowSelection>(),mutating=useRef(false),[active,setActive]=useState(false),[error,setError]=useState('');
  const clear=()=>{range.current=undefined;setActive(false);};
- const replace=(value:string)=>{if(readOnly)return;try{assertWritable();const selected=range.current;if(!selected)return;mutating.current=true;boundary();const result=replaceWordFlow(doc,selected,value);clear();setError('');focus(result.text,result.offset);}catch(error){setError(error instanceof Error?error.message:'正文编辑失败，请保留选区内容');}finally{boundary();mutating.current=false;}};
+ const replace=(value:string)=>{if(readOnly)return;try{assertWritable();const selected=range.current;if(!selected)return;mutating.current=true;boundary();const result=replaceWordFlow(doc,selected,value,author.current);clear();setError('');focus(result.text,result.offset);}catch(error){setError(error instanceof Error?error.message:'正文编辑失败，请保留选区内容');}finally{boundary();mutating.current=false;}};
  const format=(key:WordMark|WordFontKey|'clear',value?:string|number)=>{if(!range.current)return false;if(readOnly)return true;try{assertWritable();boundary();formatWordFlow(doc,range.current,key,value);boundary();setError('');}catch(error){setError(error instanceof Error?error.message:'选区格式修改失败');}return true;};
  useEffect(()=>{
   const element=root.current;if(!element)return;let restore:WordFlowSelection|undefined;

@@ -1,16 +1,19 @@
 import {validateOfficeComments} from '../../../../common/nbstore/src/office-comments';
 import {packageImageReader} from './office-media';
 import {isWordImage,createWordImage,validateWordImage,OFFICE_IMAGE_COUNT} from '../../../../common/nbstore/src/office-image';
-import {createWordTable,wordTableRows,validateWordTable,wordTableLayout,isWordTable,WORD_TABLE_LIMITS,WORD_CELL_PARAGRAPH,type WordBlock} from '../../../../common/nbstore/src/office-word-table';
+import {createWordTable,wordTableRows,validateWordTable,wordTableLayout,isWordTable,wordBlockTexts,WORD_TABLE_LIMITS,WORD_CELL_PARAGRAPH,type WordBlock} from '../../../../common/nbstore/src/office-word-table';
 import {wordItemIdentity,wordTableStructure} from '../../../../common/nbstore/src/office-word-table-edit';
 import {readWordTable} from './office-word-table';
 import {validWordFontSize,validWordColor,validWordHighlight,validWordVertAlign,validWordFontFamily} from '../../../../common/nbstore/src/office-word-font';
 import {validWordPage} from '../../../../common/nbstore/src/office-word-page';
+import {validWordHeaderFooter} from '../../../../common/nbstore/src/office-word-header';
+import {validWordRevisionMark,WORD_REVISION_KEYS} from '../../../../common/nbstore/src/office-word-revision';
+import {readWordHeaderFooter} from './office-word-headers';
 import {readWordPage} from './office-word-page';
 import {validWordAlignment,validWordLeftIndent,validWordRightIndent,validWordFirstLineIndent,validWordLineSpacing,validWordParagraphSpace} from '../../../../common/nbstore/src/office-word-layout';
 import {wordLayoutReader} from './office-word-layout';
 import {validWordLink} from '../../../../common/nbstore/src/office-word-link';
-import {decodeWordXml,wordLinkReader,wordRuns} from './office-word-link';
+import {decodeWordXml,wordLinkReader,wordRuns,type WordRunRevision} from './office-word-link';
 import {validWordList,type WordList} from '../../../../common/nbstore/src/office-word-list';
 import {wordListReader} from './office-word-list';
 import * as Y from 'yjs';
@@ -50,14 +53,19 @@ export function encodeDocxWord(bytes:Uint8Array){
   const images=packageImageReader(files,'word/document.xml');
   const appendImages=(source:string)=>{for(const drawing of source.matchAll(/<w:drawing\b[\s\S]*?<\/w:drawing>/g)){const value=drawing[0],embed=/\br:embed\s*=\s*(["'])(.*?)\1/.exec(value)?.[2];if(!embed)throw new Error('DOCX 图片缺少内嵌关系');const extent=/<wp:extent\b([^>]*?)\/?>/.exec(value)?.[1]??'',width=Number(/\bcx=["'](\d+)["']/.exec(extent)?.[1])/9525,height=Number(/\bcy=["'](\d+)["']/.exec(extent)?.[1])/9525;const alt=/<wp:docPr\b[^>]*\bdescr=(["'])(.*?)\1/.exec(value)?.[2]??'图片';paragraphs.push([createWordImage(images.read(embed),width,height,decodeWordXml(alt))]);}};
   const page=readWordPage(xml);if(page)doc.getMap('pageSettings').set('layout',page);
+  const headerFooter=readWordHeaderFooter(files,xml);if(headerFooter)doc.getMap('pageSettings').set('headerFooter',headerFooter);
+  // Revisions keep Word's author and date; the id is made unique per kind so ins/del of one edit stay distinct.
+  const revisionMark=(revision:WordRunRevision)=>{const date=Date.parse(revision.date??''),name=revision.author.trim().slice(0,160)||'Word 作者';return {id:('docx-'+revision.kind+'-'+revision.id).replace(/[^a-zA-Z0-9-]/g,'-').slice(0,80),author:'docx-author',name,date:Number.isFinite(date)&&date>0?date:1};};
+  const settingsXml=files['word/settings.xml']?readOfficeXml(files['word/settings.xml']):'',tracked=/<w:trackRevisions(?=[\s/>])([^>]*)\/?>/.exec(settingsXml);if(tracked&&!/w:val\s*=\s*(["'])(?:0|false|off)\1/.test(tracked[1]))doc.getMap('pageSettings').set('trackChanges',true);
   if(/<w:br\b[^>]*w:type\s*=\s*(["'])page\1/.test(xml))throw new Error('暂不支持段内分页符，请改用段前分页');
   const paragraphAttributes=(xml:string)=>{const heading=headingFor(xml),list=listFor(xml);return {...(heading?{heading}:{}),...(list?{list}:{}),...layoutFor(xml)} as Record<string,unknown>;};
   const fill=(text:Y.Text,xml:string,attributes=true,cell=false)=>{
    const heading=headingFor(xml);if(attributes)for(const [key,value]of Object.entries(paragraphAttributes(xml)))text.setAttribute(key,value);
    const paragraphStyle=/<w:pStyle\b[^>]*\bw:val\s*=\s*(["'])(.*?)\1/.exec(/<w:pPr(?:\s[^>]*)?>([\s\S]*?)<\/w:pPr>/.exec(xml.replace(/<w:pPrChange\b[^>]*>[\s\S]*?<\/w:pPrChange>/g,''))?.[1]??'')?.[2];
    for(const run of wordRuns(xml,linkFor)){
-    const value=[...run.xml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:(tab|br|cr)\b[^>]*\/>/g)].map(item=>item[2]?(item[2]==='tab'?'\t':'\n'):decodeWordXml(item[1])).join('').replace(cell?/\u2029/g:/(?!)/g,'\n');
-    text.insert(text.length,value,{...runStyleFor(paragraphStyle&&decodeWordXml(paragraphStyle),wordRunProperties(run.xml),!!heading),...runAttributes(run.xml),...(run.href?{href:run.href}:{})});
+    // Deleted runs keep their text in w:delText.
+    const value=[...run.xml.matchAll(/<w:(?:t|delText)(?:\s[^>]*)?>([\s\S]*?)<\/w:(?:t|delText)>|<w:(tab|br|cr)\b[^>]*\/>/g)].map(item=>item[2]?(item[2]==='tab'?'\t':'\n'):decodeWordXml(item[1])).join('').replace(cell?/\u2029/g:/(?!)/g,'\n');
+    text.insert(text.length,value,{...runStyleFor(paragraphStyle&&decodeWordXml(paragraphStyle),wordRunProperties(run.xml),!!heading),...runAttributes(run.xml),...(run.href?{href:run.href}:{}),...(run.revision?{[run.revision.kind]:revisionMark(run.revision)}:{})});
    }
   };
   let tables=0,cells=0;
@@ -87,7 +95,7 @@ function tableStructures(doc:Y.Doc){return new Map(doc.getArray<WordBlock>('para
  * `lockTables` (team workspaces): tables that existed before may not change rows, columns or merges through a generic
  * update — those go through the table operation endpoint. Creating and deleting whole tables stays allowed.
  */
-export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,options:{lockTables?:boolean}={}){
+export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,options:{lockTables?:boolean;actor?:string}={}){
  const doc=new Y.Doc(),paragraphs=doc.getArray('paragraphs'),settings=doc.getMap('pageSettings');
  try{
   if(current)Y.applyUpdate(doc,current);Y.applyUpdate(doc,update);
@@ -98,9 +106,10 @@ export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,opt
    const receipts=(value:Y.Doc)=>JSON.stringify(value.share.has('wordTableOperations')?value.getMap('wordTableOperations').toJSON():{});if(receipts(previous)!==receipts(doc))throw new Error('请通过表格操作接口修改表格结构');
    if(options.lockTables){const after=tableStructures(doc);for(const [table,structure]of tableStructures(previous)){const next=after.get(table);if(next!==undefined&&next!==structure)throw new Error('团队文档的表格行列与合并请通过表格工具修改，请刷新后重试');}}
   }finally{previous.destroy();}}
-  if(settings._start||settings.size&&(settings.size!==1||!validWordPage(settings.get('layout'))))throw new Error('Word 页面设置无效');
+  // pageSettings: `layout` (paper and margins) and optional `headerFooter`; either may be absent.
+  if(settings._start||[...settings.keys()].some(key=>!['layout','headerFooter','trackChanges'].includes(key))||settings.has('trackChanges')&&typeof settings.get('trackChanges')!=='boolean'||settings.has('layout')&&!validWordPage(settings.get('layout'))||settings.has('headerFooter')&&!validWordHeaderFooter(settings.get('headerFooter')))throw new Error('Word 页面设置无效');
   if(paragraphs.length>MAX_WORD_PARAGRAPHS)throw new Error('Word 段落超过 10 万');
-  let length=0,fragments=0;const lists=new Map<string,WordList>(),links=new Set<string>();
+  let length=0,fragments=0;const lists=new Map<string,WordList>(),links=new Set<string>(),revisions=new Map<string,string>();
   const texts:Y.Text[]=[],cellTexts=new Set<Y.Text>();let tables=0,cells=0,images=0;
   for(const block of paragraphs.toArray()){
    if(block instanceof Y.Text){texts.push(block);continue;}
@@ -119,8 +128,12 @@ export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,opt
     if(++fragments>200_000)throw new Error('Word 格式片段过多');
     if(typeof part.attributes?.href==='string'){links.add(part.attributes.href);if(links.size>9998)throw new Error('Word 超链接数量过多');}
     if(typeof part.insert!=='string')throw new Error('Word 不支持嵌入对象');
-    if(Object.entries(part.attributes??{}).some(([key,attribute])=>key==='fontSize'?!validWordFontSize(attribute):key==='color'?!validWordColor(attribute):key==='highlight'?!validWordHighlight(attribute):key==='vertAlign'?!validWordVertAlign(attribute):key==='fontFamily'?!validWordFontFamily(attribute):key==='href'?!validWordLink(attribute):!MARKS.includes(key)||typeof attribute!=='boolean'))throw new Error('Word 不支持该富文本属性');
+    if(Object.entries(part.attributes??{}).some(([key,attribute])=>key==='fontSize'?!validWordFontSize(attribute):key==='color'?!validWordColor(attribute):key==='highlight'?!validWordHighlight(attribute):key==='vertAlign'?!validWordVertAlign(attribute):key==='fontFamily'?!validWordFontFamily(attribute):key==='href'?!validWordLink(attribute):key==='ins'||key==='del'?!validWordRevisionMark(attribute):!MARKS.includes(key)||typeof attribute!=='boolean'))throw new Error('Word 不支持该富文本属性');
+    for(const kind of ['ins','del'] as const){const mark=part.attributes?.[kind];if(validWordRevisionMark(mark)){const known=revisions.get(mark.id);if(known&&known!==mark.author+'\n'+mark.name+'\n'+mark.date)throw new Error('Word 修订标记不一致');revisions.set(mark.id,mark.author+'\n'+mark.name+'\n'+mark.date);}}
    }
   }
+  // Revision authorship: a revision id introduced by this update must belong to the requesting member.
+  if(options.actor&&current){const previous=new Y.Doc();try{Y.applyUpdate(previous,current);const known=new Set<string>();for(const text of wordBlockTexts(previous.getArray<WordBlock>('paragraphs').toArray()))for(const part of text.toDelta() as {attributes?:Record<string,unknown>}[])for(const kind of WORD_REVISION_KEYS){const mark=part.attributes?.[kind];if(validWordRevisionMark(mark))known.add(mark.id);}
+   for(const [id,value]of revisions)if(!known.has(id)&&value.split('\n')[0]!==options.actor)throw new Error('修订标记的作者与当前成员不符');}finally{previous.destroy();}}
  }finally{doc.destroy();}
 }

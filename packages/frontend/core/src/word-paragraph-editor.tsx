@@ -9,7 +9,8 @@ import {WordRichInput,wordDomSelection} from './word-rich-input';
 import {WORD_CELL_PARAGRAPH} from '../../../common/nbstore/src/office-word-table';
 import type {WordAlignment} from '../../../common/nbstore/src/office-word-layout';
 import {useEffect,useRef,useState} from 'react';
-import {Y} from '@mydoc/crdt';
+import {Y,LOCAL_ORIGIN} from '@mydoc/crdt';
+import {applyTrackedEdit} from '../../../common/nbstore/src/office-word-revision';
 import {setWordPageBreak} from './office-word-page';
 import {assertWordTextLive} from './office-word-location';
 import {setWordFont,wordSelectionFont,setWordRightIndent,setWordFirstLineIndent,setWordAlignment,setWordLeftIndent,setWordLink,wordSelectionLink,setWordList,setWordHeading,captureWordSelection,resolveWordSelection,toggleWordMark,wordMarkActive,clearWordFormatting,setWordSpacing,wordFormatAt,type WordSelection,type WordMark,type WordFontKey} from './office-word-format';
@@ -33,9 +34,10 @@ export function WordParagraphEditor({paragraph,index=0,label=`第 ${index+1} 段
     paragraph.observe(update);update();
     return ()=>{paragraph.unobserve(update);composition.current?.doc.destroy();composition.current=undefined;};
   },[paragraph]);
-  const commit=(next:string)=>{
+  // With track changes on, typing and deleting become revisions; the returned caret tells the input where to land.
+  const commit=(next:string,direction:'backward'|'forward'):number|void=>{
     if(readOnly)return;
-    try{writable();applyOfficeTextEdit(paragraph,paragraph.toString(),next);setError('');}
+    try{writable();if(editing.tracking){const caret=applyTrackedEdit(paragraph,paragraph.toString(),next,editing.tracking,LOCAL_ORIGIN,direction);setError('');return caret;}applyOfficeTextEdit(paragraph,paragraph.toString(),next);setError('');}
     catch{setError('段落更新失败，请保留输入内容后重试。');}
   };
   const leftIndent=Number(paragraph.getAttribute('leftIndent')??0),alignment=(paragraph.getAttribute('align')??'left') as WordAlignment;
@@ -107,7 +109,7 @@ export function WordParagraphEditor({paragraph,index=0,label=`第 ${index+1} 段
       if(position?.type instanceof Y.Text){composition.current?.doc.destroy();composition.current={doc,text:position.type,before:position.type.toString()};}else doc.destroy();
     }} onCompositionEnd={value=>{
       setComposing(false);const pending=composition.current;composition.current=undefined;if(!pending)return false;
-      try{writable();if(!readOnly)applyOfficeTextEdit(paragraph,pending.before,value,pending.text);setError('');return true;}
+      try{writable();if(!readOnly){if(editing.tracking)applyTrackedEdit(paragraph,pending.before,value,editing.tracking,LOCAL_ORIGIN);else applyOfficeTextEdit(paragraph,pending.before,value,pending.text);}setError('');return true;}
       catch{setError('本次输入未提交，请复制保留草稿，再检查权限或重新打开文档。');return false;}finally{pending.doc.destroy();}
     }}/></div>
     {sizeSelection&&<Modal title="设置字号" onClose={()=>setSizeSelection(undefined)}><form onSubmit={event=>{

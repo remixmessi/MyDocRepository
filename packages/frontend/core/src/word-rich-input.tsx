@@ -3,6 +3,7 @@ import {useEffect,useLayoutEffect,useRef} from 'react';
 import {Y} from '@mydoc/crdt';
 import {validWordLink} from '../../../common/nbstore/src/office-word-link';
 import {WORD_HIGHLIGHTS,validWordHighlight,validWordFontFamily,validWordVertAlign} from '../../../common/nbstore/src/office-word-font';
+import {validWordRevisionMark,wordRevisionColor} from '../../../common/nbstore/src/office-word-revision';
 
 /** DOM offsets are UTF-16 offsets, matching Y.Text and native browser selections. */
 export function wordDomSelection(element:HTMLElement){
@@ -34,13 +35,15 @@ function render(element:HTMLElement,text:Y.Text){
   if(validWordHighlight(marks.highlight))span.style.backgroundColor=WORD_HIGHLIGHTS[marks.highlight];
   if(validWordFontFamily(marks.fontFamily))span.style.fontFamily=`"${marks.fontFamily}"`;
   if(validWordVertAlign(marks.vertAlign)){span.style.verticalAlign=marks.vertAlign==='superscript'?'super':'sub';span.style.fontSize=typeof marks.fontSize==='number'?marks.fontSize*0.65+'pt':'0.65em';}
+  // Tracked changes: insertions underlined and deletions struck through, in the reviewer's colour.
+  for(const kind of ['ins','del'] as const){const mark=marks[kind];if(!validWordRevisionMark(mark))continue;span.dataset.revision=kind;span.dataset.revisionId=mark.id;span.style.setProperty('--revision-color',wordRevisionColor(mark.author));span.title=`${mark.name} ${kind==='ins'?'插入':'删除'}：${new Date(mark.date).toLocaleString()}`;}
   fragment.append(span);
  }
  // A trailing line or paragraph break needs a <br> so the empty last line renders and can hold the caret.
  if(!fragment.childNodes.length||/[\n\u2029]$/.test(text.toString()))fragment.append(document.createElement('br'));
  element.replaceChildren(fragment);
 }
-export function WordRichInput({text,label,readOnly,onCommit,onCompositionStart,onCompositionEnd,onSelection,onFocus,onFormat,onEnter,onBoundary,onNavigate,paragraphText}:{paragraphText?:string;text:Y.Text;label:string;readOnly:boolean;onCommit:(value:string)=>void;onCompositionStart:()=>void;onCompositionEnd:(value:string)=>boolean;onSelection:(start:number,end:number)=>void;onFocus:()=>void;onFormat:(mark:'bold'|'italic'|'underline')=>void;onEnter?:(start:number,end:number)=>void;onBoundary?:(direction:'backward'|'forward')=>boolean;onNavigate?:(direction:'backward'|'forward')=>boolean}){
+export function WordRichInput({text,label,readOnly,onCommit,onCompositionStart,onCompositionEnd,onSelection,onFocus,onFormat,onEnter,onBoundary,onNavigate,paragraphText}:{paragraphText?:string;text:Y.Text;label:string;readOnly:boolean;onCommit:(value:string,direction:'backward'|'forward')=>number|void;onCompositionStart:()=>void;onCompositionEnd:(value:string)=>boolean;onSelection:(start:number,end:number)=>void;onFocus:()=>void;onFormat:(mark:'bold'|'italic'|'underline')=>void;onEnter?:(start:number,end:number)=>void;onBoundary?:(direction:'backward'|'forward')=>boolean;onNavigate?:(direction:'backward'|'forward')=>boolean}){
  const ref=useRef<HTMLDivElement>(null),composing=useRef(false),editing=useRef(false);
  const onSelect=useRef(onSelection);onSelect.current=onSelection;
  const selection=()=>{const element=ref.current;if(!element)return;const range=wordDomSelection(element);if(range)onSelect.current(range.start,range.end);};
@@ -57,11 +60,17 @@ export function WordRichInput({text,label,readOnly,onCommit,onCompositionStart,o
   update();text.observe(update);text.doc!.on('beforeTransaction',before);return()=>{text.unobserve(update);text.doc?.off('beforeTransaction',before);};
  },[text]);
  useEffect(()=>{document.addEventListener('selectionchange',selection);return()=>document.removeEventListener('selectionchange',selection);});
- const insert=(value:string)=>{const element=ref.current!,selection=window.getSelection();if(!selection?.rangeCount)return;const range=selection.getRangeAt(0);if(!element.contains(range.commonAncestorContainer))return;range.deleteContents();const node=document.createTextNode(value);range.insertNode(node);range.setStartAfter(node);range.collapse(true);selection.removeAllRanges();selection.addRange(range);commit(element.textContent??'');};
- const commit=(value:string)=>{editing.current=true;try{onCommit(value);}finally{editing.current=false;const element=ref.current;if(element&&element.textContent===text.toString()){const range=wordDomSelection(element);render(element,text);if(range)restoreWordCaret(element,range.start,range.end);}}};
+ const insert=(value:string)=>{lastInput.current='insertText';const element=ref.current!,selection=window.getSelection();if(!selection?.rangeCount)return;const range=selection.getRangeAt(0);if(!element.contains(range.commonAncestorContainer))return;range.deleteContents();const node=document.createTextNode(value);range.insertNode(node);range.setStartAfter(node);range.collapse(true);selection.removeAllRanges();selection.addRange(range);commit(element.textContent??'');};
+ // Which way the last deletion went, so a tracked deletion leaves the caret on the right side of the struck text.
+ const lastInput=useRef('');
+ const commit=(value:string)=>{editing.current=true;let caret:number|void=undefined;try{caret=onCommit(value,lastInput.current==='deleteContentForward'?'forward':'backward');}finally{editing.current=false;const element=ref.current;
+  // A tracked edit keeps deleted text, so the DOM no longer equals the input; re-render and place the returned caret.
+  if(element&&typeof caret==='number'){render(element,text);restoreWordCaret(element,Math.min(caret,text.length),Math.min(caret,text.length));}
+  else if(element&&element.textContent===text.toString()){const range=wordDomSelection(element);render(element,text);if(range)restoreWordCaret(element,range.start,range.end);}}};
  useEffect(()=>{
   const element=ref.current!;
   const beforeInput=(event:InputEvent)=>{
+   lastInput.current=event.inputType;
    if(readOnly||composing.current||event.isComposing||event.defaultPrevented)return;
    const range=wordDomSelection(element);
    if(['insertParagraph','insertLineBreak'].includes(event.inputType)){event.preventDefault();if(event.inputType==='insertParagraph'&&onEnter&&range)onEnter(range.start,range.end);else insert(event.inputType==='insertParagraph'&&paragraphText?paragraphText:'\n');}

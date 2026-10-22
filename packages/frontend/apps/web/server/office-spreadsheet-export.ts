@@ -6,7 +6,10 @@ import {validOfficeComment,type OfficeCommentThread} from '../../../../common/nb
 import {sheetColumnIds,sheetRowIdentity} from '../../../../common/nbstore/src/sheet-columns';
 import {strToU8,zipSync} from 'fflate';
 import {validateSpreadsheetUpdate} from './office-spreadsheet';
+import {toXlsxFormula} from '../../../../common/nbstore/src/spreadsheet-functions';
 import {readOfficePackage,readOfficeXml} from './office-package';
+import {conditionalXml,dxfRegistry,sheetCharts} from './office-xlsx-objects';
+import {previewFormulaWorkbook} from '../../../../common/nbstore/src/spreadsheet-formula';
 import {sheetCellFormat,resolveSheetMerges,formatSheetValue,isDateNumberFormat,type SheetCellFormat} from '../../../../common/nbstore/src/spreadsheet-format';
 /** Collect distinct cell formats into a minimal styles part; style 0 stays the unformatted default. */
 function styleRegistry(){
@@ -21,7 +24,7 @@ function styleRegistry(){
    const xf=`<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="0" xfId="0"${numFmt?' applyNumberFormat="1"':''}${font?' applyFont="1"':''}${fill?' applyFill="1"':''}${format.align?` applyAlignment="1"><alignment horizontal="${format.align}"/></xf>`:'/>'}`;
    if(xfs.length>=64000)throw new Error('单元格样式组合超过 XLSX 上限');xfs.push(xf);index.set(key,xfs.length-1);return xfs.length-1;
   },
-  xml(){return '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+(formats.length?`<numFmts count="${formats.length}">${formats.map((code,i)=>`<numFmt numFmtId="${164+i}" formatCode="${xmlText(code)}"/>`).join('')}</numFmts>`:'')+`<fonts count="${fonts.length}">${fonts.join('')}</fonts><fills count="${fills.length}">${fills.join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;},
+  xml(dxfs=''){return '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+(formats.length?`<numFmts count="${formats.length}">${formats.map((code,i)=>`<numFmt numFmtId="${164+i}" formatCode="${xmlText(code)}"/>`).join('')}</numFmts>`:'')+`<fonts count="${fonts.length}">${fonts.join('')}</fonts><fills count="${fills.length}">${fills.join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>${dxfs}</styleSheet>`;},
  };
 }
 
@@ -55,7 +58,9 @@ function exportXlsx(snapshot:Uint8Array,mode:'text'|'formula',cache=false){
   const {sheets,book}=workbookFormulaSnapshot(doc),byName=new Map(sheets.map(sheet=>[sheet.name,sheet]));
   if(sheets.some(sheet=>!validWorksheetName(sheet.name)))throw new Error('工作表名称不符合 XLSX 限制，无法保持名称导出；可选择 CSV/TSV 或办公文件备份');
   const computed=mode==='formula'?calculateFormulaWorkbookTyped(book,(name,r,c)=>spreadsheetCellType(doc,r,c,byName.get(name)!.id)):undefined;
-  let stringSize=0,count=0;const strings:string[]=[],worksheetFiles:Record<string,Uint8Array>={},noteFiles:Record<string,Uint8Array>={},noteTypes:string[]=[];const indexes=new Map<string,number>(),styles=styleRegistry();
+  let stringSize=0,count=0;const strings:string[]=[],worksheetFiles:Record<string,Uint8Array>={},noteFiles:Record<string,Uint8Array>={},noteTypes:string[]=[];const indexes=new Map<string,number>(),styles=styleRegistry(),dxfs=dxfRegistry(),objectFiles:Record<string,Uint8Array>={},objectTypes:string[]=[];let chartNumber=1,drawingNumber=1;
+  // Chart caches and conditional formats use the values a viewer sees (formula results), in both copy modes.
+  const shownValues=previewFormulaWorkbook(book,(name,r,c)=>spreadsheetCellType(doc,r,c,byName.get(name)!.id));
   const stringIndex=(value:string)=>{count++;const previous=indexes.get(value);if(previous!==undefined)return previous;const xml='<si><t xml:space="preserve">'+text(value)+'</t></si>';stringSize+=strToU8(xml).length;if(stringSize>8*1024*1024-512)throw new Error('共享文本 XML 超过 8 MB');const index=strings.length;indexes.set(value,index);strings.push(xml);return index;};
   for(const [sheetIndex,selected]of sheets.entries()){
    const rows=selected.sheet.toArray(),sheetName=selected.name,calculated=computed?.[sheetName],parts:string[]=[],merges=resolveSheetMerges(doc,selected.id,selected.sheet);let size=0;
@@ -68,7 +73,7 @@ function exportXlsx(snapshot:Uint8Array,mode:'text'|'formula',cache=false){
     if(value.trimStart().startsWith('=')){
      const result=calculated?.[r][c]??0,type=typeof result==='string'?' t="str"':typeof result==='boolean'?' t="b"':'';
      const cached=typeof result==='boolean'?result?'1':'0':xmlText(String(result));
-     return `<c r="${ref}"${s}${cache?type:''}><f>${xmlText(value.trimStart().slice(1))}</f>${cache?'<v>'+cached+'</v>':''}</c>`;
+     return `<c r="${ref}"${s}${cache?type:''}><f>${xmlText(toXlsxFormula(value.trimStart().slice(1)))}</f>${cache?'<v>'+cached+'</v>':''}</c>`;
     }
     const number=value.trim();
     if(!number)return `<c r="${ref}"${s}/>`;
@@ -84,7 +89,10 @@ function exportXlsx(snapshot:Uint8Array,mode:'text'|'formula',cache=false){
    const xml=`<row r="${r+1}">${row.toArray().map((value,c)=>cellXml(value,r,c)).join('')}</row>`;
    size+=strToU8(xml).length;if(size>8*1024*1024-512)throw new Error('工作表 XML 超过 8 MB');parts.push(xml);
   }
-   const notes=sheetNotes(doc,selected),n=sheetIndex+1;
+   const notes=sheetNotes(doc,selected),n=sheetIndex+1,sheetRelations:string[]=[];
+   const shown=(r:number,c:number)=>shownValues[sheetName]?.[r]?.[c]??'',label=(r:number,c:number)=>formatSheetValue(shown(r,c),sheetCellFormat(doc,selected.id,selected.sheet,r,c)?.numberFormat);
+   const conditional=conditionalXml(doc,selected.id,selected.sheet,style=>dxfs.id(style)),charts=sheetCharts(doc,selected.id,sheetName,selected.sheet,drawingNumber,chartNumber,shown,label);
+   if(charts){drawingNumber++;chartNumber=charts.next;for(const [name,xml]of Object.entries(charts.files))objectFiles[name]=strToU8(xml);objectTypes.push(...charts.types);sheetRelations.push(charts.relation);}
    if(notes.length){
     const authors=[...new Set(notes.flatMap(note=>note.authors))];
     const commentsXml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors>'+authors.map(name=>'<author>'+text(name)+'</author>').join('')+'</authors><commentList>'+notes.map(note=>`<comment ref="${column(note.column)+(note.row+1)}" authorId="${authors.indexOf(note.authors[0])}"><text>${note.lines.map((line,i)=>`<r><t xml:space="preserve">${text((i?'\n':'')+line)}</t></r>`).join('')}</text></comment>`).join('')+'</commentList></comments>';
@@ -92,21 +100,23 @@ function exportXlsx(snapshot:Uint8Array,mode:'text'|'formula',cache=false){
     const shape=(note:{row:number;column:number},i:number)=>`<v:shape id="_x0000_s${1025+i}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:2pt;width:160pt;height:70pt;z-index:${i+1};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:AutoFill>False</x:AutoFill><x:Row>${note.row}</x:Row><x:Column>${note.column}</x:Column></x:ClientData></v:shape>`;
     noteFiles[`xl/comments${n}.xml`]=strToU8(commentsXml);
     noteFiles[`xl/drawings/vmlDrawing${n}.vml`]=strToU8(`<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="${n}"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${notes.map(shape).join('')}</xml>`);
-    noteFiles[`xl/worksheets/_rels/sheet${n}.xml.rels`]=strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments${n}.xml"/><Relationship Id="rIdVml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing${n}.vml"/></Relationships>`);
+    sheetRelations.push(`<Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments${n}.xml"/>`,`<Relationship Id="rIdVml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing${n}.vml"/>`);
     noteTypes.push(`<Override PartName="/xl/comments${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>`);
    }
-   // CT_Worksheet order: sheetData, mergeCells, …, legacyDrawing.
-   worksheetFiles[`xl/worksheets/sheet${n}.xml`]=strToU8('<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData>'+parts.join('')+'</sheetData>'+(merges.anchors.size?`<mergeCells count="${merges.anchors.size}">${[...merges.anchors.values()].map(m=>`<mergeCell ref="${column(m.column)+(m.row+1)}:${column(m.column+m.colSpan-1)+(m.row+m.rowSpan)}"/>`).join('')}</mergeCells>`:'')+(notes.length?'<legacyDrawing r:id="rIdVml"/>':'')+'</worksheet>');
+   if(sheetRelations.length)noteFiles[`xl/worksheets/_rels/sheet${n}.xml.rels`]=strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetRelations.join('')}</Relationships>`);
+   // CT_Worksheet order: sheetData, mergeCells, conditionalFormatting, …, drawing, legacyDrawing.
+   worksheetFiles[`xl/worksheets/sheet${n}.xml`]=strToU8('<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData>'+parts.join('')+'</sheetData>'+(merges.anchors.size?`<mergeCells count="${merges.anchors.size}">${[...merges.anchors.values()].map(m=>`<mergeCell ref="${column(m.column)+(m.row+1)}:${column(m.column+m.colSpan-1)+(m.row+m.rowSpan)}"/>`).join('')}</mergeCells>`:'')+conditional+(charts?'<drawing r:id="rIdDrawing"/>':'')+(notes.length?'<legacyDrawing r:id="rIdVml"/>':'')+'</worksheet>');
   }
   const files={
-   '[Content_Types].xml':strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+sheets.map((_,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('')+(noteTypes.length?'<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>':'')+noteTypes.join('')+'</Types>'),
+   '[Content_Types].xml':strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+sheets.map((_,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('')+(noteTypes.length?'<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>':'')+noteTypes.join('')+objectTypes.join('')+'</Types>'),
    '_rels/.rels':strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
    'xl/workbook.xml':strToU8('<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+sheets.map((sheet,i)=>'<sheet name="'+xmlText(sheet.name)+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>').join('')+'</sheets>'+ (mode==='formula'?'<calcPr calcId="0" fullCalcOnLoad="1" forceFullCalc="1"/>':'')+'</workbook>'),
    'xl/_rels/workbook.xml.rels':strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+sheets.map((_,i)=>'<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>').join('')+'<Relationship Id="rIdStrings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
    'xl/sharedStrings.xml':strToU8('<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="'+count+'" uniqueCount="'+strings.length+'">'+strings.join('')+'</sst>'),
-   'xl/styles.xml':strToU8(styles.xml()),
+   'xl/styles.xml':strToU8(styles.xml(dxfs.xml())),
    ...worksheetFiles,
    ...noteFiles,
+   ...objectFiles,
   };
   const bytes=zipSync(files);const verified=readOfficePackage(bytes);for(const [name,value]of Object.entries(verified))if(/\.(xml|rels)$/.test(name))readOfficeXml(value);return bytes;
  }finally{doc.destroy();}

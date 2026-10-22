@@ -1,17 +1,14 @@
 import type {SpreadsheetCellType} from './spreadsheet-cell-type';
+import {FormulaError,FORMULA_ERRORS,fail,finite,numeric,scalar,type Ast,type ErrorCode,type FormulaContext,type FormulaMatrix,type Reference,type Scalar} from './spreadsheet-formula-core';
+import {FORMULA_FUNCTIONS,TEXT_LIMIT,toText} from './spreadsheet-functions';
 export type FormulaCellTypes=(sheet:string,row:number,column:number)=>SpreadsheetCellType;
 export type FormulaGrid=ReadonlyArray<ReadonlyArray<string>>;
 export type FormulaWorkbook=Record<string,FormulaGrid>;
-export const FORMULA_LIMITS={source:10000,tokens:2048,depth:128,range:100000,steps:200000};
-type ErrorCode='#VALUE!'|'#DIV/0!'|'#REF!'|'#NAME?'|'#NUM!'|'#CYCLE!'|'#LIMIT!';
-class FormulaError extends Error {constructor(readonly code:ErrorCode){super(code);}}
-type Scalar=number|string|boolean|null;
-type Reference={sheet?:string;row:number;column:number;absoluteRow?:boolean;absoluteColumn?:boolean};
-type Ast={kind:'error';code:ErrorCode}|{kind:'literal';value:Scalar}|{kind:'ref';ref:Reference}|{kind:'range';from:Reference;to:Reference}|{kind:'unary';op:string;value:Ast}|{kind:'binary';op:string;left:Ast;right:Ast}|{kind:'call';name:string;args:Ast[]};
+/** `work` bounds text and wildcard processing across one calculation (pattern steps and produced characters). */
+export const FORMULA_LIMITS={source:10000,tokens:2048,depth:128,range:100000,steps:200000,work:5_000_000};
 type Token={kind:'error'|'number'|'string'|'name'|'sheet'|'symbol'|'end';text:string};
-const errors=new Set(['#VALUE!','#DIV/0!','#REF!','#NAME?','#NUM!','#CYCLE!','#LIMIT!']);
+const errors=new Set<string>(FORMULA_ERRORS);
 export const isFormulaError=(value:string)=>errors.has(value);
-const fail=(code:ErrorCode):never=>{throw new FormulaError(code);};
 
 function tokenize(source:string):Token[]{
  if(source.length>FORMULA_LIMITS.source)fail('#LIMIT!');
@@ -25,10 +22,10 @@ function tokenize(source:string):Token[]{
    while(i<source.length){if(source[i]===quote){if(source[i+1]===quote){text+=quote;i+=2;continue;}i++;closed=true;break;}text+=source[i++];}
    if(!closed)fail('#VALUE!');out.push({kind:quote==='"'?'string':'sheet',text});continue;
   }
-  const error=/^#(?:VALUE!|DIV\/0!|REF!|NAME\?|NUM!|CYCLE!|LIMIT!)/i.exec(source.slice(i));if(error){out.push({kind:'error',text:error[0].toUpperCase()});i+=error[0].length;continue;}
+  const error=/^#(?:VALUE!|DIV\/0!|REF!|NAME\?|NUM!|N\/A|CYCLE!|LIMIT!)/i.exec(source.slice(i));if(error){out.push({kind:'error',text:error[0].toUpperCase()});i+=error[0].length;continue;}
   const number=/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(source.slice(i));
   if(number){out.push({kind:'number',text:number[0]});i+=number[0].length;continue;}
-  const op=/^(?:<=|>=|<>|[+\-*/=<>(),!:])/.exec(source.slice(i));
+  const op=/^(?:<=|>=|<>|[+\-*/^&%=<>(),!:])/.exec(source.slice(i));
   if(op){out.push({kind:'symbol',text:op[0]});i+=op[0].length;continue;}
   const name=/^[\p{L}_$][\p{L}\p{N}_.$]*/u.exec(source.slice(i));
   if(name){out.push({kind:'name',text:name[0]});i+=name[0].length;continue;}
@@ -36,7 +33,9 @@ function tokenize(source:string):Token[]{
  }
  out.push({kind:'end',text:''});return out;
 }
-const precedence:Record<string,number>={'=':1,'<>':1,'<':1,'>':1,'<=':1,'>=':1,'+':2,'-':2,'*':3,'/':3};
+// Excel order: comparison < & < +- < */ < ^ < unary minus < %. Unary minus binds tighter than ^, so -2^2 is 4.
+const precedence:Record<string,number>={'=':1,'<>':1,'<':1,'>':1,'<=':1,'>=':1,'&':2,'+':3,'-':3,'*':4,'/':4,'^':5};
+const UNARY=6;
 class Parser {
  private index=0;private depth=0;
  constructor(private tokens:Token[]){}
@@ -63,16 +62,25 @@ class Parser {
   return {sheet,row,column,absoluteRow:!!match[3],absoluteColumn:!!match[1]};
  }
  private primary():Ast{
-  if(this.accept('+'))return {kind:'unary',op:'+',value:this.expression(4)};
-  if(this.accept('-'))return {kind:'unary',op:'-',value:this.expression(4)};
+  if(this.accept('+'))return {kind:'unary',op:'+',value:this.expression(UNARY)};
+  if(this.accept('-'))return {kind:'unary',op:'-',value:this.expression(UNARY)};
+  let node=this.atom();
+  // Postfix percent binds tightest: 50% is 0.5 and -50% is -0.5.
+  while(this.accept('%'))node={kind:'unary',op:'%',value:node};
+  return node;
+ }
+ private atom():Ast{
   if(this.accept('(')){const node=this.expression();this.require(')');return node;}
   const token=this.take();
   if(token.kind==='error')return {kind:'error',code:token.text as ErrorCode};
   if(token.kind==='string')return {kind:'literal',value:token.text};
   if(token.kind==='name'&&this.accept('(')){
    const args:Ast[]=[];
-   if(!this.accept(')')){do{args.push(this.expression());}while(this.accept(','));this.require(')');}
-   return {kind:'call',name:token.text.toUpperCase(),args};
+   // An omitted argument (VLOOKUP(x,r,2,) or XLOOKUP(…,,0,-1)) evaluates as blank; functions can tell it apart.
+   const omitted=()=>this.peek().kind==='symbol'&&[',',')'].includes(this.peek().text);
+   if(!this.accept(')')){do{args.push(omitted()?{kind:'literal',value:null,omitted:true}:this.expression());}while(this.accept(','));this.require(')');}
+   // Excel files prefix newer functions (_xlfn.XLOOKUP); the stored formula keeps whatever the user typed.
+   return {kind:'call',name:token.text.toUpperCase().replace(/^(?:_XLFN\.|_XLWS\.)+/,''),args};
   }
   if(token.kind==='name'&&['TRUE','FALSE'].includes(token.text.toUpperCase())&&this.peek().text!=='!')return {kind:'literal',value:token.text.toUpperCase()==='TRUE'};
   if(token.kind==='number'&&this.peek().text!=='!')return {kind:'literal',value:finite(Number(token.text))};
@@ -88,9 +96,6 @@ class Parser {
 }
 function parse(source:string){return new Parser(tokenize(source)).parse();}
 function columnNumber(value:string){let n=0;for(const char of value.toUpperCase())n=n*26+char.charCodeAt(0)-64;return n-1;}
-function finite(value:number){return Number.isFinite(value)?value:fail('#NUM!');}
-function numeric(value:Scalar){if(value===null||value==='')return 0;if(typeof value==='boolean')return value?1:0;const number=Number(value);if(!Number.isFinite(number))return fail('#VALUE!');return number;}
-function scalar(value:Scalar|Scalar[]):Scalar{if(Array.isArray(value))return fail('#VALUE!');return value;}
 function cellKey(sheet:string,row:number,column:number){return JSON.stringify([sheet,row,column]);}
 function resolveSheet(book:FormulaWorkbook,name:string){const key=Object.keys(book).find(key=>key.toLowerCase()===name.toLowerCase());if(key===undefined)return fail('#REF!');return key;}
 function* rangeReferences(node:Extract<Ast,{kind:'range'}>){
@@ -99,9 +104,21 @@ function* rangeReferences(node:Extract<Ast,{kind:'range'}>){
  for(let row=r0;row<=r1;row++)for(let column=c0;column<=c1;column++)yield {sheet:node.from.sheet,row,column};
 }
 class Calculation {
- private steps=0;private cache=new Map<string,Scalar>();private active=new Set<string>();private depth=0;
+ private steps=0;private effort=0;private cache=new Map<string,Scalar>();private active=new Set<string>();private depth=0;
  constructor(readonly book:FormulaWorkbook,readonly types?:FormulaCellTypes){}
  private tick(){if(++this.steps>FORMULA_LIMITS.steps)fail('#LIMIT!');}
+ private work(units:number){this.effort+=units;if(this.effort>FORMULA_LIMITS.work)fail('#LIMIT!');}
+ /** A reference or range as a lazily evaluated matrix; any other expression is a 1×1 matrix of its value. */
+ private matrix(node:Ast,sheet:string,rows?:number,columns?:number):FormulaMatrix{
+  if(node.kind!=='ref'&&node.kind!=='range'){const value=scalar(this.evaluate(node,sheet));if((rows??1)!==1||(columns??1)!==1)fail('#VALUE!');return {rows:1,columns:1,get:()=>value};}
+  const from=node.kind==='ref'?node.ref:node.from,to=node.kind==='ref'?node.ref:node.to,top=Math.min(from.row,to.row),left=Math.min(from.column,to.column);
+  const height=rows??Math.max(from.row,to.row)-top+1,width=columns??Math.max(from.column,to.column)-left+1;
+  if(height*width>FORMULA_LIMITS.range)fail('#LIMIT!');if(top+height>1048576||left+width>16384)fail('#REF!');
+  return {rows:height,columns:width,get:(r,c)=>this.cell({sheet:from.sheet,row:top+r,column:left+c},sheet)};
+ }
+ private context(sheet:string):FormulaContext{
+  return {value:node=>scalar(this.evaluate(node,sheet)),values:node=>{const value=this.evaluate(node,sheet);return Array.isArray(value)?value:[value];},matrix:(node,rows,columns)=>this.matrix(node,sheet,rows,columns),tick:()=>this.tick(),work:units=>this.work(units)};
+ }
  cell(ref:Reference,current:string):Scalar{
   this.tick();const sheet=ref.sheet?resolveSheet(this.book,ref.sheet):current,key=cellKey(sheet,ref.row,ref.column);
   if(this.active.has(key))return fail('#CYCLE!');
@@ -122,37 +139,26 @@ class Calculation {
     case 'literal':return node.value;
     case 'ref':return this.cell(node.ref,sheet);
     case 'range':return [...rangeReferences(node)].map(ref=>this.cell(ref,sheet));
-    case 'unary':{const value=numeric(scalar(this.evaluate(node.value,sheet)));return finite(node.op==='-'?-value:value);}
+    case 'unary':{const value=numeric(scalar(this.evaluate(node.value,sheet)));return finite(node.op==='-'?-value:node.op==='%'?value/100:value);}
     case 'binary':{
      const a=scalar(this.evaluate(node.left,sheet)),b=scalar(this.evaluate(node.right,sheet));
+     if(node.op==='&'){const text=toText(a)+toText(b);this.work(text.length);return text.length>TEXT_LIMIT?fail('#VALUE!'):text;}
      if(['=','<>','<','>','<=','>='].includes(node.op)){
       const left=typeof a==='string'?a.toLowerCase():a??0,right=typeof b==='string'?b.toLowerCase():b??0;
       const comparison=typeof left===typeof right?(left===right?0:left<right?-1:1):(String(left)<String(right)?-1:1);
       switch(node.op){case '=':return comparison===0;case '<>':return comparison!==0;case '<':return comparison<0;case '>':return comparison>0;case '<=':return comparison<=0;default:return comparison>=0;}
      }
      const left=numeric(a),right=numeric(b);
-     switch(node.op){case '+':return finite(left+right);case '-':return finite(left-right);case '*':return finite(left*right);default:if(right===0)return fail('#DIV/0!');return finite(left/right);}
+     switch(node.op){case '+':return finite(left+right);case '-':return finite(left-right);case '*':return finite(left*right);case '^':if(left===0&&right<0)return fail('#DIV/0!');return finite(left**right);default:if(right===0)return fail('#DIV/0!');return finite(left/right);}
     }
     case 'call':return this.call(node,sheet);
    }
   }finally{this.depth--;}
  }
  private call(node:Extract<Ast,{kind:'call'}>,sheet:string):Scalar{
-  if(node.name==='IF'){
-   if(node.args.length<2||node.args.length>3)fail('#VALUE!');
-   const condition=scalar(this.evaluate(node.args[0],sheet));
-   const truth=typeof condition==='string'?condition.toUpperCase()==='TRUE'?true:condition.toUpperCase()==='FALSE'?false:fail('#VALUE!'):Boolean(condition);
-   return truth?scalar(this.evaluate(node.args[1],sheet)):node.args[2]?scalar(this.evaluate(node.args[2],sheet)):false;
-  }
-  if(node.name==='ROUND'){
-   if(node.args.length!==2)fail('#VALUE!');const value=numeric(scalar(this.evaluate(node.args[0],sheet))),digits=Math.trunc(numeric(scalar(this.evaluate(node.args[1],sheet))));
-   if(Math.abs(digits)>308)fail('#NUM!');const factor=10**digits,scaled=Math.abs(value)*factor;
-   const result=Math.round(scaled+Number.EPSILON*scaled)/factor;return finite(Math.sign(value)*result);
-  }
-  if(!['SUM','AVERAGE','MIN','MAX','COUNT'].includes(node.name))return fail('#NAME?');
-  if(!node.args.length)fail('#VALUE!');const numbers:number[]=[];
-  for(const arg of node.args){const value=this.evaluate(arg,sheet),values=Array.isArray(value)?value:[value];for(const entry of values){if(typeof entry==='number')numbers.push(entry);else if(arg.kind==='literal'&&entry!==null)numbers.push(numeric(entry));}}
-  switch(node.name){case 'SUM':return finite(numbers.reduce((a,b)=>a+b,0));case 'COUNT':return numbers.length;case 'AVERAGE':if(!numbers.length)return fail('#DIV/0!');return finite(numbers.reduce((a,b)=>a+b,0)/numbers.length);case 'MIN':return numbers.length?numbers.reduce((a,b)=>Math.min(a,b)):0;default:return numbers.length?numbers.reduce((a,b)=>Math.max(a,b)):0;}
+  const entry=FORMULA_FUNCTIONS[node.name];if(!entry)return fail('#NAME?');
+  if(node.args.length<entry.min||node.args.length>entry.max)fail('#VALUE!');
+  return entry.run(node.args,this.context(sheet));
  }
 }
 /** Workbook grids are immutable snapshots. Values are derived; shared input is never overwritten. */
@@ -195,7 +201,8 @@ export function detectFormulaCycles(workbook:FormulaWorkbook,types?:FormulaCellT
  return [...cycles];
 }
 
-export const FORMULA_CALCULATION_VERSION='2';
+// 3: function library (lookup, conditional aggregation, text, date), & ^ % operators and #N/A.
+export const FORMULA_CALCULATION_VERSION='3';
 /** One bounded calculation context and cache for the whole immutable grid. */
 export function calculateFormulaWorkbookTyped(book:FormulaWorkbook,types?:FormulaCellTypes,selectedSheets=Object.keys(book)):Record<string,Array<Array<number|string|boolean|null>>>{
  const address=(row:number,column:number)=>{let letters='';for(let n=column+1;n;n=Math.floor((n-1)/26))letters=String.fromCharCode(65+(n-1)%26)+letters;return letters+(row+1);};
@@ -254,6 +261,9 @@ export function transformFormulaReferences(input:string,currentSheet:string,chan
   default:return node;
  }};
  const address=(ref:Reference,qualify=true)=>{let column='';for(let n=ref.column+1;n;n=Math.floor((n-1)/26))column=String.fromCharCode(65+(n-1)%26)+column;return (qualify&&ref.sheet?"'"+ref.sheet.replaceAll("'","''")+"'!":'')+(ref.absoluteColumn?'$':'')+column+(ref.absoluteRow?'$':'')+(ref.row+1);};
- const serialize=(node:Ast):string=>{switch(node.kind){case 'error':return node.code;case 'literal':return typeof node.value==='string'?'"'+node.value.replaceAll('"','""')+'"':typeof node.value==='boolean'?node.value?'TRUE':'FALSE':String(node.value??0);case 'ref':return address(node.ref);case 'range':return address(node.from)+':'+address(node.to,false);case 'unary':return node.op+'('+serialize(node.value)+')';case 'binary':return '('+serialize(node.left)+node.op+serialize(node.right)+')';case 'call':return node.name+'('+node.args.map(serialize).join(',')+')';}};
- let ast:Ast;try{ast=visit(parse(input.trim().slice(1)));}catch{throw new Error('公式不支持安全引用变换，请先修正公式或改为文本类型');}if(!changed)return input;const result='='+serialize(ast);if(result.length>FORMULA_LIMITS.source)throw new Error('变换后的公式超过长度限制');return result;
+ const serialize=(node:Ast):string=>{switch(node.kind){case 'error':return node.code;case 'literal':return node.omitted?'':typeof node.value==='string'?'"'+node.value.replaceAll('"','""')+'"':typeof node.value==='boolean'?node.value?'TRUE':'FALSE':String(node.value??0);case 'ref':return address(node.ref);case 'range':return address(node.from)+':'+address(node.to,false);case 'unary':return node.op==='%'?'('+serialize(node.value)+')%':node.op+'('+serialize(node.value)+')';case 'binary':return '('+serialize(node.left)+node.op+serialize(node.right)+')';case 'call':return node.name+'('+node.args.map(serialize).join(',')+')';}};
+ // Functions outside the library (INDIRECT, OFFSET, ROW…) may build references from text or position, which a
+ // rewrite cannot follow, so they block structure changes just like unparsable formulas.
+ const known=(node:Ast):boolean=>{switch(node.kind){case 'call':return !!FORMULA_FUNCTIONS[node.name]&&node.args.every(known);case 'unary':return known(node.value);case 'binary':return known(node.left)&&known(node.right);default:return true;}};
+ let ast:Ast;try{const parsed=parse(input.trim().slice(1));if(!known(parsed))throw new Error('unknown');ast=visit(parsed);}catch{throw new Error('公式不支持安全引用变换，请先修正公式或改为文本类型');}if(!changed)return input;const result='='+serialize(ast);if(result.length>FORMULA_LIMITS.source)throw new Error('变换后的公式超过长度限制');return result;
 }

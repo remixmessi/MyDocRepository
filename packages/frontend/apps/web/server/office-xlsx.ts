@@ -7,6 +7,9 @@ import {setSpreadsheetCellType,type SpreadsheetCellType} from '../../../../commo
 import {validXlsxSource,type XlsxSource} from '../../../../common/nbstore/src/office-xlsx-source';
 import {sheetCellKey,validSheetCellFormat,validSheetNumberFormat,isDateNumberFormat,SHEET_FORMAT_LIMITS,type SheetCellFormat} from '../../../../common/nbstore/src/spreadsheet-format';
 import {sheetColumnIds,sheetRowIdentity} from '../../../../common/nbstore/src/sheet-columns';
+import {fromXlsxFormula} from '../../../../common/nbstore/src/spreadsheet-functions';
+import {readDxfs,readSheetObjects} from './office-xlsx-objects';
+import {sheetRangeKeys,validSheetObject,SHEET_OBJECT_LIMITS,type SheetObject} from '../../../../common/nbstore/src/spreadsheet-objects';
 // Built-in number formats with locale-neutral codes (ECMA-376 18.8.30); others fall back to General.
 const BUILTIN_FORMATS:Record<number,string>={1:'0',2:'0.00',3:'#,##0',4:'#,##0.00',9:'0%',10:'0.00%',11:'0.00E+00',14:'yyyy-mm-dd',15:'d-mmm-yy',16:'d-mmm',17:'mmm-yy',18:'h:mm AM/PM',19:'h:mm:ss AM/PM',20:'h:mm',21:'h:mm:ss',22:'yyyy-mm-dd h:mm',45:'mm:ss',46:'[h]:mm:ss',47:'mm:ss.0',49:'@'};
 /** Read cellXfs into the subset the editor supports; theme/indexed colours, borders and fonts are not carried over. */
@@ -41,7 +44,7 @@ function parseSheet(bytes:Uint8Array,strings:string[],styles:(SheetCellFormat|un
   for(const cell of children(row,'c')){const ref=attribute(cell,'r'),match=ref?/^([A-Z]{1,3})([1-9]\d*)$/.exec(ref):undefined;if(ref&&!match)throw new Error('XLSX 单元格地址无效');if(match&&Number(match[2])-1!==r)throw new Error('XLSX 单元格与行地址不一致');let c=nextColumn;if(match){c=0;for(const char of match[1])c=c*26+char.charCodeAt(0)-64;c--;}
    nextColumn=c+1;if(c>=16384)throw new Error('XLSX 列数超过 16384');maxCol=Math.max(maxCol,c);if((maxRow+1)*(maxCol+1)>200000)throw new Error('表格单元格超过 20 万');const key=r+':'+c;if(cells.has(key))throw new Error('XLSX 单元格地址重复');
    const formula=child(cell,'f'),cached=child(cell,'v'),kind=attribute(cell,'t');if(cached?.children.length)throw new Error('XLSX 单元格值结构无效');let value='',type:SpreadsheetCellType='auto';
-   if(formula){if(formula.children.length||!formula.text||attribute(formula,'t')&&attribute(formula,'t')!=='normal'||attribute(formula,'ref')!==undefined||attribute(formula,'si')!==undefined)throw new Error('暂不支持共享、数组或数据表公式，请先在本地转换为普通公式');value='='+formula.text;type='formula';formulaCount++;}
+   if(formula){if(formula.children.length||!formula.text||attribute(formula,'t')&&attribute(formula,'t')!=='normal'||attribute(formula,'ref')!==undefined||attribute(formula,'si')!==undefined)throw new Error('暂不支持共享、数组或数据表公式，请先在本地转换为普通公式');value='='+fromXlsxFormula(formula.text);type='formula';formulaCount++;}
    else if(kind==='s'){if(!cached||!/^\d+$/.test(cached.text)||Number(cached.text)>=strings.length)throw new Error('XLSX 共享字符串索引无效');value=strings[Number(cached.text)];type='text';}
    else if(kind==='inlineStr'){const inline=child(cell,'is');value=inline?stringValue(inline):'';type='text';}
    else if(kind==='str'||kind==='e'){value=cached?.text??'';type='text';if(kind==='e')textConversions=true;}
@@ -65,9 +68,13 @@ export function encodeXlsxWorkbook(bytes:Uint8Array){
  const styles=readStyles(files['xl/styles.xml']),workbook=files['xl/workbook.xml']?xlsxXml(files['xl/workbook.xml']):undefined,properties=workbook&&child(workbook,'workbookPr'),date1904=!!properties&&['1','true'].includes(attribute(properties,'date1904')??'');
  const shared=selected.shared?xlsxXml(selected.shared):undefined;if(shared&&shared.name!=='sst')throw new Error('XLSX 共享字符串结构无效');const strings=shared?children(shared,'si').map(stringValue):[];if(strings.some(value=>value.length>10000))throw new Error('表格单元格内容无效');
  const doc=new Y.Doc();try{
-  doc.getMap('sheetCellTypes').set('$default','auto');let total=0,textConversions=false;
+  doc.getMap('sheetCellTypes').set('$default','auto');let total=0,textConversions=false,objectCount=0;const dxfs=readDxfs(files['xl/styles.xml']);
   for(const [index,source]of selected.sheets.entries()){
-   if(!files[source.path])throw new Error('XLSX 关系指向缺失的工作表');const parsed=parseSheet(files[source.path],strings,styles,date1904);total+=(parsed.maxRow+1)*(parsed.maxCol+1);if(total>200000)throw new Error('工作簿单元格总数超过 20 万');textConversions ||= parsed.textConversions;
+   if(!files[source.path])throw new Error('XLSX 关系指向缺失的工作表');const parsed=parseSheet(files[source.path],strings,styles,date1904);
+   // Charts placed below or beside the data need those cells to exist, so the grid grows to cover chart anchors and data.
+   const objects=readSheetObjects(files,source.path,source.name,xlsxXml(files[source.path]),dxfs);
+   for(const chart of objects.charts){const rows=Math.max(parsed.maxRow,chart.anchor.row,chart.range.bottom),columns=Math.max(parsed.maxCol,chart.anchor.column,chart.range.right);if(rows<10000&&columns<16384&&(rows+1)*(columns+1)<=200000){parsed.maxRow=rows;parsed.maxCol=columns;}}
+   total+=(parsed.maxRow+1)*(parsed.maxCol+1);if(total>200000)throw new Error('工作簿单元格总数超过 20 万');textConversions ||= parsed.textConversions;
    const id=index===0?FIRST_WORKSHEET:'sheet-'+index,meta=new Y.Map<unknown>(),sheet=index===0?doc.getArray<Y.Array<string>>('sheet'):new Y.Array<Y.Array<string>>();meta.set('name',source.name);meta.set('defaultType',parsed.defaultType);if(index)meta.set('sheet',sheet);doc.getMap('workbookSheets').set(id,meta);doc.getArray('sheetOrder').push([id]);
    for(let r=0;r<=parsed.maxRow;r++){const row=new Y.Array<string>();row.push(Array.from({length:parsed.maxCol+1},(_,c)=>parsed.cells.get(r+':'+c)?.value??''));sheet.push([row]);}
    for(const [key,cell]of parsed.cells)if(cell.type!==parsed.defaultType){const [r,c]=key.split(':').map(Number);setSpreadsheetCellType(doc,r,c,cell.type,id);}
@@ -75,6 +82,12 @@ export function encodeXlsxWorkbook(bytes:Uint8Array){
    for(const [key,cell]of parsed.cells)if(cell.format){const [r,c]=key.split(':').map(Number);formats.set(sheetCellKey(id,rowKeys[r],columnKeys[c]),cell.format);}
    for(const merge of parsed.merges){if(merge.row+merge.rowSpan>rowKeys.length||merge.column+merge.colSpan>columnKeys.length)throw new Error('XLSX 合并单元格超出工作表');merges.set(sheetCellKey(id,rowKeys[merge.row],columnKeys[merge.column]),{rowSpan:merge.rowSpan,colSpan:merge.colSpan});}
    if(formats.size>SHEET_FORMAT_LIMITS.formats)throw new Error('XLSX 带格式单元格超过 5 万，请拆分工作簿');
+   // Conditional formats (clamped to the sheet) and charts; the first rule in Excel's priority order ranks highest.
+   const store=doc.getMap<SheetObject>('sheetObjects'),inside=(box:{top:number;left:number;bottom:number;right:number})=>({top:box.top,left:box.left,bottom:Math.min(box.bottom,rowKeys.length-1),right:Math.min(box.right,columnKeys.length-1)});
+   objects.rules.slice(0,SHEET_OBJECT_LIMITS.rulesPerSheet).forEach(({range,rule},i)=>{const box=inside(range);if(box.top>box.bottom||box.left>box.right||objectCount>=SHEET_OBJECT_LIMITS.objects)return;const value:SheetObject={kind:'conditional',sheet:id,range:sheetRangeKeys(sheet,box),rule,priority:objects.rules.length-i};if(validSheetObject(value)){store.set('cf-xlsx-'+index+'-'+i,value);objectCount++;}});
+   objects.charts.slice(0,SHEET_OBJECT_LIMITS.chartsPerSheet).forEach((chart,i)=>{const box=inside(chart.range);if(box.top>box.bottom||box.left>box.right||chart.anchor.row>=rowKeys.length||chart.anchor.column>=columnKeys.length||objectCount>=SHEET_OBJECT_LIMITS.objects)return;
+    const value:SheetObject={kind:'chart',sheet:id,range:sheetRangeKeys(sheet,box),chartType:chart.chartType,title:chart.title,legend:chart.legend,...(chart.seriesInRows?{seriesInRows:true as const}:{}),anchor:{row:rowKeys[chart.anchor.row],column:columnKeys[chart.anchor.column]},width:chart.width,height:chart.height};
+    if(validSheetObject(value)){store.set('chart-xlsx-'+index+'-'+i,value);objectCount++;}});
   }
   const source:XlsxSource={name:selected.sheets[0].name,sheetCount:selected.sheets.length,hasStyles:!!files['xl/styles.xml'],textConversions};if(!validXlsxSource(source))throw new Error('XLSX 工作表信息无效');for(const [key,value]of Object.entries(source))doc.getMap('sheetXlsx').set(key,value);
   if(doc.getMap('sheetCellTypes').size>10001)throw new Error('XLSX 类型覆盖超过 1 万，请拆分工作簿');return {doc,update:Y.encodeStateAsUpdate(doc)};

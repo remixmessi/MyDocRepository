@@ -89,6 +89,104 @@ test('Word 单元格列操作保留编辑焦点、内容及原生导出',async({
  await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();expect((await readFile((await(await download).path())!)).subarray(0,2).toString()).toBe('PK');
 });
 
+test('表格增强：函数库与参数提示、条件格式（规则/数据条/管理）、插入图表与图表工具、XLSX 导出含条件格式与图表',async({page})=>{
+ await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'表格增强',email:'sheetplus'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'xlsx','销量');
+ const cell=(r:number,c:number)=>page.getByRole('textbox',{name:`第 ${r} 行第 ${c} 列`,exact:true});
+ const fill=async(r:number,c:number,value:string)=>{await cell(r,c).click();await page.keyboard.insertText(value);await page.keyboard.press('Enter');};
+ for(const [r,values]of [[1,['月份','北京','上海']],[2,['一月','10','7']],[3,['二月','25','12']],[4,['三月','18','30']]] as const)for(const [c,value]of values.entries())await fill(r,c+1,value);
+ await expect(cell(4,3)).toHaveValue('30');
+ // Function library and argument hint.
+ await cell(5,2).click();const formula=page.getByRole('textbox',{name:'当前单元格内容',exact:true});await formula.fill('=XLOOKUP("三月",A2:A4,');
+ await expect(page.getByRole('status',{name:'函数参数提示'})).toContainText('XLOOKUP');await expect(page.getByRole('status',{name:'函数参数提示'}).locator('b')).toHaveText('返回区域');
+ await formula.fill('=XLOOKUP("三月",A2:A4,B2:B4)&"/"&TEXTJOIN("、",TRUE,A2:A4)');await formula.press('Enter');await expect(page.locator('.spreadsheet-result').first()).toHaveText('18/一月、二月、三月');
+ await page.getByRole('tab',{name:'公式',exact:true}).click();await expect(page.getByRole('combobox',{name:'查找与引用函数',exact:true}).locator('option')).toContainText(['VLOOKUP · 按列查找']);
+ // Conditional formatting: highlight > 15 on B2:C4, then a data bar on C2:C4.
+ await page.getByRole('tab',{name:'开始',exact:true}).click();await page.getByRole('textbox',{name:'名称框',exact:true}).fill('B2:C4');await page.getByRole('textbox',{name:'名称框',exact:true}).press('Enter');
+ await page.getByRole('button',{name:'条件格式',exact:true}).click();await page.getByRole('menuitem',{name:'大于…',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'新建条件格式规则',exact:true});await expect(dialog).toContainText('应用于：B2:C4');await dialog.getByLabel('比较值').fill('15');await dialog.getByRole('button',{name:'确定',exact:true}).click();await expect(dialog).toHaveCount(0);
+ await expect(cell(3,2).locator('..')).toHaveCSS('background-color','rgb(255, 199, 206)');await expect(cell(2,2).locator('..')).not.toHaveCSS('background-color','rgb(255, 199, 206)');await expect(cell(4,3)).toHaveCSS('color','rgb(156, 0, 6)');
+ await page.getByRole('textbox',{name:'名称框',exact:true}).fill('C2:C4');await page.getByRole('textbox',{name:'名称框',exact:true}).press('Enter');await page.getByRole('button',{name:'条件格式',exact:true}).click();await page.getByRole('menuitem',{name:'蓝色数据条',exact:true}).click();
+ await expect(page.locator('.spreadsheet-data-bar')).toHaveCount(3);
+ await page.getByRole('button',{name:'条件格式',exact:true}).click();await page.getByRole('menuitem',{name:'管理规则…',exact:true}).click();const manager=page.getByRole('dialog',{name:'条件格式规则管理器',exact:true});
+ await expect(manager.locator('.cf-rules li')).toHaveCount(2);await expect(manager.locator('.cf-rules li').first()).toContainText('数据条');await manager.getByRole('button',{name:'下移规则 1',exact:true}).click();await expect(manager.locator('.cf-rules li').first()).toContainText('大于 15');await manager.getByRole('button',{name:'关闭',exact:true}).click();
+ // Insert a column chart from the data block (single cell → current region), then change it with the chart tools.
+ await cell(1,1).click();await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'柱形图',exact:true}).click();
+ const chart=page.locator('.sheet-chart');await expect(chart).toHaveCount(1);await expect(chart.locator('svg rect')).toHaveCount(8);await expect(chart.locator('table caption')).toHaveText('柱形图');
+ await chart.click({position:{x:200,y:150}});const tools=page.getByRole('toolbar',{name:'图表工具',exact:true});await tools.getByLabel('图表类型').selectOption('line');await expect(chart.locator('svg path[fill="none"]')).toHaveCount(2);
+ await tools.getByLabel('图表标题').fill('月度销量');await tools.getByLabel('图表标题').press('Enter');await expect(chart.locator('svg title').first()).toHaveText('月度销量');
+ const before=(await chart.boundingBox())!;await page.mouse.move(before.x+200,before.y+150);await page.mouse.down();await page.mouse.move(before.x+200,before.y+260,{steps:6});await page.mouse.up();
+ await expect.poll(async()=>Math.round((await chart.boundingBox())!.y-before.y)).toBeGreaterThan(60);await page.screenshot({path:'artifacts/sheet-objects.png'});
+ // XLSX formula copy carries the rules and the chart.
+ await page.getByRole('button',{name:'导出',exact:true}).click();await page.getByRole('menuitem',{name:'导出 XLSX 公式副本',exact:true}).click();const exportDialog=page.getByRole('dialog').filter({hasText:'XLSX'});const download=page.waitForEvent('download');await exportDialog.getByRole('button').filter({hasText:/下载|导出/}).last().click();
+ const {unzipSync,strFromU8}=await import('fflate');const files=unzipSync(await readFile((await(await download).path())!));expect(Object.keys(files)).toContain('xl/charts/chart1.xml');expect(strFromU8(files['xl/worksheets/sheet1.xml'])).toContain('<conditionalFormatting sqref="B2:C4">');expect(strFromU8(files['xl/charts/chart1.xml'])).toContain('月度销量');
+});
+test('Word 页眉页脚与页码：插入选项卡打开、左中右与页码域、首页不同、页边显示与点击编辑、打印样式、DOCX 导出',async({page})=>{
+ await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'页眉页脚',email:'header'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','报告');
+ await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('正文第一段');
+ await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'页眉',exact:true}).click();const dialog=page.getByRole('dialog',{name:'页眉和页脚',exact:true});
+ await dialog.getByLabel('页眉左').fill('年度报告');await dialog.getByLabel('页眉右').fill('内部');await dialog.getByRole('button',{name:'第 X 页，共 Y 页',exact:true}).click();await expect(dialog.getByLabel('页脚中')).toHaveValue('第 {页码} 页，共 {总页数} 页');
+ await dialog.getByLabel('页脚右').click();await dialog.getByRole('button',{name:'插入页码',exact:true}).click();await expect(dialog.getByLabel('页脚右')).toHaveValue('{页码}');
+ await dialog.getByLabel('首页不同').check();await dialog.getByLabel('首页页脚中').fill('封面');await dialog.getByRole('button',{name:'保存页眉页脚',exact:true}).click();await expect(dialog).toHaveCount(0);
+ // On screen: the first page's header (blank with a different first page) and the last page's footer with numbers.
+ const header=page.getByRole('button',{name:'编辑页眉',exact:true}),footer=page.getByRole('button',{name:'编辑页脚',exact:true});await expect(header).toHaveAttribute('data-empty','true');await expect(footer).toHaveText(/封面/);
+ const paper=(await page.locator('.word-paper').boundingBox())!,box=(await footer.boundingBox())!;expect(box.y+box.height).toBeLessThanOrEqual(paper.y+paper.height+1);expect(box.y).toBeGreaterThan(paper.y+paper.height-100);
+ const text=(await page.getByRole('textbox',{name:'第 1 段',exact:true}).boundingBox())!;expect(text.y).toBeGreaterThan(paper.y+40);
+ await footer.click();await expect(dialog).toBeVisible();await dialog.getByLabel('首页不同').uncheck();await dialog.getByRole('button',{name:'保存页眉页脚',exact:true}).click();
+ await expect(header).toContainText('年度报告');await expect(header).toContainText('内部');await expect(footer).toContainText('第 1 页，共 1 页');await expect(footer).toContainText('1');
+ await page.screenshot({path:'artifacts/word-header-footer.png'});
+ // Print stylesheet repeats them with CSS page counters; reload keeps them.
+ await page.reload();await expect(page.getByRole('button',{name:'编辑页眉',exact:true})).toContainText('年度报告');
+ await page.getByRole('tab',{name:'视图',exact:true}).click();await page.getByRole('button',{name:'打印预览',exact:true}).first().click();await expect(page.getByRole('dialog',{name:'Word 打印预览'})).toContainText('页眉、页脚和页码在打印时按每页生成');
+ await expect(page.locator('.word-print-preview .word-margin-layer')).toHaveCount(0);await page.getByRole('button',{name:'关闭预览',exact:true}).click();
+ await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();
+ const {unzipSync,strFromU8}=await import('fflate');const files=unzipSync(await readFile((await(await download).path())!));expect(strFromU8(files['word/header1.xml'])).toContain('年度报告');expect(strFromU8(files['word/footer1.xml'])).toContain('<w:fldSimple w:instr=" NUMPAGES ">');
+});
+test('Word 修订：打开修订后输入与删除留标记，审阅窗格、上下一处、接受/拒绝、无标记视图、DOCX 导出 w:ins/w:del',async({page})=>{
+ await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'审阅者',email:'review'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','合同');
+ const text=page.getByRole('textbox',{name:'第 1 段',exact:true});await text.fill('金额一百万元');
+ await page.getByRole('tab',{name:'审阅',exact:true}).click();await page.getByRole('button',{name:'修订',exact:true}).click();await expect(page.getByRole('button',{name:'修订',exact:true})).toHaveAttribute('aria-pressed','true');
+ // Replace 一 with 二: select it and type.
+ await selectText(page,'第 1 段',2,3);await page.keyboard.insertText('二');
+ await expect(text.locator('[data-revision=del]')).toHaveText('一');await expect(text.locator('[data-revision=ins]')).toHaveText('二');await expect(text).toHaveText('金额一二百万元');
+ // Backspace at the end strikes 元 and keeps the caret before it; typing continues the insertion revision.
+ await selectText(page,'第 1 段',7,7);await page.keyboard.press('Backspace');await expect(text.locator('[data-revision=del]').last()).toHaveText('元');await page.keyboard.insertText('美元');
+ await expect(text.locator('[data-revision=ins]').last()).toHaveText('美元');await expect(text).toHaveText('金额一二百万美元元');
+ await expect(page.locator('.word-status-revisions')).toContainText('修订：打开');
+ await page.getByRole('button',{name:'审阅窗格',exact:true}).click();const pane=page.getByRole('complementary',{name:'审阅窗格',exact:true});// 一→二 is two revisions (deletion, insertion), then 元 struck and 美元 inserted: four in all.
+ await expect(pane.locator('li')).toHaveCount(4);await expect(pane).toContainText('本机用户');
+ await page.screenshot({path:'artifacts/word-revisions.png'});
+ // No-markup view is read-only and shows the result.
+ await page.getByRole('combobox',{name:'显示标记',exact:true}).selectOption('final');await expect(text).toHaveAttribute('contenteditable','false');await expect(text.locator('[data-revision=del]').first()).toBeHidden();await page.getByRole('combobox',{name:'显示标记',exact:true}).selectOption('all');
+ // Navigate and reject the first change, then accept all.
+ await text.press('Home');await page.getByRole('button',{name:'下一处修订',exact:true}).click();await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toBe('一');
+ await page.getByRole('button',{name:'拒绝',exact:true}).click();await expect(pane.locator('li')).toHaveCount(3);await expect(text).toHaveText('金额一二百万美元元');
+ await pane.getByRole('button',{name:'拒绝 本机用户 的修订'}).first().click();await expect(text).toHaveText('金额一百万美元元');await expect(pane.locator('li')).toHaveCount(2);
+ await page.getByRole('button',{name:'接受所有修订',exact:true}).click();await expect(text).toHaveText('金额一百万美元');await expect(pane.locator('li')).toHaveCount(0);
+ // Export keeps tracking state and revisions.
+ await selectText(page,'第 1 段',0,2);await page.keyboard.insertText('总额');
+ await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();
+ const {unzipSync,strFromU8}=await import('fflate');const files=unzipSync(await readFile((await(await download).path())!));const xml=strFromU8(files['word/document.xml']);
+ // Typing 总额 over 金额 changes only the differing character.
+ expect(xml).toMatch(/<w:del [^>]*w:author="本机用户"[^>]*><w:r><w:delText xml:space="preserve">金<\/w:delText><\/w:r><\/w:del><w:ins [^>]*w:author="本机用户"[^>]*><w:r><w:t xml:space="preserve">总<\/w:t>/);expect(strFromU8(files['word/settings.xml'])).toContain('<w:trackRevisions/>');
+});
+test('团队 Word 修订：修订开关对双方生效，成员的修订带本人姓名同步给对方，对方可接受；伪造他人修订被服务端拒绝',async({browser,baseURL})=>{
+ const owner=await browser.newContext(),member=await browser.newContext();try{
+  await collaborationAccount(owner,baseURL!,'owner');const memberAccount=await collaborationAccount(member,baseURL!,'member');
+  const space=await(await owner.request.post(baseURL+'/api/cloud/workspaces',{data:{name:'团队修订'}})).json(),invite=await(await owner.request.post(baseURL+'/api/cloud/invite?workspace='+space.id,{data:{email:'member'+collaborationSuffix+'@example.com'}})).json();expect((await member.request.post(baseURL+'/api/cloud/accept',{data:{token:invite.token}})).ok()).toBe(true);
+  const id=(await(await owner.request.post(baseURL+'/api/cloud/office-resources?workspace='+space.id,{data:{kind:'word',name:'团队合同.docx',mime:'application/octet-stream',sourceFormat:'docx'}})).json()).id;
+  const a=await owner.newPage(),b=await member.newPage();for(const page of [a,b]){await page.setViewportSize({width:1440,height:1000});await page.goto(baseURL+'/#'+new URLSearchParams({workspace:space.id,doc:id}));}
+  await a.getByRole('textbox',{name:'第 1 段',exact:true}).fill('付款三十天');await expect(b.getByRole('textbox',{name:'第 1 段',exact:true})).toHaveText('付款三十天');
+  await a.getByRole('tab',{name:'审阅',exact:true}).click();await a.getByRole('button',{name:'修订',exact:true}).click();
+  await b.getByRole('tab',{name:'审阅',exact:true}).click();await expect(b.getByRole('button',{name:'修订',exact:true})).toHaveAttribute('aria-pressed','true');
+  await selectText(b,'第 1 段',2,3);await b.keyboard.insertText('六');
+  const textA=a.getByRole('textbox',{name:'第 1 段',exact:true});await expect(textA.locator('[data-revision=del]')).toHaveText('三');await expect(textA.locator('[data-revision=ins]')).toHaveAttribute('title',/^member 插入/);
+  await a.getByRole('button',{name:'接受所有修订',exact:true}).click();await expect(b.getByRole('textbox',{name:'第 1 段',exact:true})).toHaveText('付款六十天');await expect(b.locator('[data-revision]')).toHaveCount(0);
+  // A raw update claiming another member's authorship is rejected by the server.
+  const Y=await import('yjs');const state=new Uint8Array(await(await member.request.get(baseURL+'/api/cloud/document?'+new URLSearchParams({workspace:space.id,id}))).body()),doc=new Y.Doc();Y.applyUpdate(doc,state);const vector=Y.encodeStateVector(doc);
+  (doc.getArray('paragraphs').get(0) as InstanceType<typeof Y.Text>).insert(0,'伪',{ins:{id:'forged-1',author:'someone-else',name:'owner',date:Date.now()}});
+  const forged=await member.request.post(baseURL+'/api/cloud/document?'+new URLSearchParams({workspace:space.id,id}),{data:Buffer.from(Y.encodeStateAsUpdate(doc,vector)),headers:{'Content-Type':'application/octet-stream','X-Mydoc-Account':memberAccount.id}});expect(forged.status()).toBe(400);expect(await forged.text()).toContain('作者');
+ }finally{await owner.close();await member.close();}
+});
 test('团队 Word 表格：两人同时增列与增行经服务端串行化，双方表格保持对齐',async({browser,baseURL})=>{
  const owner=await browser.newContext(),member=await browser.newContext();try{
   await collaborationAccount(owner,baseURL!,'owner');await collaborationAccount(member,baseURL!,'member');

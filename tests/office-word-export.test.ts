@@ -1,5 +1,6 @@
 import {expect,it} from 'vitest';
 import * as Y from 'yjs';
+import {strToU8,zipSync} from 'fflate';
 import {exportDocxWord} from '../packages/frontend/apps/web/server/office-word-export';
 import {encodeDocxWord} from '../packages/frontend/apps/web/server/office-word';
 import {readOfficePackage,readOfficeXml} from '../packages/frontend/apps/web/server/office-package';
@@ -352,4 +353,37 @@ it('文件评论导出为 Word 原生批注：锚定文字与单元格段落、�
   expect(xml.indexOf('<w:commentRangeStart w:id="3"/>')).toBeLessThan(xml.indexOf('甲'));expect(xml.indexOf('<w:commentRangeStart w:id="4"/>')).toBeLessThan(xml.indexOf('甲'));
   const imported=encodeDocxWord(bytes);try{const texts=imported.doc.getArray<Y.Text|Y.Map<unknown>>('paragraphs').toArray();expect((texts[0] as Y.Text).toString()).toBe('甲乙丙丁戊');expect(wordTableRows(texts[2] as Y.Map<unknown>).get(0).get(0).toString()).toBe('格一'+WORD_CELL_PARAGRAPH+'格二');}finally{imported.doc.destroy();}
  }finally{doc.destroy();}
+});
+
+it('页眉页脚：左中右文本、{页码}/{总页数} 写为 PAGE/NUMPAGES 域，首页不同写 titlePg，重新导入还原；非法内容被拒',async()=>{
+ const {validateWordUpdate}=await import('../packages/frontend/apps/web/server/office-word');
+ const doc=snapshot(['正文']),value={header:{left:'项目方案',center:'',right:'内部 & <保密>'},footer:{left:'',center:'第 {页码} 页，共 {总页数} 页',right:''},first:{header:{left:'',center:'',right:''},footer:{left:'',center:'封面',right:''}}};
+ doc.getMap('pageSettings').set('headerFooter',value);
+ try{
+  const bytes=exportDocxWord(Y.encodeStateAsUpdate(doc)),files=readOfficePackage(bytes),xml=readOfficeXml(files['word/document.xml']);
+  expect(Object.keys(files).filter(name=>/header|footer/.test(name)).sort()).toEqual(['word/footer1.xml','word/footer2.xml','word/header1.xml','word/header2.xml']);
+  expect(xml).toMatch(/<w:sectPr><w:headerReference w:type="default" r:id="rIdHdr1"\/><w:headerReference w:type="first" r:id="rIdHdr2"\/><w:footerReference w:type="default" r:id="rIdFtr1"\/><w:footerReference w:type="first" r:id="rIdFtr2"\/><w:pgSz/);expect(xml).toContain('w:gutter="0"/><w:titlePg/></w:sectPr>');
+  const footer=readOfficeXml(files['word/footer1.xml']);expect(footer).toContain('<w:fldSimple w:instr=" PAGE ">');expect(footer).toContain('<w:fldSimple w:instr=" NUMPAGES ">');expect(footer).toContain('<w:tab w:val="center" w:pos="4513"/>');
+  expect(readOfficeXml(files['word/header1.xml'])).toContain('内部 &amp; &lt;保密&gt;');expect(readOfficeXml(files['[Content_Types].xml'])).toContain('wordprocessingml.header+xml');
+  const imported=encodeDocxWord(bytes);try{expect(imported.doc.getMap('pageSettings').get('headerFooter')).toEqual(value);}finally{imported.doc.destroy();}
+  // No header/footer: nothing is written and none is imported.
+  const plain=snapshot(['x']);try{const out=exportDocxWord(Y.encodeStateAsUpdate(plain));expect(Object.keys(readOfficePackage(out)).some(name=>/header|footer/.test(name))).toBe(false);const back=encodeDocxWord(out);try{expect(back.doc.getMap('pageSettings').has('headerFooter')).toBe(false);}finally{back.doc.destroy();}}finally{plain.destroy();}
+  for(const bad of [{...value,header:{left:'a\nb',center:'',right:''}},{...value,header:{left:'x'.repeat(256),center:'',right:''}},{...value,extra:1},{header:value.header}]){const forged=snapshot(['x']);forged.getMap('pageSettings').set('headerFooter',bad);try{expect(()=>validateWordUpdate(null,Y.encodeStateAsUpdate(forged))).toThrow('页面设置');}finally{forged.destroy();}}
+ }finally{doc.destroy();}
+});
+
+it('导入 Word 自己的页眉页脚：复杂域（fldChar/instrText）、制表符分隔、段落对齐与首页不同',()=>{
+ const w='xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+ const field=(name:string)=>`<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ${name}   \\* MERGEFORMAT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>9</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
+ const files:Record<string,Uint8Array>={
+  '[Content_Types].xml':strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+  '_rels/.rels':strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+  'word/document.xml':strToU8(`<?xml version="1.0"?><w:document ${w}><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="h1"/><w:footerReference w:type="default" r:id="f1"/><w:footerReference w:type="first" r:id="f2"/><w:titlePg/></w:sectPr></w:body></w:document>`),
+  'word/_rels/document.xml.rels':strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="h1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="f1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="f2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="/word/footer2.xml"/></Relationships>'),
+  'word/header1.xml':strToU8(`<?xml version="1.0"?><w:hdr ${w}><w:p><w:pPr><w:pStyle w:val="Header"/><w:tabs><w:tab w:val="center" w:pos="4513"/></w:tabs></w:pPr><w:r><w:t>公司</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>年度报告</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>2026</w:t></w:r></w:p></w:hdr>`),
+  'word/footer1.xml':strToU8(`<?xml version="1.0"?><w:ftr ${w}><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t xml:space="preserve">第 </w:t></w:r>${field('PAGE')}<w:r><w:t xml:space="preserve"> / </w:t></w:r>${field('NUMPAGES')}</w:p></w:ftr>`),
+  'word/footer2.xml':strToU8(`<?xml version="1.0"?><w:ftr ${w}><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:fldSimple w:instr="DATE"><w:r><w:t>2026-10-22</w:t></w:r></w:fldSimple></w:p></w:ftr>`),
+ };
+ const imported=encodeDocxWord(zipSync(files));
+ try{expect(imported.doc.getMap('pageSettings').get('headerFooter')).toEqual({header:{left:'公司',center:'年度报告',right:'2026'},footer:{left:'',center:'',right:'第 {页码} / {总页数}'},first:{header:{left:'',center:'',right:''},footer:{left:'',center:'2026-10-22',right:''}}});}finally{imported.doc.destroy();}
 });
