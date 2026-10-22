@@ -11,7 +11,7 @@ function docker(args){const result=run(args);assert.equal(result.status,0,result
 const mounted=(image,script)=>docker(['run','--rm','--network','none','--entrypoint','node','-v',volume+':/app/data',image,'-e',script]);
 const fingerprints=()=>mounted(fixed,`const fs=require('node:fs'),crypto=require('node:crypto'),root='/app/data/cloud.sqlite';console.log(JSON.stringify(Object.fromEntries(['','-wal','-shm','-journal'].filter(s=>fs.existsSync(root+s)).map(s=>[s,crypto.createHash('sha256').update(fs.readFileSync(root+s)).digest('hex')]))));`);
 try{
- docker(['run','-d','--name',name,'--platform','linux/amd64','-p','127.0.0.1::8080','-v',volume+':/app/data','-e','MYDOC_ADMIN_EMAIL=original@example.com','-e','MYDOC_ADMIN_PASSWORD='+password,original]);
+ docker(['run','-d','--name',name,'--platform','linux/amd64','-p','127.0.0.1::8080','-v',volume+':/app/data','-e','MYDOC_INIT_DATABASE=1','-e','MYDOC_ADMIN_EMAIL=original@example.com','-e','MYDOC_ADMIN_PASSWORD='+password,original]);
  const root='http://'+docker(['port',name,'8080/tcp']);let ready=false;
  for(let i=0;i<90;i++){try{if((await fetch(root+'/api/hosting',{signal:AbortSignal.timeout(1000)})).ok){ready=true;break;}}catch{}await delay(300);}assert.ok(ready,docker(['logs',name]));
  const login=await fetch(root+'/api/cloud/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'original@example.com',password})});assert.ok(login.ok);
