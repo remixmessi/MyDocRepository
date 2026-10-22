@@ -2,9 +2,9 @@ name: Workspace server
 on:
   workflow_dispatch:
   push:
-    paths: ['packages/**', 'scripts/build-server.mjs', 'tests/cloud-server.test.ts', 'tests/e2e/cloud.spec.ts', 'playwright.cloud.config.ts', 'package.json', 'yarn.lock', '.github/workflows/workspace-server.yml']
+    paths: ['packages/**', 'scripts/build-server.mjs', 'tests/cloud-server.test.ts', 'tests/office-resources.test.ts', 'tests/e2e/cloud.spec.ts', 'playwright.cloud.config.ts', 'package.json', 'yarn.lock', '.github/workflows/workspace-server.yml']
   pull_request:
-    paths: ['packages/**', 'scripts/build-server.mjs', 'tests/cloud-server.test.ts', 'tests/e2e/cloud.spec.ts', 'playwright.cloud.config.ts', 'package.json', 'yarn.lock', '.github/workflows/workspace-server.yml']
+    paths: ['packages/**', 'scripts/build-server.mjs', 'tests/cloud-server.test.ts', 'tests/office-resources.test.ts', 'tests/e2e/cloud.spec.ts', 'playwright.cloud.config.ts', 'package.json', 'yarn.lock', '.github/workflows/workspace-server.yml']
 permissions:
   contents: read
 jobs:

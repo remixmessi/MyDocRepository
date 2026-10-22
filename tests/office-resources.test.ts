@@ -237,9 +237,30 @@ it('单文件备份保留原件和模型，跨空间恢复新身份，损坏、�
   cloud.database.db.exec("CREATE TRIGGER fail_restore_receipt BEFORE INSERT ON cloud_office_restores BEGIN SELECT RAISE(ABORT,'receipt failed'); END;");try{expect((await call('/office-restore'+targetQuery+'&operationId=22222222-2222-4222-8222-222222222222','POST',archive,owner)).status).toBe(400);expect(counts()).toEqual(before);}finally{cloud.database.db.exec('DROP TRIGGER fail_restore_receipt');}
   await call('/member'+query,'PATCH',{user:memberId,role:'viewer'},owner);expect((await call('/office-restore'+query,'POST',archive,member)).status).toBe(403);await call('/member'+query,'PATCH',{user:memberId,role:'member'},owner);await call('/document-permissions'+query,'PUT',{doc:imported.id,user:memberId,role:'denied'},owner);expect((await call('/office-backup'+query+'&id='+imported.id,'GET',undefined,member)).status).toBe(404);await call('/member'+query,'PATCH',{user:memberId,role:'viewer'},owner);expect((await call('/office-backup'+query+'&id='+imported.id,'GET',undefined,member)).status).toBe(404);
   await call('/office-resource'+query+'&id='+imported.id,'DELETE',undefined,owner);expect((await call('/office-backup'+query+'&id='+imported.id,'GET',undefined,owner)).status).toBe(404);expect((await call('/office-restore'+targetQuery,'POST',archive,owner)).status).toBe(201);
-  for(const [kind,format,mime]of [['word','docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document'],['spreadsheet','xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],['pdf','pdf','application/pdf'],['presentation','pptx','application/vnd.openxmlformats-officedocument.presentationml.presentation']]){const resource=await(await call('/office-resources'+query,'POST',{kind,name:'备份.'+format,mime,sourceFormat:format},owner)).json();const response=await call('/office-backup'+query+'&id='+resource.id,'GET',undefined,owner);expect(response.status).toBe(200);const archive=await response.json(),restored=await call('/office-restore'+targetQuery,'POST',archive,owner);expect(restored.status).toBe(201);expect((await restored.json()).kind).toBe(kind);}
  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));cloud.close();rmSync(dir,{recursive:true,force:true});}
-},20000);
+});
+
+// Each format starts isolated parser processes; give each round trip its own test budget.
+it.each([
+ ['word','docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+ ['spreadsheet','xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+ ['pdf','pdf','application/pdf'],
+ ['presentation','pptx','application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+])('%s 单文件备份可跨空间恢复',async(kind,format,mime)=>{
+ const dir=mkdtempSync(join(tmpdir(),'mydoc-office-format-backup-')),cloud=new CloudServer(join(dir,'cloud.sqlite')),server=createServer(cloud.handler);
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const root='http://127.0.0.1:'+(server.address() as {port:number}).port;
+ const call=(path:string,method='GET',value?:unknown,cookie?:string)=>fetch(root+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(value?{'Content-Type':'application/json'}:{})},body:value?JSON.stringify(value):undefined});
+ try{
+  const registration=await call('/register','POST',{email:'format-backup@example.com',name:'Owner',password:'abcdefghijk'}),owner=registration.headers.get('set-cookie')!.split(';')[0];
+  const source=await(await call('/workspaces','POST',{name:'来源'},owner)).json(),target=await(await call('/workspaces','POST',{name:'目标'},owner)).json();
+  const resource=await(await call('/office-resources?workspace='+source.id,'POST',{kind,name:'备份.'+format,mime,sourceFormat:format},owner)).json();
+  const response=await call('/office-backup?workspace='+source.id+'&id='+resource.id,'GET',undefined,owner);expect(response.status).toBe(200);
+  const archive=await response.json(),restored=await call('/office-restore?workspace='+target.id,'POST',archive,owner);expect(restored.status).toBe(201);
+  const recovered=await restored.json();expect(recovered.kind).toBe(kind);expect(recovered.id).not.toBe(resource.id);
+  expect(cloud.database.load('cloud:'+target.id,recovered.id)).toBeTruthy();
+ }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));cloud.close();rmSync(dir,{recursive:true,force:true});}
+});
 
 it('XLSX 文本导出固定快照、查看者可下载，撤权或删除后拒绝响应',async()=>{
  const {encodeXlsxWorkbook}=await import('../packages/frontend/apps/web/server/office-spreadsheet');const {exportXlsxText}=await import('../packages/frontend/apps/web/server/office-spreadsheet-export');const {OfficeParserPool}=await import('../packages/frontend/apps/web/server/office-parser-process');
