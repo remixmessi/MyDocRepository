@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import {newNote} from './fixtures';
 const root='http://127.0.0.1:4180';
 const png=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.alloc(64,9)]);
 test('账户设置：改名、头像、邮箱验证、改密与登录设备注销',async({browser})=>{
@@ -14,7 +15,7 @@ test('账户设置：改名、头像、邮箱验证、改密与登录设备注�
   expect((await other.request.post(root+'/api/cloud/login',{data:{email,password:'account-password-1'}})).ok()).toBe(true);
   await other.goto(root);await expect(other.getByRole('button',{name:'新建文件',exact:true}).first()).toBeVisible();
   await other.getByLabel('当前工作区',{exact:true}).selectOption(space.id);
-  await other.getByRole('button',{name:'新建文件',exact:true}).first().click();
+  await newNote(other);
   await other.getByLabel('文档标题',{exact:true}).fill('会话失效前的文档');
   await expect(other.getByRole('status').filter({hasText:'已同步到工作空间'}).first()).toBeVisible();
 

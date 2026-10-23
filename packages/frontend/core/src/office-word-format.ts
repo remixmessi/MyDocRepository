@@ -4,6 +4,11 @@ import {validWordAlignment,validWordLeftIndent,validWordRightIndent,validWordFir
 import {validWordLink} from '../../../common/nbstore/src/office-word-link';
 import {validWordList,type WordList} from '../../../common/nbstore/src/office-word-list';
 import {Y,LOCAL_ORIGIN} from '@mydoc/crdt';
+import {formatWordTracked,setWordParagraphAttributeTracked,wordTrackingAuthor} from '../../../common/nbstore/src/office-word-revision';
+/** Character formatting; recorded as a revision while the document tracks changes. */
+export function formatWordRun(text:Y.Text,start:number,end:number,changes:Record<string,unknown>){const author=wordTrackingAuthor(text.doc);if(author)formatWordTracked(text,start,end,changes,author);else text.format(start,end-start,changes);}
+/** Paragraph property (`undefined` removes it); recorded as a revision while the document tracks changes. */
+export function setWordParagraphAttribute(text:Y.Text,key:string,value:unknown){setWordParagraphAttributeTracked(text,key,value,wordTrackingAuthor(text.doc));}
 export type WordMark='bold'|'italic'|'underline'|'strike';
 /** Character properties set from a value list (`undefined` clears back to the paragraph default). */
 export type WordFontKey='fontSize'|'color'|'highlight'|'fontFamily'|'vertAlign';
@@ -38,14 +43,14 @@ export function toggleWordMark(text:Y.Text,selection:WordSelection,mark:WordMark
  assertWordTextLive(text);
  const range=resolveWordSelection(text,selection);if(!range)throw new Error('所选文字已删除，请重新选择');
  const value=!wordMarkActive(text,range.start,range.end,mark);
- text.doc!.transact(()=>text.format(range.start,range.end-range.start,{[mark]:value}),LOCAL_ORIGIN);
+ text.doc!.transact(()=>formatWordRun(text,range.start,range.end,{[mark]:value}),LOCAL_ORIGIN);
  return range;
 }
 
 export function setWordHeading(text:Y.Text,heading:number){
  if(!Number.isInteger(heading)||heading<0||heading>3)throw new Error('标题级别无效');
  assertWordTextLive(text);
- text.doc!.transact(()=>text.setAttribute('heading',heading),LOCAL_ORIGIN);
+ text.doc!.transact(()=>setWordParagraphAttribute(text,'heading',heading),LOCAL_ORIGIN);
 }
 
 export function setWordList(text:Y.Text,kind:'none'|'bullet'|'decimal'){
@@ -55,7 +60,7 @@ export function setWordList(text:Y.Text,kind:'none'|'bullet'|'decimal'){
  const prior=index>0?paragraphs[index-1]:undefined;
  const current=text.getAttribute('list'),previous=prior instanceof Y.Text?prior.getAttribute('list'):undefined;
  const list:WordList|undefined=kind==='none'?undefined:validWordList(current)&&current.kind===kind?current:validWordList(previous)&&previous.kind===kind?{...previous}:{kind,id:crypto.randomUUID(),start:1};
- doc.transact(()=>{if(list)text.setAttribute('list',list);else text.removeAttribute('list');},LOCAL_ORIGIN);
+ doc.transact(()=>setWordParagraphAttribute(text,'list',list),LOCAL_ORIGIN);
 }
 export function wordListMarkers(paragraphs:Y.Text[]){
  const counters=new Map<string,number>();
@@ -82,33 +87,33 @@ export function wordSelectionLink(text:Y.Text,start:number,end:number){
 export function setWordAlignment(text:Y.Text,align:WordAlignment){
  if(!validWordAlignment(align))throw new Error('段落对齐方式无效');
  assertWordTextLive(text);
- text.doc!.transact(()=>text.setAttribute('align',align),LOCAL_ORIGIN);
+ text.doc!.transact(()=>setWordParagraphAttribute(text,'align',align),LOCAL_ORIGIN);
 }
 export function setWordLeftIndent(text:Y.Text,leftIndent:number){
  if(!validWordLeftIndent(leftIndent))throw new Error('左缩进须在 0–144 磅范围内');
  assertWordTextLive(text);
- text.doc!.transact(()=>text.setAttribute('leftIndent',leftIndent),LOCAL_ORIGIN);
+ text.doc!.transact(()=>setWordParagraphAttribute(text,'leftIndent',leftIndent),LOCAL_ORIGIN);
 }
 
 export function setWordRightIndent(text:Y.Text,rightIndent:number){
  if(!validWordRightIndent(rightIndent))throw new Error('右缩进须在 0–144 磅范围内');
  assertWordTextLive(text);
- text.doc!.transact(()=>text.setAttribute('rightIndent',rightIndent),LOCAL_ORIGIN);
+ text.doc!.transact(()=>setWordParagraphAttribute(text,'rightIndent',rightIndent),LOCAL_ORIGIN);
 }
 export function setWordFirstLineIndent(text:Y.Text,firstLineIndent:number){
  if(!validWordFirstLineIndent(firstLineIndent))throw new Error('首行或悬挂缩进须在 0–144 磅范围内');
  assertWordTextLive(text);
- text.doc!.transact(()=>text.setAttribute('firstLineIndent',firstLineIndent),LOCAL_ORIGIN);
+ text.doc!.transact(()=>setWordParagraphAttribute(text,'firstLineIndent',firstLineIndent),LOCAL_ORIGIN);
 }
 
 export function setWordSpacing(text:Y.Text,key:'lineSpacing'|'spaceBefore'|'spaceAfter',value:number|undefined){
  if(value!==undefined&&!(key==='lineSpacing'?validWordLineSpacing(value):validWordParagraphSpace(value)))throw new Error(key==='lineSpacing'?'行距须在 0.5–5 倍之间':'段前/段后间距须在 0–72 磅之间');
  assertWordTextLive(text);
- text.doc!.transact(()=>{if(value===undefined)text.removeAttribute(key);else text.setAttribute(key,value);},LOCAL_ORIGIN);
+ text.doc!.transact(()=>setWordParagraphAttribute(text,key,value),LOCAL_ORIGIN);
 }
 export function clearWordFormatting(text:Y.Text,selection:WordSelection){
  assertWordTextLive(text);const range=resolveWordSelection(text,selection);if(!range)throw new Error('所选文字已删除，请重新选择');
- text.doc!.transact(()=>text.format(range.start,range.end-range.start,Object.fromEntries(WORD_RUN_FORMATS.map(key=>[key,null]))),LOCAL_ORIGIN);return range;
+ text.doc!.transact(()=>formatWordRun(text,range.start,range.end,Object.fromEntries(WORD_RUN_FORMATS.map(key=>[key,null]))),LOCAL_ORIGIN);return range;
 }
 /** Character formatting at a position, for the format painter. */
 export function wordFormatAt(text:Y.Text,index:number){
@@ -117,7 +122,7 @@ export function wordFormatAt(text:Y.Text,index:number){
 }
 export function applyWordFormat(text:Y.Text,selection:WordSelection,format:Record<string,unknown>){
  assertWordTextLive(text);const range=resolveWordSelection(text,selection);if(!range)throw new Error('所选文字已删除，请重新选择');
- text.doc!.transact(()=>text.format(range.start,range.end-range.start,Object.fromEntries(WORD_RUN_FORMATS.map(key=>[key,format[key]??null]))),LOCAL_ORIGIN);return range;
+ text.doc!.transact(()=>formatWordRun(text,range.start,range.end,Object.fromEntries(WORD_RUN_FORMATS.map(key=>[key,format[key]??null]))),LOCAL_ORIGIN);return range;
 }
 export function wordSelectionFont(text:Y.Text,start:number,end:number,key:WordFontKey):number|string|undefined{
  let position=0,first=true,value:number|string|undefined;
@@ -134,5 +139,5 @@ export function setWordFont(text:Y.Text,selection:WordSelection,key:WordFontKey,
  assertWordTextLive(text);
  const range=resolveWordSelection(text,selection);if(!range)throw new Error('所选文字已删除，请重新选择');
  const normalized=key==='color'&&typeof value==='string'&&value!=='auto'?value.toUpperCase():value;
- text.doc!.transact(()=>text.format(range.start,range.end-range.start,{[key]:normalized??null}),LOCAL_ORIGIN);return range;
+ text.doc!.transact(()=>formatWordRun(text,range.start,range.end,{[key]:normalized??null}),LOCAL_ORIGIN);return range;
 }

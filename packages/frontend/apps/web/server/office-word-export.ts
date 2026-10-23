@@ -1,5 +1,5 @@
 import {unpackOfficeMedia,checkOfficeMedia} from './office-media';
-import {isWordImage} from '../../../../common/nbstore/src/office-image';
+import {isWordImage,wordHeaderImages} from '../../../../common/nbstore/src/office-image';
 import {wordBlockTexts,wordTableRows,wordTableLayout,WORD_CELL_PARAGRAPH,type WordBlock} from '../../../../common/nbstore/src/office-word-table';
 import {DEFAULT_WORD_PAGE,type WordPageLayout} from '../../../../common/nbstore/src/office-word-page';
 import type {WordList} from '../../../../common/nbstore/src/office-word-list';
@@ -8,9 +8,9 @@ import {strToU8,zipSync} from 'fflate';
 import {validateWordUpdate} from './office-word';
 import {validOfficeComment,type OfficeCommentThread} from '../../../../common/nbstore/src/office-comments';
 import {officeAnchorTarget} from '../../../../common/nbstore/src/office-comment-anchor';
-import {wordHeaderFooterParts} from './office-word-headers';
+import {wordHeaderFooterParts,wordInlineImageRun} from './office-word-headers';
 import {validWordHeaderFooter} from '../../../../common/nbstore/src/office-word-header';
-import {validWordRevisionMark} from '../../../../common/nbstore/src/office-word-revision';
+import {validWordRevisionMark,validWordRunFormatMark,validWordParagraphFormatMark,type WordRevisionMark} from '../../../../common/nbstore/src/office-word-revision';
 
 type CommentMark={offset:number;kind:'start'|'end';id:number};
 /**
@@ -50,18 +50,51 @@ function xmlText(value:string){
 }
 /** Exports only the declared paragraph model and supported direct character marks, never alters the original. */
 export function exportDocxWord(snapshot:Uint8Array){
- const payload=unpackOfficeMedia(snapshot);snapshot=payload.state;const media=checkOfficeMedia(snapshot,'word',payload.media),imageFiles:Record<string,Uint8Array>={},imageRelations:string[]=[],imageIds=new Map<string,{id:string;name:string}>();let drawingId=0;
+ const payload=unpackOfficeMedia(snapshot);snapshot=payload.state;const media=checkOfficeMedia(snapshot,'word',payload.media),imageFiles:Record<string,Uint8Array>={},imageRelations:string[]=[];let drawingId=0;
  validateWordUpdate(null,snapshot);
  const doc=new Y.Doc();
  try{
   Y.applyUpdate(doc,snapshot);
   const page=(doc.getMap('pageSettings').get('layout')??DEFAULT_WORD_PAGE) as WordPageLayout;
-  const headerFooter=doc.getMap('pageSettings').get('headerFooter'),headers=wordHeaderFooterParts(validWordHeaderFooter(headerFooter)?headerFooter:undefined,page);
   const blocks=doc.getArray<WordBlock>('paragraphs').toArray(),paragraphs=wordBlockTexts(blocks);
   const lists=new Map<string,{list:WordList;number:number}>();
-  for(const paragraph of paragraphs){const list=paragraph.getAttribute('list') as WordList|undefined;if(list&&!lists.has(list.id))lists.set(list.id,{list,number:lists.size+1});}
+  // Lists named only by a formatting revision's previous value still need a numbering definition.
+  for(const paragraph of paragraphs){const format=paragraph.getAttribute('pfmt'),previous=validWordParagraphFormatMark(format)?format.old.list:undefined;for(const list of [paragraph.getAttribute('list'),previous] as (WordList|undefined|null)[])if(list&&!lists.has(list.id))lists.set(list.id,{list,number:lists.size+1});}
   const links=new Map<string,string>(),notes=wordComments(doc,paragraphs),firstText=paragraphs[0];let revisionId=notes.count+1;
   const trackChanges=doc.getMap('pageSettings').get('trackChanges')===true;
+  // Pictures are stored once under word/media/ even when the body and several headers use them; each part relates to the file itself.
+  const mediaNames=new Map<string,string>(),bodyRelations=new Map<string,string>();
+  const mediaFile=(assetId:string)=>{const asset=media.get(assetId);if(!asset)throw new Error('Word 图片缺失');let name=mediaNames.get(assetId);if(!name){name='image'+(mediaNames.size+1)+(asset.entry.mime==='image/png'?'.png':'.jpg');mediaNames.set(assetId,name);imageFiles['word/media/'+name]=asset.bytes;}return name;};
+  const bodyImage=(name:string)=>{let id=bodyRelations.get(name);if(!id){id='rImg'+(bodyRelations.size+1);bodyRelations.set(name,id);imageRelations.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${name}"/>`);}return id;};
+  const revisionAttributes=(mark:WordRevisionMark)=>`w:id="${revisionId++}" w:author="${xmlText(mark.name)}" w:date="${new Date(mark.date).toISOString().replace(/\.\d{3}Z$/,'Z')}"`;
+  /** Current values with a revision's recorded previous values put back (null = was not set). */
+  const previousValues=(current:Record<string,unknown>,old:Record<string,unknown>)=>{const result={...current};for(const [key,value]of Object.entries(old)){if(value===null)delete result[key];else result[key]=value;}return result;};
+  const runProperties=(marks:Record<string,unknown>)=>{
+   // CT_RPr element order: rFonts, b, i, strike, color, sz, highlight, u, vertAlign.
+   const fonts=typeof marks.fontFamily==='string'?`<w:rFonts w:ascii="${xmlText(marks.fontFamily)}" w:hAnsi="${xmlText(marks.fontFamily)}" w:eastAsia="${xmlText(marks.fontFamily)}"/>`:'';
+   const toggle=[['bold','b'],['italic','i'],['strike','strike']].filter(([key])=>marks[key]!==undefined).map(([key,tag])=>`<w:${tag} w:val="${marks[key]?'1':'0'}"/>`).join('');
+   const color=typeof marks.color==='string'?`<w:color w:val="${marks.color==='auto'?'auto':marks.color.slice(1).toUpperCase()}"/>`:'';
+   const size=typeof marks.fontSize==='number'?`<w:sz w:val="${marks.fontSize*2}"/>`:'';
+   const highlight=typeof marks.highlight==='string'?`<w:highlight w:val="${marks.highlight}"/>`:'';
+   const underline=marks.underline===undefined?'':`<w:u w:val="${marks.underline?'single':'none'}"/>`;
+   const vert=typeof marks.vertAlign==='string'?`<w:vertAlign w:val="${marks.vertAlign}"/>`:'';
+   return fonts+toggle+color+size+highlight+underline+vert;
+  };
+  const paragraphProperties=(attributes:Record<string,unknown>)=>{
+   const heading=Number(attributes.heading??0),list=attributes.list as WordList|undefined;
+   const numbering=list?`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${lists.get(list.id)!.number}"/></w:numPr>`:'';
+   const align=attributes.align as string|undefined,leftIndent=attributes.leftIndent as number|undefined;
+   const rightIndent=attributes.rightIndent as number|undefined,firstLineIndent=attributes.firstLineIndent as number|undefined;
+   const ind=(leftIndent===undefined?'':` w:left="${leftIndent}"`)+(rightIndent===undefined?'':` w:right="${rightIndent}"`)+(firstLineIndent===undefined?'':firstLineIndent<0?` w:hanging="${-firstLineIndent}"`:` w:firstLine="${firstLineIndent}"`);
+   const lineSpacing=attributes.lineSpacing as number|undefined,spaceBefore=attributes.spaceBefore as number|undefined,spaceAfter=attributes.spaceAfter as number|undefined;
+   const spacing=(spaceBefore===undefined?'':` w:before="${spaceBefore}"`)+(spaceAfter===undefined?'':` w:after="${spaceAfter}"`)+(lineSpacing===undefined?'':` w:line="${Math.round(lineSpacing*240)}" w:lineRule="auto"`);
+   // CT_PPr order: spacing precedes ind and jc.
+   const layout=(spacing?`<w:spacing${spacing}/>`:'')+(ind?`<w:ind${ind}/>`:'')+(align?`<w:jc w:val="${align==='justify'?'both':align}"/>`:'');
+   return `<w:pStyle w:val="${heading?'Heading'+heading:'Normal'}"/>${attributes.pageBreakBefore===undefined?'':`<w:pageBreakBefore w:val="${attributes.pageBreakBefore?1:0}"/>`}${numbering}${layout}${heading?`<w:outlineLvl w:val="${heading-1}"/>`:''}`;
+  };
+  // A paragraph's insBreak/delBreak is the paragraph mark before it, which Word stores on the previous paragraph.
+  const breakMarks=new Map<Y.Text,{kind:'ins'|'del';mark:WordRevisionMark}>();
+  blocks.forEach((block,i)=>{const previous=blocks[i-1];if(!(block instanceof Y.Text)||!(previous instanceof Y.Text))return;for(const [key,kind]of [['insBreak','ins'],['delBreak','del']] as const){const mark=block.getAttribute(key);if(validWordRevisionMark(mark))breakMarks.set(previous,{kind,mark});}});
   const paragraphXml=(paragraph:Y.Text,cell=false)=>{
    // Cells keep their paragraphs in one Y.Text split by U+2029; every paragraph shares the cell's paragraph properties.
    const delta=paragraph.toDelta() as {insert:string;attributes?:Record<string,boolean|string|number>}[],pieces:typeof delta[]=[[]],starts=[0];let offset=0;
@@ -81,40 +114,26 @@ export function exportDocxWord(snapshot:Uint8Array){
    const runs=delta.map(part=>{
     if('mark' in part)return part.mark.kind==='start'?commentStart(part.mark.id):commentEnd(part.mark.id);
     const marks=part.attributes??{};
-    // CT_RPr element order: rFonts, b, i, strike, color, sz, highlight, u, vertAlign.
-    const fonts=typeof marks.fontFamily==='string'?`<w:rFonts w:ascii="${xmlText(marks.fontFamily)}" w:hAnsi="${xmlText(marks.fontFamily)}" w:eastAsia="${xmlText(marks.fontFamily)}"/>`:'';
-    const toggle=[['bold','b'],['italic','i'],['strike','strike']].filter(([key])=>marks[key]!==undefined).map(([key,tag])=>`<w:${tag} w:val="${marks[key]?'1':'0'}"/>`).join('');
-    const color=typeof marks.color==='string'?`<w:color w:val="${marks.color==='auto'?'auto':marks.color.slice(1).toUpperCase()}"/>`:'';
-    const size=typeof marks.fontSize==='number'?`<w:sz w:val="${marks.fontSize*2}"/>`:'';
-    const highlight=typeof marks.highlight==='string'?`<w:highlight w:val="${marks.highlight}"/>`:'';
-    const underline=marks.underline===undefined?'':`<w:u w:val="${marks.underline?'single':'none'}"/>`;
-    const vert=typeof marks.vertAlign==='string'?`<w:vertAlign w:val="${marks.vertAlign}"/>`:'';
-    const properties=fonts+toggle+color+size+highlight+underline+vert;
+    // A formatting revision writes the previous properties in w:rPrChange, last inside w:rPr.
+    const format=validWordRunFormatMark(marks.fmt)?marks.fmt:undefined;
+    const properties=runProperties(marks)+(format?`<w:rPrChange ${revisionAttributes(format)}><w:rPr>${runProperties(previousValues(marks,format.old))}</w:rPr></w:rPrChange>`:'');
     // Deleted text is written as w:delText inside w:del; insertions wrap the run in w:ins (inside any hyperlink).
     const deleted=validWordRevisionMark(marks.del),textTag=deleted?'w:delText':'w:t';
     const text=(part.insert as string).split(/([\t\n])/).map(value=>value==='\t'?'<w:tab/>':value==='\n'?'<w:br/>':`<${textTag} xml:space="preserve">${xmlText(value)}</${textTag}>`).join('');
     let run=`<w:r>${properties?`<w:rPr>${properties}</w:rPr>`:''}${text}</w:r>`;
-    for(const kind of ['ins','del'] as const){const mark=marks[kind];if(!validWordRevisionMark(mark))continue;run=`<w:${kind} w:id="${revisionId++}" w:author="${xmlText(mark.name)}" w:date="${new Date(mark.date).toISOString().replace(/\.\d{3}Z$/,'Z')}">${run}</w:${kind}>`;}
+    for(const kind of ['ins','del'] as const){const mark=marks[kind];if(!validWordRevisionMark(mark))continue;run=`<w:${kind} ${revisionAttributes(mark)}>${run}</w:${kind}>`;}
     if(typeof marks.href!=='string')return run;
     let id=links.get(marks.href);if(!id){if(links.size>=9998)throw new Error('Word 超链接数量过多');id='rIdLink'+(links.size+1);links.set(marks.href,id);}
     return `<w:hyperlink r:id="${id}">${run}</w:hyperlink>`;
    }).join('');
-   const heading=Number(paragraph.getAttribute('heading')??0);
-   const list=paragraph.getAttribute('list') as WordList|undefined;
-   const numbering=list?`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${lists.get(list.id)!.number}"/></w:numPr>`:'';
-   const align=paragraph.getAttribute('align') as string|undefined,leftIndent=paragraph.getAttribute('leftIndent') as number|undefined;
-   const rightIndent=paragraph.getAttribute('rightIndent') as number|undefined,firstLineIndent=paragraph.getAttribute('firstLineIndent') as number|undefined;
-   const ind=(leftIndent===undefined?'':` w:left="${leftIndent}"`)+(rightIndent===undefined?'':` w:right="${rightIndent}"`)+(firstLineIndent===undefined?'':firstLineIndent<0?` w:hanging="${-firstLineIndent}"`:` w:firstLine="${firstLineIndent}"`);
-   const lineSpacing=paragraph.getAttribute('lineSpacing') as number|undefined,spaceBefore=paragraph.getAttribute('spaceBefore') as number|undefined,spaceAfter=paragraph.getAttribute('spaceAfter') as number|undefined;
-   const spacing=(spaceBefore===undefined?'':` w:before="${spaceBefore}"`)+(spaceAfter===undefined?'':` w:after="${spaceAfter}"`)+(lineSpacing===undefined?'':` w:line="${Math.round(lineSpacing*240)}" w:lineRule="auto"`);
-   // CT_PPr order: spacing precedes ind and jc.
-   const layout=(spacing?`<w:spacing${spacing}/>`:'')+(ind?`<w:ind${ind}/>`:'')+(align?`<w:jc w:val="${align==='justify'?'both':align}"/>`:'');
-   const properties=`<w:pStyle w:val="${heading?'Heading'+heading:'Normal'}"/>${paragraph.getAttribute('pageBreakBefore')===undefined?'':`<w:pageBreakBefore w:val="${paragraph.getAttribute('pageBreakBefore')?1:0}"/>`}${numbering}${layout}${heading?`<w:outlineLvl w:val="${heading-1}"/>`:''}`;
+   // CT_PPr: properties, then the paragraph mark's w:rPr (its own insertion/deletion), then w:pPrChange.
+   const attributes=paragraph.getAttributes(),format=validWordParagraphFormatMark(attributes.pfmt)?attributes.pfmt:undefined,mark=last?breakMarks.get(paragraph):undefined;
+   const properties=paragraphProperties(attributes)+(mark?`<w:rPr><w:${mark.kind} ${revisionAttributes(mark.mark)}/></w:rPr>`:'')+(format?`<w:pPrChange ${revisionAttributes(format)}><w:pPr>${paragraphProperties(previousValues(attributes,format.old))}</w:pPr></w:pPrChange>`:'');
    return `<w:p><w:pPr>${properties}</w:pPr>${runs}</w:p>`;
   };
   const content=blocks.map(block=>{
    if(block instanceof Y.Text)return paragraphXml(block);
-   if(block.get('kind')==='image'){const asset=media.get(String(block.get('assetId')))!;let entry=imageIds.get(asset.entry.id);if(!entry){const id='rImg'+(imageRelations.length+1),name=id+(asset.entry.mime==='image/png'?'.png':'.jpg');entry={id,name};imageIds.set(asset.entry.id,entry);imageFiles['word/media/'+name]=asset.bytes;imageRelations.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${name}"/>`);}const {id,name}=entry;drawingId++;const cx=Math.round(Number(block.get('width'))*9525),cy=Math.round(Number(block.get('height'))*9525),alt=xmlText(String(block.get('alt')));return `<w:p><w:r><w:drawing><wp:inline><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${drawingId}" name="图片 ${drawingId}" descr="${alt}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${drawingId}" name="${name}" descr="${alt}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;}
+   if(block.get('kind')==='image'){const name=mediaFile(String(block.get('assetId'))),id=bodyImage(name);let run=wordInlineImageRun(id,name,++drawingId,{width:Number(block.get('width')),height:Number(block.get('height')),alt:String(block.get('alt'))});for(const kind of ['ins','del'] as const){const mark=block.get(kind);if(validWordRevisionMark(mark))run=`<w:${kind} ${revisionAttributes(mark)}>${run}</w:${kind}>`;}return `<w:p>${run}</w:p>`;}
 
    const rows=wordTableRows(block),columns=Number(block.get('columns')),layout=wordTableLayout(block);if(!rows.length)throw new Error('空表格无法导出，请先添加一行或删除表格');
    const available=page.width-page.left-page.right,width=Math.floor(available/columns);
@@ -122,6 +141,9 @@ export function exportDocxWord(snapshot:Uint8Array){
    const borders=['top','left','bottom','right','insideH','insideV'].map(edge=>`<w:${edge} w:val="single" w:sz="4" w:color="auto"/>`).join('');
    return `<w:tbl><w:tblPr><w:tblW w:w="${available}" w:type="dxa"/><w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>${widths.map(w=>`<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${rows.toArray().map((row,r)=>`<w:tr>${row.toArray().map((_,c)=>{const owner=layout.owner[r][c]!,span=layout.anchors.get(owner)!;if(span.column!==c)return '';const width=widths.slice(c,c+span.colSpan).reduce((a,b)=>a+b,0),grid=span.colSpan>1?`<w:gridSpan w:val="${span.colSpan}"/>`:'',merge=span.rowSpan>1||span.row!==r?`<w:vMerge${span.row===r?' w:val="restart"':''}/>`:'';return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${grid}${merge}</w:tcPr>${span.row===r?paragraphXml(owner,true):'<w:p/>'}</w:tc>`;}).join('')}</w:tr>`).join('')}</w:tbl>`;
   }).join('');
+  // Headers are built after the body so their drawing ids follow the body's.
+  const headerFooter=doc.getMap('pageSettings').get('headerFooter'),pictures=Object.fromEntries([...wordHeaderImages(doc)?.entries()??[]].map(([key,image])=>[key,{assetId:String(image.get('assetId')),width:Number(image.get('width')),height:Number(image.get('height')),alt:String(image.get('alt'))}]));
+  const headers=wordHeaderFooterParts(validWordHeaderFooter(headerFooter)?headerFooter:undefined,page,pictures,mediaFile,()=>++drawingId);
   // Without any text paragraph (empty, or images only) unanchored comments get their own leading paragraph.
   const body=(!firstText&&notes.floating.length?`<w:p>${notes.floating.map(id=>commentStart(id)+commentEnd(id)).join('')}</w:p>`:'')+content||'<w:p></w:p>';
   const commentsXml=notes.count?`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">${notes.comments.join('')}</w:comments>`:'',extendedXml=notes.count?`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">${notes.extended.join('')}</w15:commentsEx>`:'';
@@ -130,16 +152,18 @@ export function exportDocxWord(snapshot:Uint8Array){
   const document=strToU8(xml);if(document.length>8*1024*1024)throw new Error('导出正文 XML 超过 8 MB');
   const numbering=lists.size?`<?xml version="1.0" encoding="UTF-8"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${[...lists.values()].map(({list,number})=>`<w:abstractNum w:abstractNumId="${number}"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="${list.start}"/><w:numFmt w:val="${list.kind}"/><w:lvlText w:val="${list.kind==='bullet'?'•':'%1.'}"/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="720"/></w:tabs><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>`).join('')}${[...lists.values()].map(({number})=>`<w:num w:numId="${number}"><w:abstractNumId w:val="${number}"/></w:num>`).join('')}</w:numbering>`:'';
   if(strToU8(numbering).length>8*1024*1024)throw new Error('导出列表 XML 超过 8 MB');
-  const relationships=strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'+(lists.size?'<Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>':'')+headers.relations.join('')+(trackChanges?'<Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>':'')+(notes.count?'<Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/><Relationship Id="rIdCommentsEx" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/>':'')+[...links].map(([href,id])=>`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlText(href)}" TargetMode="External"/>`).join('')+imageRelations.join('')+'</Relationships>');
+  // CT_Settings order: trackRevisions precedes evenAndOddHeaders.
+  const settingsXml=trackChanges||headers.evenPages?`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${trackChanges?'<w:trackRevisions/>':''}${headers.evenPages?'<w:evenAndOddHeaders/>':''}</w:settings>`:'';
+  const relationships=strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'+(lists.size?'<Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>':'')+headers.relations.join('')+(settingsXml?'<Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>':'')+(notes.count?'<Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/><Relationship Id="rIdCommentsEx" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/>':'')+[...links].map(([href,id])=>`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlText(href)}" TargetMode="External"/>`).join('')+imageRelations.join('')+'</Relationships>');
   if(relationships.length>8*1024*1024)throw new Error('导出关系 XML 超过 8 MB');
   const result=zipSync({
    ...imageFiles,
-   '[Content_Types].xml':strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'+(lists.size?'<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>':'')+headers.types.join('')+(trackChanges?'<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>':'')+(notes.count?'<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>':'')+'</Types>'),
+   '[Content_Types].xml':strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'+(lists.size?'<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>':'')+headers.types.join('')+(settingsXml?'<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>':'')+(notes.count?'<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>':'')+'</Types>'),
    '_rels/.rels':strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
    'word/document.xml':document,
    ...(numbering?{'word/numbering.xml':strToU8(numbering)}:{}),
    ...Object.fromEntries(Object.entries(headers.files).map(([name,xml])=>[name,strToU8(xml)])),
-   ...(trackChanges?{'word/settings.xml':strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:trackRevisions/></w:settings>')}:{}),
+   ...(settingsXml?{'word/settings.xml':strToU8(settingsXml)}:{}),
    ...(notes.count?{'word/comments.xml':strToU8(commentsXml),'word/commentsExtended.xml':strToU8(extendedXml)}:{}),
    'word/_rels/document.xml.rels':relationships,
    'word/styles.xml':strToU8(`<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:sz w:val="22"/></w:rPr></w:style>${[1,2,3].map(level=>`<w:style w:type="paragraph" w:styleId="Heading${level}"><w:name w:val="heading ${level}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:keepLines/><w:outlineLvl w:val="${level-1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${[32,28,24][level-1]}"/></w:rPr></w:style>`).join('')}</w:styles>`),

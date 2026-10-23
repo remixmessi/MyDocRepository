@@ -1,5 +1,6 @@
 import {Y} from '../../crdt/src/index';
 import type {OfficeKind} from './office';
+import {validWordRevisionMark} from './office-word-revision';
 export const OFFICE_IMAGE_BYTES=5*1024*1024,OFFICE_MEDIA_BYTES=8*1024*1024,OFFICE_IMAGE_COUNT=1000;
 const crcTable=Uint32Array.from({length:256},(_,value)=>{let crc=value;for(let bit=0;bit<8;bit++)crc=crc&1?0xedb88320^(crc>>>1):crc>>>1;return crc>>>0;});
 function pngCrc(bytes:Uint8Array){let crc=0xffffffff;for(const value of bytes)crc=crcTable[(crc^value)&255]^(crc>>>8);return (crc^0xffffffff)>>>0;}
@@ -14,7 +15,10 @@ export function officeImageMime(bytes:Uint8Array):'image/png'|'image/jpeg'{
 export function validOfficeAssetId(value:unknown):value is string{return typeof value==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(value);}
 export function isWordImage(value:unknown):value is Y.Map<unknown>{return value instanceof Y.Map&&value.get('kind')==='image';}
 export function createWordImage(assetId:string,width=320,height=240,alt='图片') {const block=new Y.Map<unknown>();for(const [key,value]of Object.entries({kind:'image',assetId,width,height,alt}))block.set(key,value);return block;}
-export function validateWordImage(block:Y.Map<unknown>){if(block._start||block.size!==5||[...block.keys()].some(k=>!['kind','assetId','width','height','alt'].includes(k))||!validOfficeAssetId(block.get('assetId'))||!['width','height'].every(k=>typeof block.get(k)==='number'&&Number.isFinite(block.get(k))&&Number(block.get(k))>0&&Number(block.get(k))<=10000)||typeof block.get('alt')!=='string'||String(block.get('alt')).length>1000)throw new Error('Word 图片字段无效');}
-export function officeImageNodes(doc:Y.Doc,kind:OfficeKind){const nodes:Y.Map<unknown>[]=[];if(kind==='word')for(const block of doc.getArray('paragraphs')){if(isWordImage(block))nodes.push(block);}if(kind==='presentation'){
+/** `revisions` allows tracked-change `ins`/`del` marks (body pictures; header pictures have none). */
+export function validateWordImage(block:Y.Map<unknown>,revisions=false){const extra=[...block.keys()].filter(k=>k==='ins'||k==='del');if(extra.length&&(!revisions||extra.some(k=>!validWordRevisionMark(block.get(k)))))throw new Error('Word 图片修订标记无效');if(block._start||block.size!==5+extra.length||[...block.keys()].some(k=>!['kind','assetId','width','height','alt','ins','del'].includes(k))||!validOfficeAssetId(block.get('assetId'))||!['width','height'].every(k=>typeof block.get(k)==='number'&&Number.isFinite(block.get(k))&&Number(block.get(k))>0&&Number(block.get(k))<=10000)||typeof block.get('alt')!=='string'||String(block.get('alt')).length>1000)throw new Error('Word 图片字段无效');}
+/** Header/footer pictures (`pageSettings.headerImages`), keyed by `wordHeaderImageKey`. */
+export function wordHeaderImages(doc:Y.Doc){const map=doc.share.has('pageSettings')?doc.getMap('pageSettings').get('headerImages'):undefined;return map instanceof Y.Map?map as Y.Map<Y.Map<unknown>>:undefined;}
+export function officeImageNodes(doc:Y.Doc,kind:OfficeKind){const nodes:Y.Map<unknown>[]=[];if(kind==='word'){for(const block of doc.getArray('paragraphs')){if(isWordImage(block))nodes.push(block);}for(const image of wordHeaderImages(doc)?.values()??[])if(isWordImage(image))nodes.push(image);}if(kind==='presentation'){
  const add=(objects:unknown)=>{if(objects instanceof Y.Array)for(const object of objects)if(object instanceof Y.Map&&object.get('type')==='image')nodes.push(object);};add(doc.getArray('objects'));for(const slide of doc.getMap('slides').values())if(slide instanceof Y.Map)add(slide.get('objects'));
  }if(nodes.length>OFFICE_IMAGE_COUNT)throw new Error('办公图片超过 1000 个');return nodes;}

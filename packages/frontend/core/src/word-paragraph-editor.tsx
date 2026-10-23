@@ -10,7 +10,7 @@ import {WORD_CELL_PARAGRAPH} from '../../../common/nbstore/src/office-word-table
 import type {WordAlignment} from '../../../common/nbstore/src/office-word-layout';
 import {useEffect,useRef,useState} from 'react';
 import {Y,LOCAL_ORIGIN} from '@mydoc/crdt';
-import {applyTrackedEdit} from '../../../common/nbstore/src/office-word-revision';
+import {applyTrackedEdit,validWordRevisionMark,validWordParagraphFormatMark,wordRevisionColor} from '../../../common/nbstore/src/office-word-revision';
 import {setWordPageBreak} from './office-word-page';
 import {assertWordTextLive} from './office-word-location';
 import {setWordFont,wordSelectionFont,setWordRightIndent,setWordFirstLineIndent,setWordAlignment,setWordLeftIndent,setWordLink,wordSelectionLink,setWordList,setWordHeading,captureWordSelection,resolveWordSelection,toggleWordMark,wordMarkActive,clearWordFormatting,setWordSpacing,wordFormatAt,type WordSelection,type WordMark,type WordFontKey} from './office-word-format';
@@ -97,7 +97,8 @@ export function WordParagraphEditor({paragraph,index=0,label=`第 ${index+1} 段
       </div><small>缩进与分页</small></div>
 
     </div>,editing.toolbar)}
-    <div className="word-paragraph-content" data-heading={Number(paragraph.getAttribute('heading')??0)} data-page-break={paragraph.getAttribute('pageBreakBefore')===true||undefined} style={{textAlign:alignment,paddingLeft:leftIndent/15,paddingRight:rightIndent/15,textIndent:firstLineIndent/15,lineHeight:lineSpacing!==undefined?lineSpacing*1.2:undefined,marginTop:spaceBefore!==undefined?spaceBefore/15:undefined,marginBottom:spaceAfter!==undefined?spaceAfter/15:undefined}}>
+    <div className="word-paragraph-content" data-format-revision={!cell&&validWordParagraphFormatMark(paragraph.getAttribute('pfmt'))||undefined} data-heading={Number(paragraph.getAttribute('heading')??0)} data-page-break={paragraph.getAttribute('pageBreakBefore')===true||undefined} style={{textAlign:alignment,paddingLeft:leftIndent/15,paddingRight:rightIndent/15,textIndent:firstLineIndent/15,lineHeight:lineSpacing!==undefined?lineSpacing*1.2:undefined,marginTop:spaceBefore!==undefined?spaceBefore/15:undefined,marginBottom:spaceAfter!==undefined?spaceAfter/15:undefined}}>
+    {!cell&&(['insBreak','delBreak'] as const).map(kind=>{const mark=paragraph.getAttribute(kind);return validWordRevisionMark(mark)&&<span key={kind} className="word-break-revision" data-revision={kind} contentEditable={false} style={{['--revision-color' as string]:wordRevisionColor(mark.author)}} title={`${mark.name} ${kind==='insBreak'?'拆分段落':'合并段落'}：${new Date(mark.date).toLocaleString()}`} aria-label={kind==='insBreak'?'修订：此处拆分了段落':'修订：此处的段落标记已删除'}>¶</span>;})}
     {marker&&<span className="office-word-list-marker" contentEditable={false}>{marker} </span>}
     <WordRichInput text={paragraph} label={inputLabel} readOnly={readOnly} paragraphText={cell?WORD_CELL_PARAGRAPH:undefined} onEnter={cell?undefined:(start,end)=>{try{writable();if(!paragraph.length&&paragraph.getAttribute('list')){setWordList(paragraph,'none');return;}editing.focus(splitWordParagraph(paragraph,start,end));}catch(error){setError(error instanceof Error?error.message:'无法换段');}}}
     onBoundary={cell?undefined:direction=>{try{writable();const merged=mergeWordParagraph(paragraph,direction);if(!merged)return false;editing.focus(merged.text,merged.offset);return true;}catch(error){setError(error instanceof Error?error.message:'无法合并正文');return true;}}}

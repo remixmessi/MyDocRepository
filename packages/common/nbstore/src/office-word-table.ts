@@ -35,4 +35,4 @@ export function validateWordTable(table:Y.Map<unknown>){
  const cells:Y.Text[]=[];for(const row of rows.toArray()){if(!(row instanceof Y.Array)||row._map.size||row.length!==columns)throw new Error('Word 表格行列结构无效');for(const cell of row.toArray()){if(!(cell instanceof Y.Text))throw new Error('Word 单元格必须是文字');cells.push(cell);}}
  return cells;
 }
-export function wordBlockTexts(blocks:WordBlock[]){return blocks.flatMap(block=>block instanceof Y.Text?[block]:isWordImage(block)?(validateWordImage(block),[]):validateWordTable(block));}
+export function wordBlockTexts(blocks:WordBlock[]){return blocks.flatMap(block=>block instanceof Y.Text?[block]:isWordImage(block)?(validateWordImage(block,true),[]):validateWordTable(block));}

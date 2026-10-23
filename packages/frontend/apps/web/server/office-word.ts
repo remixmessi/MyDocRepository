@@ -1,13 +1,13 @@
 import {validateOfficeComments} from '../../../../common/nbstore/src/office-comments';
-import {packageImageReader} from './office-media';
+import {packageImageReader,type OfficeMedia} from './office-media';
 import {isWordImage,createWordImage,validateWordImage,OFFICE_IMAGE_COUNT} from '../../../../common/nbstore/src/office-image';
 import {createWordTable,wordTableRows,validateWordTable,wordTableLayout,isWordTable,wordBlockTexts,WORD_TABLE_LIMITS,WORD_CELL_PARAGRAPH,type WordBlock} from '../../../../common/nbstore/src/office-word-table';
 import {wordItemIdentity,wordTableStructure} from '../../../../common/nbstore/src/office-word-table-edit';
 import {readWordTable} from './office-word-table';
 import {validWordFontSize,validWordColor,validWordHighlight,validWordVertAlign,validWordFontFamily} from '../../../../common/nbstore/src/office-word-font';
 import {validWordPage} from '../../../../common/nbstore/src/office-word-page';
-import {validWordHeaderFooter} from '../../../../common/nbstore/src/office-word-header';
-import {validWordRevisionMark,WORD_REVISION_KEYS} from '../../../../common/nbstore/src/office-word-revision';
+import {validWordHeaderFooter,parseWordHeaderImageKey,WORD_HEADER_IMAGE_MAX} from '../../../../common/nbstore/src/office-word-header';
+import {validWordRevisionMark,validWordRunFormatMark,validWordParagraphFormatMark,wordRevisionMarks,WORD_RUN_FORMAT_VALID,WORD_PARAGRAPH_FORMAT_VALID} from '../../../../common/nbstore/src/office-word-revision';
 import {readWordHeaderFooter} from './office-word-headers';
 import {readWordPage} from './office-word-page';
 import {validWordAlignment,validWordLeftIndent,validWordRightIndent,validWordFirstLineIndent,validWordLineSpacing,validWordParagraphSpace} from '../../../../common/nbstore/src/office-word-layout';
@@ -50,28 +50,47 @@ export function encodeDocxWord(bytes:Uint8Array){
  const files=readOfficePackage(bytes),data=files['word/document.xml'];if(!data)throw new Error('DOCX 缺少正文');
  const xml=readOfficeXml(data),headingFor=wordHeadingReader(files['word/styles.xml']),listFor=wordListReader(files['word/numbering.xml'],files['word/styles.xml']),linkFor=wordLinkReader(files['word/_rels/document.xml.rels']),layoutFor=wordLayoutReader(files['word/styles.xml']),runStyleFor=wordRunStyleReader(files['word/styles.xml']),doc=new Y.Doc(),paragraphs=doc.getArray<WordBlock>('paragraphs');
  try{
-  const images=packageImageReader(files,'word/document.xml');
-  const appendImages=(source:string)=>{for(const drawing of source.matchAll(/<w:drawing\b[\s\S]*?<\/w:drawing>/g)){const value=drawing[0],embed=/\br:embed\s*=\s*(["'])(.*?)\1/.exec(value)?.[2];if(!embed)throw new Error('DOCX 图片缺少内嵌关系');const extent=/<wp:extent\b([^>]*?)\/?>/.exec(value)?.[1]??'',width=Number(/\bcx=["'](\d+)["']/.exec(extent)?.[1])/9525,height=Number(/\bcy=["'](\d+)["']/.exec(extent)?.[1])/9525;const alt=/<wp:docPr\b[^>]*\bdescr=(["'])(.*?)\1/.exec(value)?.[2]??'图片';paragraphs.push([createWordImage(images.read(embed),width,height,decodeWordXml(alt))]);}};
+  // Body and header pictures share one registry, so a logo used in both is stored once.
+  const registry=new Map<string,OfficeMedia>(),images=packageImageReader(files,'word/document.xml',registry);
+  const appendImages=(source:string)=>{
+   // A picture inside w:ins / w:del is a tracked insertion or deletion.
+   const spans=[...source.matchAll(/<w:(ins|del)\b([^>]*?)>([\s\S]*?)<\/w:\1>/g)].map(span=>({kind:span[1] as 'ins'|'del',start:span.index!,end:span.index!+span[0].length,attributes:span[2]}));
+   for(const drawing of source.matchAll(/<w:drawing\b[\s\S]*?<\/w:drawing>/g)){const span=spans.find(item=>drawing.index!>=item.start&&drawing.index!<item.end);const value=drawing[0],embed=/\br:embed\s*=\s*(["'])(.*?)\1/.exec(value)?.[2];if(!embed)throw new Error('DOCX 图片缺少内嵌关系');const extent=/<wp:extent\b([^>]*?)\/?>/.exec(value)?.[1]??'',width=Number(/\bcx=["'](\d+)["']/.exec(extent)?.[1])/9525,height=Number(/\bcy=["'](\d+)["']/.exec(extent)?.[1])/9525;const alt=/<wp:docPr\b[^>]*\bdescr=(["'])(.*?)\1/.exec(value)?.[2]??'图片';const image=createWordImage(images.read(embed),width,height,decodeWordXml(alt));if(span)image.set(span.kind,revisionMark(revisionOf(span.kind,span.attributes)));paragraphs.push([image]);}};
   const page=readWordPage(xml);if(page)doc.getMap('pageSettings').set('layout',page);
-  const headerFooter=readWordHeaderFooter(files,xml);if(headerFooter)doc.getMap('pageSettings').set('headerFooter',headerFooter);
+  const headerFooter=readWordHeaderFooter(files,xml,registry);if(headerFooter?.value){doc.getMap('pageSettings').set('headerFooter',headerFooter.value);
+   if(Object.keys(headerFooter.images).length){const map=new Y.Map<Y.Map<unknown>>();for(const [key,image]of Object.entries(headerFooter.images))map.set(key,createWordImage(image.assetId,image.width,image.height,image.alt));doc.getMap('pageSettings').set('headerImages',map);}}
   // Revisions keep Word's author and date; the id is made unique per kind so ins/del of one edit stay distinct.
   const revisionMark=(revision:WordRunRevision)=>{const date=Date.parse(revision.date??''),name=revision.author.trim().slice(0,160)||'Word 作者';return {id:('docx-'+revision.kind+'-'+revision.id).replace(/[^a-zA-Z0-9-]/g,'-').slice(0,80),author:'docx-author',name,date:Number.isFinite(date)&&date>0?date:1};};
+  const revisionOf=(kind:string,attributes:string):WordRunRevision=>({kind:kind as 'ins',id:/\bw:id\s*=\s*(["'])(.*?)\1/.exec(attributes)?.[2]??'',author:decodeWordXml(/\bw:author\s*=\s*(["'])(.*?)\1/.exec(attributes)?.[2]??''),date:/\bw:date\s*=\s*(["'])(.*?)\1/.exec(attributes)?.[2]});
+  /** The keys that differ between the current and previous properties, as a format revision; none if nothing changed. */
+  const formatRevision=(current:Record<string,unknown>,previous:Record<string,unknown>,valid:Record<string,(value:unknown)=>boolean>,revision:WordRunRevision)=>{
+   const old:Record<string,unknown>={};for(const key of Object.keys(valid))if(JSON.stringify(current[key]??null)!==JSON.stringify(previous[key]??null)&&(previous[key]===undefined||valid[key](previous[key])))old[key]=previous[key]??null;
+   return Object.keys(old).length?{...revisionMark(revision),old}:undefined;
+  };
+  // A paragraph mark inserted/deleted in Word is the break before the next paragraph here (insBreak/delBreak).
+  let pendingBreak:{kind:'insBreak'|'delBreak';mark:ReturnType<typeof revisionMark>}|undefined;
+  const paragraphMark=(xml:string)=>{const rPr=/<w:rPr(?:\s[^>]*)?>([\s\S]*?)<\/w:rPr>/.exec(/<w:pPr(?:\s[^>]*)?>([\s\S]*?)<\/w:pPr>/.exec(xml.replace(/<w:pPrChange\b[^>]*>[\s\S]*?<\/w:pPrChange>/g,''))?.[1]??'')?.[1]??'',found=/<w:(ins|del)\b([^>]*?)\/?>/.exec(rPr);return found?{kind:found[1]==='ins'?'insBreak' as const:'delBreak' as const,mark:revisionMark(revisionOf(found[1],found[2]))}:undefined;};
   const settingsXml=files['word/settings.xml']?readOfficeXml(files['word/settings.xml']):'',tracked=/<w:trackRevisions(?=[\s/>])([^>]*)\/?>/.exec(settingsXml);if(tracked&&!/w:val\s*=\s*(["'])(?:0|false|off)\1/.test(tracked[1]))doc.getMap('pageSettings').set('trackChanges',true);
   if(/<w:br\b[^>]*w:type\s*=\s*(["'])page\1/.test(xml))throw new Error('暂不支持段内分页符，请改用段前分页');
   const paragraphAttributes=(xml:string)=>{const heading=headingFor(xml),list=listFor(xml);return {...(heading?{heading}:{}),...(list?{list}:{}),...layoutFor(xml)} as Record<string,unknown>;};
   const fill=(text:Y.Text,xml:string,attributes=true,cell=false)=>{
-   const heading=headingFor(xml);if(attributes)for(const [key,value]of Object.entries(paragraphAttributes(xml)))text.setAttribute(key,value);
+   const heading=headingFor(xml);if(attributes){const current=paragraphAttributes(xml);for(const [key,value]of Object.entries(current))text.setAttribute(key,value);
+    // w:pPrChange holds the paragraph properties before a tracked formatting change (body paragraphs only).
+    const change=!cell&&/<w:pPrChange\b([^>]*?)(?:\/>|>([\s\S]*?)<\/w:pPrChange>)/.exec(xml),format=change?formatRevision(current,paragraphAttributes(`<w:pPr>${/<w:pPr(?:\s[^>]*)?>([\s\S]*?)<\/w:pPr>/.exec(change[2]??'')?.[1]??''}</w:pPr>`),WORD_PARAGRAPH_FORMAT_VALID,revisionOf('pfmt',change[1])):undefined;if(format)text.setAttribute('pfmt',format);}
    const paragraphStyle=/<w:pStyle\b[^>]*\bw:val\s*=\s*(["'])(.*?)\1/.exec(/<w:pPr(?:\s[^>]*)?>([\s\S]*?)<\/w:pPr>/.exec(xml.replace(/<w:pPrChange\b[^>]*>[\s\S]*?<\/w:pPrChange>/g,''))?.[1]??'')?.[2];
    for(const run of wordRuns(xml,linkFor)){
     // Deleted runs keep their text in w:delText.
     const value=[...run.xml.matchAll(/<w:(?:t|delText)(?:\s[^>]*)?>([\s\S]*?)<\/w:(?:t|delText)>|<w:(tab|br|cr)\b[^>]*\/>/g)].map(item=>item[2]?(item[2]==='tab'?'\t':'\n'):decodeWordXml(item[1])).join('').replace(cell?/\u2029/g:/(?!)/g,'\n');
-    text.insert(text.length,value,{...runStyleFor(paragraphStyle&&decodeWordXml(paragraphStyle),wordRunProperties(run.xml),!!heading),...runAttributes(run.xml),...(run.href?{href:run.href}:{}),...(run.revision?{[run.revision.kind]:revisionMark(run.revision)}:{})});
+    const style=(xml:string)=>({...runStyleFor(paragraphStyle&&decodeWordXml(paragraphStyle),wordRunProperties(xml),!!heading),...runAttributes(xml)}) as Record<string,unknown>,current=style(run.xml);
+    // w:rPrChange holds the run properties before a tracked formatting change.
+    const change=/<w:rPrChange\b([^>]*?)(?:\/>|>([\s\S]*?)<\/w:rPrChange>)/.exec(run.xml),format=change?formatRevision(current,style(`<w:r><w:rPr>${/<w:rPr(?:\s[^>]*)?>([\s\S]*?)<\/w:rPr>/.exec(change[2]??'')?.[1]??''}</w:rPr></w:r>`),WORD_RUN_FORMAT_VALID,revisionOf('fmt',change[1])):undefined;
+    text.insert(text.length,value,{...current,...(run.href?{href:run.href}:{}),...(run.revision?{[run.revision.kind]:revisionMark(run.revision)}:{}),...(format?{fmt:format}:{})});
    }
   };
   let tables=0,cells=0;
   for(const match of xml.matchAll(/<w:tbl(?:\s[^>]*?)?(?:\s*\/>|>([\s\S]*?)<\/w:tbl>)|<w:p(?:\s[^>]*?)?(?:\s*\/>|>([\s\S]*?)<\/w:p>)/g)){
    if(/^<w:tbl(?=\s|\/|>)/.test(match[0])){
-    if(++tables>WORD_TABLE_LIMITS.tables)throw new Error('Word 表格超过 100 个');
+    pendingBreak=undefined;if(++tables>WORD_TABLE_LIMITS.tables)throw new Error('Word 表格超过 100 个');
     if(/<w:drawing\b/.test(match[1]??''))throw new Error('表格单元格内图片尚未支持，请移到独立段落');
     const rows=readWordTable(match[1]??'');cells+=rows.length*rows[0].length;if(rows.some(row=>row.some(cell=>cell.paragraphs.length>WORD_TABLE_LIMITS.paragraphs)))throw new Error('单个 Word 单元格最多 100 段');if(cells>WORD_TABLE_LIMITS.cells)throw new Error('Word 单元格超过 2 万');
     const table=createWordTable(rows[0].length,rows.length);paragraphs.push([table]);const data=wordTableRows(table);
@@ -83,10 +102,12 @@ export function encodeDocxWord(bytes:Uint8Array){
      if(cell.colSpan>1)text.setAttribute('colSpan',cell.colSpan);if(cell.rowSpan>1)text.setAttribute('rowSpan',cell.rowSpan);
     }));
     const layout=wordTableLayout(table);if([...layout.anchors.values()].reduce((n,a)=>n+a.colSpan*a.rowSpan,0)!==rows.length*rows[0].length)throw new Error('Word 合并单元格区域重叠或无效');
-   }else{const source=match[2]??'',hasImage=/<w:drawing\b/.test(source);if(hasImage&&/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/.test(source))throw new Error('图片与文字须放在独立段落，请先拆分图文混排段落');if(!hasImage){const text=new Y.Text();paragraphs.push([text]);fill(text,source);}appendImages(source);}
+   }else{const source=match[2]??'',hasImage=/<w:drawing\b/.test(source);if(hasImage&&/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/.test(source))throw new Error('图片与文字须放在独立段落，请先拆分图文混排段落');
+    if(!hasImage){const text=new Y.Text();paragraphs.push([text]);fill(text,source);if(pendingBreak&&paragraphs.length>1&&paragraphs.get(paragraphs.length-2) instanceof Y.Text)text.setAttribute(pendingBreak.kind,pendingBreak.mark);}else appendImages(source);
+    pendingBreak=hasImage?undefined:paragraphMark(source);}
    if(paragraphs.length>MAX_WORD_PARAGRAPHS)throw new Error('Word 段落超过 10 万');
   }
-  const update=Y.encodeStateAsUpdate(doc);validateWordUpdate(null,update);return {doc,update,media:images.media};
+  const update=Y.encodeStateAsUpdate(doc);validateWordUpdate(null,update);return {doc,update,media:[...images.media,...headerFooter?.media??[]]};
  }catch(error){doc.destroy();throw error;}
 }
 /** Structure of every table that exists in `doc`, keyed by table identity. */
@@ -107,20 +128,23 @@ export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,opt
    if(options.lockTables){const after=tableStructures(doc);for(const [table,structure]of tableStructures(previous)){const next=after.get(table);if(next!==undefined&&next!==structure)throw new Error('团队文档的表格行列与合并请通过表格工具修改，请刷新后重试');}}
   }finally{previous.destroy();}}
   // pageSettings: `layout` (paper and margins) and optional `headerFooter`; either may be absent.
-  if(settings._start||[...settings.keys()].some(key=>!['layout','headerFooter','trackChanges'].includes(key))||settings.has('trackChanges')&&typeof settings.get('trackChanges')!=='boolean'||settings.has('layout')&&!validWordPage(settings.get('layout'))||settings.has('headerFooter')&&!validWordHeaderFooter(settings.get('headerFooter')))throw new Error('Word 页面设置无效');
+  if(settings._start||[...settings.keys()].some(key=>!['layout','headerFooter','headerImages','trackChanges'].includes(key))||settings.has('trackChanges')&&typeof settings.get('trackChanges')!=='boolean'||settings.has('layout')&&!validWordPage(settings.get('layout'))||settings.has('headerFooter')&&!validWordHeaderFooter(settings.get('headerFooter')))throw new Error('Word 页面设置无效');
+  // headerImages: one picture per header/footer slot. Pictures of a variant that was switched off are ignored, not
+  // rejected, because two members' concurrent edits can legitimately leave them behind.
+  let images=0;if(settings.has('headerImages')){const map=settings.get('headerImages');if(!(map instanceof Y.Map)||map._start||[...map.entries()].some(([key,image])=>!parseWordHeaderImageKey(key)||!isWordImage(image)))throw new Error('Word 页眉页脚图片无效');for(const image of map.values()){validateWordImage(image as Y.Map<unknown>);if(Number((image as Y.Map<unknown>).get('width'))>WORD_HEADER_IMAGE_MAX.width||Number((image as Y.Map<unknown>).get('height'))>WORD_HEADER_IMAGE_MAX.height)throw new Error('Word 页眉页脚图片过大');images++;}}
   if(paragraphs.length>MAX_WORD_PARAGRAPHS)throw new Error('Word 段落超过 10 万');
   let length=0,fragments=0;const lists=new Map<string,WordList>(),links=new Set<string>(),revisions=new Map<string,string>();
-  const texts:Y.Text[]=[],cellTexts=new Set<Y.Text>();let tables=0,cells=0,images=0;
+  const texts:Y.Text[]=[],cellTexts=new Set<Y.Text>();let tables=0,cells=0;
   for(const block of paragraphs.toArray()){
    if(block instanceof Y.Text){texts.push(block);continue;}
-   if(isWordImage(block)){validateWordImage(block);if(++images>OFFICE_IMAGE_COUNT)throw new Error('Word 图片超过 1000 个');continue;}
+   if(isWordImage(block)){validateWordImage(block,true);if(++images>OFFICE_IMAGE_COUNT)throw new Error('Word 图片超过 1000 个');continue;}
    if(!(block instanceof Y.Map)||++tables>WORD_TABLE_LIMITS.tables)throw new Error('Word 表格结构或数量无效');
    const contents=validateWordTable(block);cells+=contents.length;if(cells>WORD_TABLE_LIMITS.cells)throw new Error('Word 单元格超过 2 万');texts.push(...contents);for(const cell of contents)cellTexts.add(cell);
   }
   if(texts.length>MAX_WORD_PARAGRAPHS)throw new Error('Word 段落超过 10 万');
   for(const value of texts){
    if(!(value instanceof Y.Text))throw new Error('Word 段落结构无效');
-   if(Object.entries(value.getAttributes()).some(([key,attribute])=>key==='pageBreakBefore'?typeof attribute!=='boolean':key==='align'?!validWordAlignment(attribute):key==='leftIndent'?!validWordLeftIndent(attribute):key==='rightIndent'?!validWordRightIndent(attribute):key==='firstLineIndent'?!validWordFirstLineIndent(attribute):key==='list'?!validWordList(attribute):key==='lineSpacing'?!validWordLineSpacing(attribute):key==='spaceBefore'||key==='spaceAfter'?!validWordParagraphSpace(attribute):key==='colSpan'||key==='rowSpan'?!cellTexts.has(value)||!Number.isInteger(attribute)||Number(attribute)<2||Number(attribute)>(key==='colSpan'?WORD_TABLE_LIMITS.columns:WORD_TABLE_LIMITS.rows):key!=='heading'||!Number.isInteger(attribute)||Number(attribute)<0||Number(attribute)>3))throw new Error('Word 段落属性无效');
+   if(Object.entries(value.getAttributes()).some(([key,attribute])=>key==='pageBreakBefore'?typeof attribute!=='boolean':key==='align'?!validWordAlignment(attribute):key==='leftIndent'?!validWordLeftIndent(attribute):key==='rightIndent'?!validWordRightIndent(attribute):key==='firstLineIndent'?!validWordFirstLineIndent(attribute):key==='list'?!validWordList(attribute):key==='lineSpacing'?!validWordLineSpacing(attribute):key==='spaceBefore'||key==='spaceAfter'?!validWordParagraphSpace(attribute):key==='colSpan'||key==='rowSpan'?!cellTexts.has(value)||!Number.isInteger(attribute)||Number(attribute)<2||Number(attribute)>(key==='colSpan'?WORD_TABLE_LIMITS.columns:WORD_TABLE_LIMITS.rows):key==='pfmt'?cellTexts.has(value)||!validWordParagraphFormatMark(attribute):key==='insBreak'||key==='delBreak'?cellTexts.has(value)||!validWordRevisionMark(attribute):key!=='heading'||!Number.isInteger(attribute)||Number(attribute)<0||Number(attribute)>3))throw new Error('Word 段落属性无效');
    const list=value.getAttribute('list') as WordList|undefined;if(list){const prior=lists.get(list.id);if(prior&&(prior.kind!==list.kind||prior.start!==list.start))throw new Error('Word 列表定义不一致');lists.set(list.id,list);if(lists.size>10000)throw new Error('Word 列表定义过多');}
    length+=value.length;if(value.length>100_000||length>10_000_000)throw new Error('Word 文本过长');
    if(value.toString().includes(WORD_CELL_PARAGRAPH)&&(!cellTexts.has(value)||value.toString().split(WORD_CELL_PARAGRAPH).length>WORD_TABLE_LIMITS.paragraphs))throw new Error('Word 单元格分段仅可用于表格且每格最多 100 段');
@@ -128,12 +152,13 @@ export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,opt
     if(++fragments>200_000)throw new Error('Word 格式片段过多');
     if(typeof part.attributes?.href==='string'){links.add(part.attributes.href);if(links.size>9998)throw new Error('Word 超链接数量过多');}
     if(typeof part.insert!=='string')throw new Error('Word 不支持嵌入对象');
-    if(Object.entries(part.attributes??{}).some(([key,attribute])=>key==='fontSize'?!validWordFontSize(attribute):key==='color'?!validWordColor(attribute):key==='highlight'?!validWordHighlight(attribute):key==='vertAlign'?!validWordVertAlign(attribute):key==='fontFamily'?!validWordFontFamily(attribute):key==='href'?!validWordLink(attribute):key==='ins'||key==='del'?!validWordRevisionMark(attribute):!MARKS.includes(key)||typeof attribute!=='boolean'))throw new Error('Word 不支持该富文本属性');
-    for(const kind of ['ins','del'] as const){const mark=part.attributes?.[kind];if(validWordRevisionMark(mark)){const known=revisions.get(mark.id);if(known&&known!==mark.author+'\n'+mark.name+'\n'+mark.date)throw new Error('Word 修订标记不一致');revisions.set(mark.id,mark.author+'\n'+mark.name+'\n'+mark.date);}}
+    if(Object.entries(part.attributes??{}).some(([key,attribute])=>key==='fontSize'?!validWordFontSize(attribute):key==='color'?!validWordColor(attribute):key==='highlight'?!validWordHighlight(attribute):key==='vertAlign'?!validWordVertAlign(attribute):key==='fontFamily'?!validWordFontFamily(attribute):key==='href'?!validWordLink(attribute):key==='ins'||key==='del'?!validWordRevisionMark(attribute):key==='fmt'?!validWordRunFormatMark(attribute):!MARKS.includes(key)||typeof attribute!=='boolean'))throw new Error('Word 不支持该富文本属性');
    }
   }
+  // One revision id has one author, name and time wherever it appears (text, formatting, paragraph marks, pictures).
+  for(const mark of wordRevisionMarks(doc)){const value=mark.author+'\n'+mark.name+'\n'+mark.date,known=revisions.get(mark.id);if(known&&known!==value)throw new Error('Word 修订标记不一致');revisions.set(mark.id,value);if(revisions.size>100_000)throw new Error('Word 修订过多');}
   // Revision authorship: a revision id introduced by this update must belong to the requesting member.
-  if(options.actor&&current){const previous=new Y.Doc();try{Y.applyUpdate(previous,current);const known=new Set<string>();for(const text of wordBlockTexts(previous.getArray<WordBlock>('paragraphs').toArray()))for(const part of text.toDelta() as {attributes?:Record<string,unknown>}[])for(const kind of WORD_REVISION_KEYS){const mark=part.attributes?.[kind];if(validWordRevisionMark(mark))known.add(mark.id);}
+  if(options.actor&&current){const previous=new Y.Doc();try{Y.applyUpdate(previous,current);const known=new Set<string>();for(const mark of wordRevisionMarks(previous))known.add(mark.id);
    for(const [id,value]of revisions)if(!known.has(id)&&value.split('\n')[0]!==options.actor)throw new Error('修订标记的作者与当前成员不符');}finally{previous.destroy();}}
  }finally{doc.destroy();}
 }

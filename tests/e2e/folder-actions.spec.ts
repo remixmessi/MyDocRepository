@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test';
+import {newNote,confirmNewFile} from './fixtures';
 
 const runId = crypto.randomUUID();
 const test = base.extend<{ projectIsolation: void }>({
@@ -27,19 +28,20 @@ test('文件夹内新建、导入，文档重命名、移动和回收均保留�
   await page.getByRole('textbox', { name: '文件夹名称' }).fill('资料');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await folderActions(page, '资料', '新建文档');
+  await confirmNewFile(page);
   await expect(page.getByLabel('文档所在文件夹').locator('option:checked')).toHaveText('项目 / 资料');
   await page.getByRole('textbox', { name: '文档正文' }).fill('移动和重命名后保留正文');
-  await documentActions(page, '无标题文档', '重命名文档');
+  await documentActions(page, '未命名', '重命名文档');
   await page.getByRole('textbox', { name: '文档名称' }).fill('项目笔记');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '文档标题' })).toHaveValue('项目笔记');
   await page.getByRole('button', { name: '项目', exact: true }).click();
   // Moving the selected document must reopen a collapsed destination.
-  await page.getByRole('button', { name: '新建文件', exact: true }).first().click();
-  await documentActions(page, '无标题文档', '移动文档');
+  await newNote(page);
+  await documentActions(page, '未命名', '移动文档');
   await page.getByLabel('目标文件夹').selectOption({ label: '项目 / 资料' });
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.getByRole('navigation').getByRole('button', { name: '无标题文档', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation').getByRole('button', { name: '未命名', exact: true })).toBeVisible();
   await documentActions(page, '项目笔记', '移动文档');
   await page.getByLabel('目标文件夹').selectOption('');
   await page.getByRole('button', { name: '保存', exact: true }).click();

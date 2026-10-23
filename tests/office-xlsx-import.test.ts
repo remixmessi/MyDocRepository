@@ -30,3 +30,15 @@ it('关系缺失、外部首表及路径越界拒绝，隔离模型和原生备�
  for(const relation of ['<Relationships/>','<Relationships><Relationship Id="rId7" Type="office/worksheet" Target="https://example.com/sheet.xml" TargetMode="External"/></Relationships>','<Relationships><Relationship Id="rId7" Type="office/worksheet" Target="../../evil.xml"/></Relationships>'])expect(()=>encodeXlsxWorkbook(workbook('',{'xl/_rels/workbook.xml.rels':relation}))).toThrow();
  const pool=new OfficeParserPool(),doc=new Y.Doc();try{const bytes=workbook('<c r="A1"><f>1+1</f><v>999</v></c>'),update=await pool.parse('xlsx',bytes);Y.applyUpdate(doc,validateOfficeBackupModel('spreadsheet',update));expect(doc.getArray<Y.Array<string>>('sheet').get(0).get(0)).toBe('=1+1');expect(spreadsheetCellType(doc,0,0)).toBe('formula');expect(doc.getMap('sheetXlsx').get('sheetCount')).toBe(2);doc.getMap('sheetXlsx').set('foreign',true);expect(()=>validateSpreadsheetUpdate(null,Y.encodeStateAsUpdate(doc))).toThrow('导入范围');}finally{pool.close();doc.destroy();}
 });
+it('不支持或超出范围的条件格式与图表计入导入范围信息，计数只在大于 0 时写入',()=>{
+ const cf='<conditionalFormatting sqref="A1:A2"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule><cfRule type="expression" priority="2"><formula>A1&gt;1</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="bad"><cfRule type="colorScale" priority="3"><colorScale><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>';
+ const parsed=encodeXlsxWorkbook(workbook('',{
+  'xl/worksheets/sheet7.xml':`<worksheet xmlns:r="urn:rel"><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row></sheetData>${cf}<drawing r:id="rIdD"/></worksheet>`,
+  'xl/worksheets/_rels/sheet7.xml.rels':'<Relationships><Relationship Id="rIdD" Type="office/drawing" Target="../drawings/drawing1.xml"/></Relationships>',
+  'xl/drawings/drawing1.xml':'<wsDr xmlns:r="urn:rel"><twoCellAnchor><from><col>2</col><row>0</row></from><to><col>6</col><row>10</row></to><graphicFrame><graphic><graphicData><chart r:id="rIdMissing"/></graphicData></graphic></graphicFrame></twoCellAnchor></wsDr>',
+ }));
+ try{validateSpreadsheetUpdate(null,parsed.update);expect(parsed.doc.getMap('sheetXlsx').toJSON()).toEqual({name:'选中 & 首表',sheetCount:2,hasStyles:false,textConversions:false,skippedRules:2,skippedCharts:1});expect(parsed.doc.getMap('sheetObjects').size).toBe(1);}finally{parsed.doc.destroy();}
+ const clean=encodeXlsxWorkbook(workbook('<c r="A1"><v>1</v></c>'));try{expect(Object.keys(clean.doc.getMap('sheetXlsx').toJSON())).not.toContain('skippedRules');
+  for(const [key,value]of [['skippedRules',0],['skippedCharts',1.5],['skippedCharts','1']] as const){const doc=new Y.Doc();Y.applyUpdate(doc,clean.update);doc.getMap('sheetXlsx').set(key,value);expect(()=>validateSpreadsheetUpdate(null,Y.encodeStateAsUpdate(doc))).toThrow('导入范围');doc.destroy();}
+ }finally{clean.doc.destroy();}
+});

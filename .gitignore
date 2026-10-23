@@ -118,6 +118,7 @@ data/attachments/
 !/tests/spreadsheet-cell-type.test.ts
 
 !/tests/office-xlsx-import.test.ts
+!/tests/office-word-structure-revision.test.ts
 
 !/tests/office-presentation.test.ts
 

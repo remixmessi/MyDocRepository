@@ -368,7 +368,7 @@ it('页眉页脚：左中右文本、{页码}/{总页数} 写为 PAGE/NUMPAGES �
   const imported=encodeDocxWord(bytes);try{expect(imported.doc.getMap('pageSettings').get('headerFooter')).toEqual(value);}finally{imported.doc.destroy();}
   // No header/footer: nothing is written and none is imported.
   const plain=snapshot(['x']);try{const out=exportDocxWord(Y.encodeStateAsUpdate(plain));expect(Object.keys(readOfficePackage(out)).some(name=>/header|footer/.test(name))).toBe(false);const back=encodeDocxWord(out);try{expect(back.doc.getMap('pageSettings').has('headerFooter')).toBe(false);}finally{back.doc.destroy();}}finally{plain.destroy();}
-  for(const bad of [{...value,header:{left:'a\nb',center:'',right:''}},{...value,header:{left:'x'.repeat(256),center:'',right:''}},{...value,extra:1},{header:value.header}]){const forged=snapshot(['x']);forged.getMap('pageSettings').set('headerFooter',bad);try{expect(()=>validateWordUpdate(null,Y.encodeStateAsUpdate(forged))).toThrow('页面设置');}finally{forged.destroy();}}
+  for(const bad of [{...value,header:{left:'a\tb',center:'',right:''}},{...value,header:{left:'a\u2028b',center:'',right:''}},{...value,header:{left:'1\n2\n3\n4\n5\n6',center:'',right:''}},{...value,even:{header:value.header}},{...value,header:{left:'x'.repeat(256),center:'',right:''}},{...value,extra:1},{header:value.header}]){const forged=snapshot(['x']);forged.getMap('pageSettings').set('headerFooter',bad);try{expect(()=>validateWordUpdate(null,Y.encodeStateAsUpdate(forged))).toThrow('页面设置');}finally{forged.destroy();}}
  }finally{doc.destroy();}
 });
 
@@ -386,4 +386,59 @@ it('导入 Word 自己的页眉页脚：复杂域（fldChar/instrText）、制�
  };
  const imported=encodeDocxWord(zipSync(files));
  try{expect(imported.doc.getMap('pageSettings').get('headerFooter')).toEqual({header:{left:'公司',center:'年度报告',right:'2026'},footer:{left:'',center:'',right:'第 {页码} / {总页数}'},first:{header:{left:'',center:'',right:''},footer:{left:'',center:'2026-10-22',right:''}}});}finally{imported.doc.destroy();}
+});
+
+it('页眉页脚多行、奇偶页不同与图片：每行一段、图片为所在栏首行，导出 evenAndOddHeaders 与 even 引用，正文与页眉共用图片只存一份，往返还原',async()=>{
+ const {packOfficeMedia,unpackOfficeMedia,mediaDigest,checkOfficeMedia}=await import('../packages/frontend/apps/web/server/office-media');
+ const {createWordImage,officeImageNodes}=await import('../packages/common/nbstore/src/office-image');
+ const {validateWordUpdate}=await import('../packages/frontend/apps/web/server/office-word');
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQTX79HwAElwJzVt2vfAAAAABJRU5ErkJggg==','base64');
+ const logo={id:'logo',name:'logo.png',mime:'image/png',data:png.toString('base64'),sha256:mediaDigest(png)};
+ const value={header:{left:'项目方案\n第二行',center:'',right:'{页码}'},footer:{left:'',center:'奇数页',right:''},even:{header:{left:'{页码}',center:'',right:'偶数页'},footer:{left:'',center:'',right:''}}};
+ const doc=snapshot(['正文']);doc.getArray('paragraphs').push([createWordImage(logo.id,50,50,'正文图')]);const settings=doc.getMap('pageSettings');settings.set('headerFooter',value);
+ const images=new Y.Map<Y.Map<unknown>>();images.set('main.header.left',createWordImage(logo.id,120,40,'公司标志'));images.set('even.header.right',createWordImage(logo.id,60,20,'标志'));settings.set('headerImages',images);
+ try{
+  validateWordUpdate(null,Y.encodeStateAsUpdate(doc));expect(officeImageNodes(doc,'word')).toHaveLength(3);
+  const bytes=exportDocxWord(packOfficeMedia(Y.encodeStateAsUpdate(doc),[logo])),files=readOfficePackage(bytes),xml=readOfficeXml(files['word/document.xml']);
+  expect(Object.keys(files).filter(name=>name.startsWith('word/media/'))).toEqual(['word/media/image1.png']);
+  expect(xml).toContain('<w:headerReference w:type="even" r:id="rIdHdr3"/>');expect(xml).not.toContain('<w:titlePg/>');
+  expect(readOfficeXml(files['word/settings.xml'])).toContain('<w:evenAndOddHeaders/>');expect(readOfficeXml(files['word/settings.xml'])).not.toContain('trackRevisions');
+  const header=readOfficeXml(files['word/header1.xml']);expect(header.match(/<w:p>/g)).toHaveLength(3);expect(header).toContain('<a:blip r:embed="rIdImg1"/>');expect(header).toContain('descr="公司标志"');
+  expect(readOfficeXml(files['word/_rels/header1.xml.rels'])).toContain('Target="media/image1.png"');
+  // Drawing ids are unique across the body and headers.
+  const ids=[...Object.entries(files).filter(([name])=>/^word\/(document|header\d|footer\d)\.xml$/.test(name)).flatMap(([,data])=>[...readOfficeXml(data).matchAll(/<wp:docPr id="(\d+)"/g)].map(m=>m[1]))];expect(new Set(ids).size).toBe(ids.length);expect(ids).toHaveLength(3);
+  const imported=encodeDocxWord(bytes);try{
+   const back=imported.doc.getMap('pageSettings');expect(back.get('headerFooter')).toEqual(value);
+   const pictures=back.get('headerImages') as Y.Map<Y.Map<unknown>>;expect([...pictures.keys()].sort()).toEqual(['even.header.right','main.header.left']);
+   expect(pictures.get('main.header.left')!.toJSON()).toMatchObject({width:120,height:40,alt:'公司标志'});
+   // One media entry serves the body picture and both header pictures.
+   expect(imported.media).toHaveLength(1);checkOfficeMedia(imported.update,'word',imported.media);
+   expect(new Set(officeImageNodes(imported.doc,'word').map(node=>node.get('assetId'))).size).toBe(1);
+  }finally{imported.doc.destroy();}
+  // Through the isolated parser too.
+  const pool=new OfficeParserPool();try{const result=unpackOfficeMedia(await pool.parse('docx',bytes));checkOfficeMedia(result.state,'word',result.media);}finally{pool.close();}
+  // Pictures in unknown slots, oversized or of another kind are rejected.
+  for(const [key,picture]of [['main.body.left',createWordImage(logo.id,10,10,'x')],['main.header.left',createWordImage(logo.id,601,10,'x')],['main.header.left',new Y.Text('x')]] as const){const forged=snapshot(['x']),map=new Y.Map<unknown>();map.set(key,picture);forged.getMap('pageSettings').set('headerImages',map);try{expect(()=>validateWordUpdate(null,Y.encodeStateAsUpdate(forged))).toThrow('页眉页脚图片');}finally{forged.destroy();}}
+ }finally{doc.destroy();}
+});
+
+it('导入 Word 页眉：段内换行与多段为多行，浮动图片按所在栏读取，同栏第二张图片不导入；未开启 evenAndOddHeaders 时忽略偶数页页眉',()=>{
+ const w='xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQTX79HwAElwJzVt2vfAAAAABJRU5ErkJggg==','base64');
+ const anchor=(id:string,cx:number)=>`<w:r><w:drawing><wp:anchor><wp:extent cx="${cx}" cy="${cx/2}"/><wp:docPr id="9" name="logo" descr="标志"/><a:graphic><a:graphicData><a:blip r:embed="${id}"/></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+ const files:Record<string,Uint8Array>={
+  'word/document.xml':strToU8(`<?xml version="1.0"?><w:document ${w}><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="h1"/><w:headerReference w:type="even" r:id="h2"/></w:sectPr></w:body></w:document>`),
+  'word/_rels/document.xml.rels':strToU8('<?xml version="1.0"?><Relationships><Relationship Id="h1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="h2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"/></Relationships>'),
+  'word/header1.xml':strToU8(`<?xml version="1.0"?><w:hdr ${w}><w:p>${anchor('img',9525*1200)}${anchor('img2',9525*100)}<w:r><w:t>第一行</w:t><w:br/><w:t>第二行</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>中</w:t></w:r></w:p><w:p/><w:p><w:r><w:t>第三行</w:t></w:r></w:p></w:hdr>`),
+  'word/_rels/header1.xml.rels':strToU8('<?xml version="1.0"?><Relationships><Relationship Id="img" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/logo.png"/><Relationship Id="img2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/other.png"/></Relationships>'),
+  'word/header2.xml':strToU8(`<?xml version="1.0"?><w:hdr ${w}><w:p><w:r><w:t>偶数页</w:t></w:r></w:p></w:hdr>`),
+  'word/media/logo.png':png,'word/media/other.png':png,
+ };
+ const imported=encodeDocxWord(zipSync(files));try{
+  const settings=imported.doc.getMap('pageSettings');expect(settings.get('headerFooter')).toEqual({header:{left:'第一行\n第二行\n第三行',center:'中',right:''},footer:{left:'',center:'',right:''}});
+  const pictures=settings.get('headerImages') as Y.Map<Y.Map<unknown>>;expect([...pictures.keys()]).toEqual(['main.header.left']);expect(pictures.get('main.header.left')!.toJSON()).toMatchObject({width:400,height:200,alt:'标志'});
+  expect(imported.media.map(item=>item.name)).toEqual(['logo.png']);
+ }finally{imported.doc.destroy();}
+ files['word/settings.xml']=strToU8(`<?xml version="1.0"?><w:settings ${w}><w:evenAndOddHeaders/></w:settings>`);
+ const even=encodeDocxWord(zipSync(files));try{expect((even.doc.getMap('pageSettings').get('headerFooter') as {even?:unknown}).even).toEqual({header:{left:'偶数页',center:'',right:''},footer:{left:'',center:'',right:''}});}finally{even.doc.destroy();}
 });

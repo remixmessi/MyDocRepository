@@ -10,17 +10,17 @@ import {wordDomPoint} from './word-flow-dom';
 import {WordPrintPreview} from './word-print-preview';
 import {WordHeaderDialog} from './word-header-dialog';
 import {useWordAuthor,setWordTracking,revisionAt,resolveRevision,WordReviewPane} from './word-review';
-import {wordTracking,wordRevisions,type WordRevision} from '../../../common/nbstore/src/office-word-revision';
-import {wordHeaderLines,type WordHeaderLine} from '../../../common/nbstore/src/office-word-header';
+import {wordTracking,wordRevisions,setWordTrackingAuthor,deleteWordImageTracked,type WordRevision} from '../../../common/nbstore/src/office-word-revision';
+import {wordHeaderLines,wordHeaderScope,wordHeaderImageKey,emptyWordLine,WORD_HEADER_SLOTS,type WordHeaderLine} from '../../../common/nbstore/src/office-word-header';
 import {OfficeComments} from './office-comments-ui';
 import {wordWritingEnd,wordTextIdentity} from './office-word-flow';
 import {restoreWordCaret} from './word-rich-input';
 import {WordEditingContext} from './word-editing-context';
-import {InsertOfficeImage,WordImageEditor} from './office-image-ui';
+import {InsertOfficeImage,WordImageEditor,WordHeaderPicture} from './office-image-ui';
 import {WordTableDialog} from './word-table-dialog';
 import {wordBlockTexts,type WordBlock} from '../../../common/nbstore/src/office-word-table';
 import {WordTableEditor} from './word-table-editor';
-import {getWordPage,getWordHeaderFooter} from './office-word-page';
+import {getWordPage,getWordHeaderFooter,getWordHeaderImages} from './office-word-page';
 import {WordPageDialog} from './word-page-dialog';
 import {useEffect,useLayoutEffect,useId,useRef,useState} from 'react';
 import {Y,LOCAL_ORIGIN} from '@mydoc/crdt';
@@ -56,7 +56,7 @@ export function WordEditor({item,workspace,name}:{item:OfficeWordDocument;worksp
   const [availableWidth,setAvailableWidth]=useState(900);
   const stage=useRef<HTMLDivElement>(null);
   useEffect(()=>{const element=stage.current;if(!element)return;const observer=new ResizeObserver(()=>setAvailableWidth(element.clientWidth));observer.observe(element);return()=>observer.disconnect();},[]);
-  const page=getWordPage(item.doc),headerFooter=getWordHeaderFooter(item.doc);
+  const page=getWordPage(item.doc),headerFooter=getWordHeaderFooter(item.doc),headerImages=getWordHeaderImages(item.doc,headerFooter);
   const [tab,setTab]=useState('开始'),[toolbar,setToolbar]=useState<HTMLDivElement|null>(null),[active,setActive]=useState<Y.Text|null>(()=>wordBlockTexts(item.paragraphs.toArray())[0]??null),[zoom,setZoom]=useState<number|'fit'>('fit');
   useEffect(()=>{if(active&&!wordBlockTexts(item.paragraphs.toArray()).includes(active))setActive(wordBlockTexts(item.paragraphs.toArray())[0]??null);});
   const scale=zoom==='fit'?Math.min(1,Math.max(.1,(availableWidth-(availableWidth<700?24:64))/(page.width/15))):zoom/100;
@@ -66,6 +66,8 @@ export function WordEditor({item,workspace,name}:{item:OfficeWordDocument;worksp
   // 最终状态 (no markup) is a read-only view: deleted text is hidden, so offsets would not match what is shown.
   const [markup,setMarkup]=useState<'all'|'final'>('all'),[reviewOpen,setReviewOpen]=useState(false),author=useWordAuthor(workspace);
   const documentReadOnly=workspace.documentReadOnly(item.id),readOnly=documentReadOnly||markup==='final',tracking=wordTracking(item.doc)&&author?author:undefined;
+  // Formatting helpers look up the tracking author per document, so every formatting path is tracked alike.
+  useEffect(()=>{setWordTrackingAuthor(item.doc,tracking);return()=>setWordTrackingAuthor(item.doc,undefined);},[item.doc,tracking?.id,tracking?.name]);
   const texts=wordBlockTexts(item.paragraphs.toArray()),listMarkers=wordListMarkers(texts),markers=new Map(texts.map((text,i)=>[text,listMarkers[i]]));
   let paragraphNumber=0,tableNumber=0;
   const keyFor=(paragraph:WordBlock)=>{let key=keys.current.get(paragraph);if(!key){key=crypto.randomUUID();keys.current.set(paragraph,key);}return key;};
@@ -90,6 +92,14 @@ export function WordEditor({item,workspace,name}:{item:OfficeWordDocument;worksp
   const tableRemote=async(operation:WordTableOperation)=>{workspace.assertWritable(item.id);await workspace.flushResource(item.id);const result=await cloudJson<{update:string;focus?:string}>('/office-word-table-operation?'+new URLSearchParams({workspace:workspace.id,id:item.id}),'POST',operation).catch(async error=>{if((error as {status?:number}).status===409){try{const response=await cloudRequest('/document?'+new URLSearchParams({workspace:workspace.id,id:item.id}));Y.applyUpdate(item.doc,new Uint8Array(await response.arrayBuffer()),CLOUD_ORIGIN);}catch{}}throw error;});Y.applyUpdate(item.doc,Uint8Array.from(atob(result.update),c=>c.charCodeAt(0)),CLOUD_ORIGIN);return result.focus;};
   const flow=useWordFlowSelection(shell,item.doc,readOnly,()=>workspace.assertWritable(item.id),focusText,()=>undo?.stopCapturing(),tracking);
   const presence=useWordPresence(shell,item.doc,!!workspace.sync),paperRef=useRef<HTMLElement>(null),pageBreaks=useWordPagination(paperRef,page);
+  // Like Word, a header or footer taller than its page margin pushes the body text away instead of covering it.
+  const [marginGrow,setMarginGrow]=useState({top:0,bottom:0}),marginKey=JSON.stringify([headerFooter??null,headerImages,page]);
+  useLayoutEffect(()=>{const paper=paperRef.current;if(!paper)return;
+   const strips=[...paper.querySelectorAll<HTMLElement>('.word-margin-layer>.word-margin-text')];
+   const extent=(part:'header'|'footer',margin:number)=>{const strip=strips.find(item=>item.parentElement?.dataset.part===part);if(!strip||strip.dataset.empty)return 0;const offset=parseFloat(part==='header'?strip.style.top:strip.style.bottom)||0;return Math.max(0,Math.ceil(offset+strip.offsetHeight+4-margin/15));};
+   const measure=()=>setMarginGrow(current=>{const next={top:extent('header',page.top),bottom:extent('footer',page.bottom)};return next.top===current.top&&next.bottom===current.bottom?current:next;});
+   measure();const observer=new ResizeObserver(measure);for(const strip of strips)observer.observe(strip);return()=>observer.disconnect();
+  },[marginKey]);
   const [painter,setPainter]=useState<Record<string,unknown>>(),[find,setFind]=useState<{query:string;replacement:string;matchCase:boolean;index:number;replace:boolean}>(),[outline,setOutline]=useState(false),[countOpen,setCountOpen]=useState(false),[notice,setNotice]=useState('');
   const findInput=useRef<HTMLInputElement>(null),caret=useRef<{text:Y.Text;offset:number}>();
   // Remember the last caret in the document so ribbon controls that take focus can still insert there.
@@ -111,7 +121,10 @@ export function WordEditor({item,workspace,name}:{item:OfficeWordDocument;worksp
   const openFind=(replace:boolean)=>{setFind(value=>({query:value?.query??'',replacement:value?.replacement??'',matchCase:value?.matchCase??false,index:-1,replace}));requestAnimationFrame(()=>findInput.current?.focus());};
   const headings=outline?wordOutline(item.doc):[],counts=wordCounts(item.doc),revisionCount=new Set(wordRevisions(item.doc).map(revision=>revision.id)).size;
   /** Select a revision's text (scrolling to it) so 接受/拒绝 and the pane act on what the user sees. */
-  const showRevision=(revision:WordRevision)=>{const element=shell.current?.querySelector<HTMLElement>(`[data-word-text="${wordTextIdentity(revision.text)}"]`);if(!element)return;element.focus();const range=document.createRange();range.setStart(...wordDomPoint(element,revision.start));range.setEnd(...wordDomPoint(element,revision.end));const dom=window.getSelection();dom?.removeAllRanges();dom?.addRange(range);caret.current={text:revision.text,offset:revision.start};element.scrollIntoView({block:'center'});};
+  const showRevision=(revision:WordRevision)=>{
+   // Pictures have no text: select and show the figure.
+   if(!revision.text){const id=revision.block?._item?.id,figure=id&&shell.current?.querySelector<HTMLElement>(`[data-word-image="${id.client}:${id.clock}"]`);if(figure){figure.focus();figure.scrollIntoView({block:'center'});}return;}
+   const text=revision.text,element=shell.current?.querySelector<HTMLElement>(`[data-word-text="${wordTextIdentity(text)}"]`);if(!element)return;element.focus();const range=document.createRange();range.setStart(...wordDomPoint(element,revision.start));range.setEnd(...wordDomPoint(element,revision.end));const dom=window.getSelection();dom?.removeAllRanges();dom?.addRange(range);caret.current={text,offset:revision.start};element.scrollIntoView({block:'center'});};
   const step=(direction:1|-1)=>{const next=revisionAt(item.doc,caret.current,direction,true);if(next)showRevision(next);};
   const decide=(accept:boolean)=>{try{writable();const current=revisionAt(item.doc,caret.current);if(!current)return;undo?.stopCapturing();resolveRevision(item.doc,accept,current.id);undo?.stopCapturing();const next=revisionAt(item.doc,caret.current);if(next)showRevision(next);setNotice(accept?'已接受修订':'已拒绝修订');}catch(error){setNotice(error instanceof Error?error.message:'修订处理失败');}};
   const locatePeer=(peer:OfficePeer)=>{const target=presence.resolve(peer),identity=target?.text._item?`${target.text._item.id.client}:${target.text._item.id.clock}`:undefined,node=identity?shell.current?.querySelector<HTMLElement>(`[data-word-text="${identity}"]`):null;if(!target||!node)return;node.focus();const range=document.createRange();range.setStart(...wordDomPoint(node,target.start));range.setEnd(...wordDomPoint(node,target.end));const selection=window.getSelection();selection?.removeAllRanges();selection?.addRange(range);node.scrollIntoView({block:'center'});};
@@ -143,9 +156,9 @@ export function WordEditor({item,workspace,name}:{item:OfficeWordDocument;worksp
     {(notice||painter)&&<p className="word-notice" role="status">{painter?'格式刷：选中要应用格式的文字，按 Esc 取消':notice}</p>}
     {countOpen&&<Modal title="字数统计" onClose={()=>setCountOpen(false)}><dl className="word-count-list"><dt>页数（估算）</dt><dd>{pageBreaks.length+1}</dd><dt>字数</dt><dd>{counts.words}</dd><dt>字符数（不计空格）</dt><dd>{counts.charactersNoSpaces}</dd><dt>字符数（计空格）</dt><dd>{counts.characters}</dd><dt>段落数</dt><dd>{counts.paragraphs}</dd></dl><p>中日韩文字每个字计一字，其他连续字母或数字计一个词；包含表格内文字。</p><div className="dialog-actions"><button onClick={()=>setCountOpen(false)}>关闭</button></div></Modal>}
     {tableOpen&&<WordTableDialog doc={item.doc} readOnly={readOnly} assertWritable={()=>workspace.assertWritable(item.id)} onClose={()=>setTableOpen(false)}/>}
-    {printOpen&&shell.current?.querySelector<HTMLElement>('.word-paper')&&<WordPrintPreview source={shell.current.querySelector<HTMLElement>('.word-paper')!} page={page} headerFooter={headerFooter} name={name} onClose={()=>setPrintOpen(false)}/>}
+    {printOpen&&shell.current?.querySelector<HTMLElement>('.word-paper')&&<WordPrintPreview source={shell.current.querySelector<HTMLElement>('.word-paper')!} page={page} headerFooter={headerFooter} headerImages={headerImages} workspace={workspace} id={item.id} name={name} onClose={()=>setPrintOpen(false)}/>}
     {pageOpen&&<WordPageDialog doc={item.doc} readOnly={readOnly} onClose={()=>setPageOpen(false)}/>}
-    {headerOpen&&<WordHeaderDialog doc={item.doc} readOnly={readOnly} focus={headerOpen} onClose={()=>setHeaderOpen(undefined)}/>}
+    {headerOpen&&<WordHeaderDialog doc={item.doc} workspace={workspace} id={item.id} readOnly={readOnly} focus={headerOpen} onClose={()=>setHeaderOpen(undefined)}/>}
     {exportOpen&&<Modal title="导出 DOCX 正文兼容副本" onClose={()=>{if(!exportBusy)setExportOpen(false);}}>
       <p>导出当前已保存的纸张尺寸、方向、页边距、段前分页、基础矩形表格、段落文字、一级至三级标题、单层项目符号和编号列表、网页超链接、段落对齐、左右/首行/悬挂缩进、行距与段前段后间距、加粗、斜体、单下划线、删除线、上下标、突出显示、字体、字号、RGB/自动文字颜色、合并单元格、空白、制表符、换行及独立 PNG/JPEG 图片。文件评论写为 Word 批注（回复成线程、已解决的标为完成，定位失效的放在文首）。原件中的其他样式、复杂表格、页眉页脚和修订不会包含在副本中，原件保持不变。</p>
       {exportError&&<p role="alert" className="form-error">{exportError}</p>}
@@ -160,14 +173,20 @@ export function WordEditor({item,workspace,name}:{item:OfficeWordDocument;worksp
         })().catch(error=>setExportError(error instanceof Error?error.message:'导出失败，请重试')).finally(()=>setExportBusy(false));
       }}>{exportBusy?'正在生成…':'确认导出正文副本'}</button></div>
     </Modal>}
-    {flow.error&&<p role="alert">{flow.error}</p>}<div className="word-body" data-outline={outline||undefined}>{outline&&<nav className="word-outline" aria-label="导航窗格"><h3>导航</h3>{headings.length?<ol>{headings.map((entry,i)=><li key={i} data-level={entry.level}><button title={entry.title} aria-current={active===entry.text?'location':undefined} onClick={()=>{focusText(entry.text,0);shell.current?.querySelector(`[data-word-text="${wordTextIdentity(entry.text)}"]`)?.scrollIntoView({block:'start'});}}>{entry.title}</button></li>)}</ol>:<p>文档中没有标题。在“开始”中把段落设为标题 1–3 后会显示在这里。</p>}</nav>}<div ref={stage} className="word-document-stage"><div className="word-page-ruler" aria-hidden="true" style={{width:page.width/15*scale}}>{Array.from({length:Math.floor(page.width/1440*2.54)+1},(_,cm)=><span key={cm} style={{left:cm*96/2.54*scale}}>{cm}</span>)}</div><article ref={paperRef} className="word-paper" aria-label="文档正文" onMouseDown={enterPaper} style={{width:page.width/15,minHeight:page.height/15,padding:`${page.top/15}px ${page.right/15}px ${page.bottom/15}px ${page.left/15}px`,zoom:scale}}><WordCollaborationLayer paper={paperRef} doc={item.doc} workspace={workspace.id} id={item.id} peers={presence.peers} resolve={presence.resolve}/>{(()=>{
+    {flow.error&&<p role="alert">{flow.error}</p>}<div className="word-body" data-outline={outline||undefined}>{outline&&<nav className="word-outline" aria-label="导航窗格"><h3>导航</h3>{headings.length?<ol>{headings.map((entry,i)=><li key={i} data-level={entry.level}><button title={entry.title} aria-current={active===entry.text?'location':undefined} onClick={()=>{focusText(entry.text,0);shell.current?.querySelector(`[data-word-text="${wordTextIdentity(entry.text)}"]`)?.scrollIntoView({block:'start'});}}>{entry.title}</button></li>)}</ol>:<p>文档中没有标题。在“开始”中把段落设为标题 1–3 后会显示在这里。</p>}</nav>}<div ref={stage} className="word-document-stage"><div className="word-page-ruler" aria-hidden="true" style={{width:page.width/15*scale}}>{Array.from({length:Math.floor(page.width/1440*2.54)+1},(_,cm)=><span key={cm} style={{left:cm*96/2.54*scale}}>{cm}</span>)}</div><article ref={paperRef} className="word-paper" aria-label="文档正文" onMouseDown={enterPaper} style={{width:page.width/15,minHeight:page.height/15,padding:`${page.top/15+marginGrow.top}px ${page.right/15}px ${page.bottom/15+marginGrow.bottom}px ${page.left/15}px`,zoom:scale}}><WordCollaborationLayer paper={paperRef} doc={item.doc} workspace={workspace.id} id={item.id} peers={presence.peers} resolve={presence.resolve}/>{(()=>{
       // Header on the first page's top margin and footer on the last page's bottom margin; print and DOCX repeat them per page.
       const pages=pageBreaks.length+1,top=wordHeaderLines(headerFooter,1,pages),bottom=wordHeaderLines(headerFooter,pages,pages),gap=(margin:number)=>Math.max(4,Math.min(720,margin-360)/15);
-      const strip=(line:WordHeaderLine|undefined,part:'header'|'footer',margin:number)=><div className="word-margin-layer" data-part={part}><button type="button" className="word-margin-text" style={{[part==='header'?'top':'bottom']:gap(margin),left:page.left/15,right:page.right/15}} aria-label={part==='header'?'编辑页眉':'编辑页脚'} title={part==='header'?'编辑页眉':'编辑页脚'} onMouseDown={event=>event.stopPropagation()} onClick={()=>setHeaderOpen(part)} data-empty={!line||(!line.left&&!line.center&&!line.right)||undefined}>
-       {line&&(line.left||line.center||line.right)?<><span>{line.left}</span><span>{line.center}</span><span>{line.right}</span></>:<span className="word-margin-placeholder">{part==='header'?'页眉':'页脚'}</span>}</button></div>;
-      return <>{strip(top?.header,'header',page.top)}{strip(bottom?.footer,'footer',page.bottom)}</>;
+      // A slot shows its picture above its text; the variant (first/even/default) follows the page number.
+      const strip=(line:WordHeaderLine|undefined,part:'header'|'footer',margin:number,pageNumber:number)=>{
+       const scope=wordHeaderScope(headerFooter,pageNumber),pictures=WORD_HEADER_SLOTS.map(slot=>headerImages[wordHeaderImageKey(scope,part,slot)]),filled=!!line&&(!emptyWordLine(line)||pictures.some(Boolean));
+       return <div className="word-margin-layer" data-part={part}><button type="button" className="word-margin-text" style={{[part==='header'?'top':'bottom']:gap(margin),left:page.left/15,right:page.right/15}} aria-label={part==='header'?'编辑页眉':'编辑页脚'} title={part==='header'?'编辑页眉':'编辑页脚'} onMouseDown={event=>event.stopPropagation()} onClick={()=>setHeaderOpen(part)} data-empty={!filled||undefined}>
+        {filled?WORD_HEADER_SLOTS.map((slot,i)=><span key={slot}>{pictures[i]&&<WordHeaderPicture workspace={workspace} id={item.id} picture={pictures[i]!}/>}{line![slot]}</span>):<span className="word-margin-placeholder">{part==='header'?'页眉':'页脚'}</span>}</button></div>;
+      };
+      return <>{strip(top?.header,'header',page.top,1)}{strip(bottom?.footer,'footer',page.bottom,pages)}</>;
      })()}{item.paragraphs.toArray().map((block,index)=>{
-      const remove=()=>{workspace.assertWritable(item.id);if(active===block)setActive(texts.find(text=>text!==block)??null);const current=item.paragraphs.toArray().indexOf(block);if(current>=0)item.doc.transact(()=>item.paragraphs.delete(current,1),LOCAL_ORIGIN);};
+      const remove=()=>{workspace.assertWritable(item.id);if(active===block)setActive(texts.find(text=>text!==block)??null);const current=item.paragraphs.toArray().indexOf(block);if(current<0)return;item.doc.transact(()=>{
+       // While tracking, a picture is marked deleted (or, if it is the author's own pending insertion, removed).
+       if(tracking&&block instanceof Y.Map&&!deleteWordImageTracked(block,tracking))return;item.paragraphs.delete(current,1);},LOCAL_ORIGIN);};
       return block instanceof Y.Text?<WordParagraphEditor assertWritable={()=>workspace.assertWritable(item.id)} marker={markers.get(block)??''} key={keyFor(block)} paragraph={block} index={paragraphNumber++} readOnly={readOnly}/>:block.get('kind')==='image'?<WordImageEditor key={keyFor(block)} block={block} workspace={workspace} id={item.id} disabled={readOnly} onDelete={remove}/>:<WordTableEditor key={keyFor(block)} remote={workspace.sync?tableRemote:undefined} table={block} index={tableNumber++} readOnly={readOnly} assertWritable={()=>workspace.assertWritable(item.id)} onDelete={remove} markers={markers}/>;
     })}{pageBreaks.map(entry=><div key={entry.page} className="word-page-break-marker" aria-hidden="true" style={{top:entry.top}} data-page={entry.page}><span>第 {entry.page} 页</span></div>)}</article></div>{reviewOpen&&<WordReviewPane doc={item.doc} readOnly={readOnly} onLocate={showRevision} onClose={()=>setReviewOpen(false)}/>}</div><footer className="office-document-status">{(wordTracking(item.doc)||revisionCount>0)&&<button type="button" className="word-status-revisions" onClick={()=>setReviewOpen(true)}>{wordTracking(item.doc)?'修订：打开':'修订：关闭'} · {revisionCount} 处</button>}<span aria-label="页数">共 {pageBreaks.length+1} 页（按浏览器排版估算）</span><button className="word-status-count" onClick={()=>setCountOpen(true)}>字数 {counts.words}</button><span>{texts.reduce((count,text)=>count+Array.from(text.toString()).length,0)} 字符</span><span>{readOnly?'只读':'编辑'} · {page.width>page.height?'横向':'纵向'}</span><label>缩放 <select aria-label="页面缩放" value={zoom} onChange={event=>setZoom(event.target.value==='fit'?'fit':Number(event.target.value))}><option value="fit">适应宽度</option>{[50,75,100,125,150].map(value=><option key={value} value={value}>{value}%</option>)}</select></label></footer></section></WordEditingContext.Provider>;
 }

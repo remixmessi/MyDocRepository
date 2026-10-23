@@ -7,6 +7,9 @@ async function collaborationAccount(context:BrowserContext,baseURL:string,name:s
  const cached=collaborationAccounts.get(name);if(cached){await context.addCookies(cached.cookies);return cached;}
  const response=await context.request.post(baseURL+'/api/cloud/register',{data:{name,email:name+collaborationSuffix+'@example.com',password:'test-password-12345'}});expect(response.ok()).toBe(true);const account={id:(await response.json()).user.id as string,cookies:await context.cookies()};collaborationAccounts.set(name,account);return account;
 }
+// Local-workspace tests only need a signed-in session; one shared account stays under the server's 15 sign-ups per minute.
+let localCookies:Awaited<ReturnType<BrowserContext['cookies']>>|undefined;
+async function localAccount(page:Page){if(localCookies){await page.context().addCookies(localCookies);return;}const response=await page.request.post('/api/cloud/register',{data:{name:'本机办公',email:'local-office'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}});expect(response.ok()).toBe(true);localCookies=await page.context().cookies();}
 async function create(page:Page,type:string,name:string){
  await page.getByRole('button',{name:'新建文件',exact:true}).click();const dialog=page.getByRole('dialog',{name:'新建文件',exact:true});await dialog.getByLabel('文件类型').selectOption(type);await dialog.getByLabel('文件名称').fill(name);await dialog.getByRole('button',{name:'创建',exact:true}).click();await expect(dialog).toHaveCount(0);
 }
@@ -14,7 +17,7 @@ async function selectText(page:Page,label:string,start:number,end:number){
  await page.getByRole('textbox',{name:label,exact:true}).evaluate((el,{start,end})=>{el.focus();const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),nodes:Node[]=[];let node;while(node=walker.nextNode())nodes.push(node);const point=(offset:number):[Node,number]=>{for(const node of nodes){const length=node.textContent?.length??0;if(offset<=length)return[node,offset];offset-=length;}return[el,0];};const range=document.createRange();range.setStart(...point(start));range.setEnd(...point(end));const selection=window.getSelection();selection?.removeAllRanges();selection?.addRange(range);document.dispatchEvent(new Event('selectionchange'));},{start,end});
 }
 test('统一目录与 Office 纸张编辑：创建、移动、格式、分段、表格、导出和重开',async({page})=>{
- const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'个人编辑',email:'local'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');
  await expect(page.getByRole('button',{name:'新建文件',exact:true})).toBeEnabled();await create(page,'note','项目笔记');await create(page,'docx','项目方案');
  const list=page.getByRole('navigation',{name:'文档列表',exact:true});await expect(list.getByRole('button',{name:'项目笔记',exact:true})).toBeVisible();await expect(list.getByRole('button',{name:'项目方案.docx',exact:true})).toBeVisible();await expect(page.getByRole('navigation',{name:'办公文件列表'})).toHaveCount(0);
  const text=page.getByRole('textbox',{name:'第 1 段',exact:true});await expect(text).toBeFocused();await expect(page.getByRole('button',{name:'新增段落',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'删除段落',exact:true})).toHaveCount(0);await expect(text).toHaveCSS('outline-style','none');await expect(text).toHaveCSS('border-top-width','0px');await expect(text).toHaveAttribute('contenteditable','true');await expect(page.locator('.word-paper textarea')).toHaveCount(0);await expect(page.getByText('格式预览',{exact:true})).toHaveCount(0);
@@ -62,7 +65,7 @@ test('Word 按 Office 功能：删除线/上下标/突出显示/字体、清除�
  await page.reload();await expect(page.getByRole('textbox',{name:'第 1 段',exact:true})).toHaveText('工程概述 H2O E=mc2');await expect(page.getByRole('textbox',{name:'第 3 段',exact:true})).toHaveText('★');
 });
 test('纸张直接书写、点击空白续写及键盘跨段编辑，无段落框和新增按钮',async({page})=>{
- await page.setViewportSize({width:1280,height:900});expect((await page.request.post('/api/cloud/register',{data:{name:'连续编辑',email:'flow'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','直接书写');
+ await page.setViewportSize({width:1280,height:900});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','直接书写');
  const first=page.getByRole('textbox',{name:'第 1 段',exact:true}),second=page.getByRole('textbox',{name:'第 2 段',exact:true});await expect(first).toBeFocused();await page.keyboard.insertText('甲乙');await page.keyboard.press('Enter');await page.keyboard.insertText('丙丁');await expect(first).toHaveText('甲乙');await expect(second).toHaveText('丙丁');await expect(second).toHaveCSS('outline-style','none');
  await selectText(page,'第 2 段',0,0);await second.press('Backspace');await expect(second).toHaveCount(0);await expect(first).toBeFocused();await page.keyboard.insertText('中');await expect(first).toHaveText('甲乙中丙丁');
  await selectText(page,'第 1 段',2,2);await first.press('Enter');await expect(second).toHaveText('中丙丁');await selectText(page,'第 1 段',2,2);await first.press('Delete');await expect(second).toHaveCount(0);await expect(first).toHaveText('甲乙中丙丁');
@@ -74,7 +77,8 @@ test('纸张直接书写、点击空白续写及键盘跨段编辑，无段落�
 });
 
 test('个人整包备份恢复普通文档、Word、TXT、原件、目录、评论和版本，可比较历史内容',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'完整备份',email:'portable'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'note','共同目录笔记');await create(page,'txt','随包文本');await page.getByRole('textbox',{name:'随包文本.txt',exact:true}).fill('TXT 随包保存😀');await create(page,'docx','随包方案');const first=page.getByRole('textbox',{name:'第 1 段',exact:true});await first.fill('历史初稿');
+ await page.setViewportSize({width:1440,height:1000});// Counts every office file in the workspace, so it needs an account of its own.
+ expect((await page.request.post('/api/cloud/register',{data:{name:'完整备份',email:'portable'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'note','共同目录笔记');await create(page,'txt','随包文本');await page.getByRole('textbox',{name:'随包文本.txt',exact:true}).fill('TXT 随包保存😀');await create(page,'docx','随包方案');const first=page.getByRole('textbox',{name:'第 1 段',exact:true});await first.fill('历史初稿');
  const list=page.getByRole('navigation',{name:'文档列表',exact:true});await list.getByRole('button',{name:'文档操作 随包方案.docx',exact:true}).click();await page.getByRole('menuitem',{name:'版本历史',exact:true}).click();const history=page.getByRole('dialog',{name:'办公文件版本历史',exact:true});await history.getByLabel('版本名称',{exact:true}).fill('原始版本');await history.getByRole('button',{name:'保存命名版本',exact:true}).click();await expect(history.getByText('版本已保存',{exact:true})).toBeVisible();await history.getByRole('button',{name:'关闭',exact:true}).click();await first.fill('现在修订');
  await page.getByRole('button',{name:'评论',exact:true}).click();const comments=page.getByRole('dialog',{name:'文件评论',exact:true});await comments.getByRole('textbox',{name:'办公评论内容',exact:true}).fill('审核意见，随备份保留');await comments.getByRole('button',{name:'发送评论',exact:true}).click();await expect(comments.getByText('评论已保存',{exact:true})).toBeVisible();await comments.getByRole('button',{name:'回复讨论',exact:true}).click();await comments.getByRole('textbox',{name:'办公评论内容',exact:true}).fill('确认处理');await comments.getByRole('button',{name:'发送评论',exact:true}).click();await expect(comments.getByText('确认处理',{exact:true})).toBeVisible();await comments.getByRole('button',{name:'标记解决',exact:true}).click();await expect(comments.getByText('已解决',{exact:true})).toBeVisible();await comments.getByRole('button',{name:'关闭',exact:true}).click();
  await list.getByRole('button',{name:'文档操作 随包方案.docx',exact:true}).click();await page.getByRole('menuitem',{name:'版本历史',exact:true}).click();await history.getByRole('button',{name:'比较 原始版本 与当前文件',exact:true}).click();await expect(history.getByRole('region',{name:'版本差异'})).toBeVisible();await expect(history.locator('.office-version-columns').first()).toContainText('历史初稿');await expect(history.locator('.office-version-columns').first()).toContainText('现在修订');await history.getByRole('button',{name:'关闭',exact:true}).click();
@@ -84,13 +88,13 @@ test('个人整包备份恢复普通文档、Word、TXT、原件、目录、评�
 });
 
 test('Word 单元格列操作保留编辑焦点、内容及原生导出',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'表格列',email:'columns'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','列编辑');await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'新建表格',exact:true}).click();await page.getByRole('dialog',{name:'新建表格',exact:true}).getByRole('button',{name:'插入表格',exact:true}).click();
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','列编辑');await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'新建表格',exact:true}).click();await page.getByRole('dialog',{name:'新建表格',exact:true}).getByRole('button',{name:'插入表格',exact:true}).click();
  await page.getByRole('textbox',{name:'表格 1 第 1 行第 2 列',exact:true}).fill('保留内容');await page.getByRole('button',{name:'左侧插入列',exact:true}).click();await expect(page.getByRole('textbox',{name:'表格 1 第 1 行第 3 列',exact:true})).toHaveText('保留内容');await page.getByRole('button',{name:'右侧插入列',exact:true}).click();await expect(page.getByRole('textbox',{name:'表格 1 第 1 行第 4 列',exact:true})).toBeVisible();await page.getByRole('button',{name:'删除当前列',exact:true}).click();await expect(page.getByRole('textbox',{name:'表格 1 第 1 行第 4 列',exact:true})).toHaveCount(0);await expect(page.getByRole('textbox',{name:'表格 1 第 1 行第 3 列',exact:true})).toBeFocused();
  await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();expect((await readFile((await(await download).path())!)).subarray(0,2).toString()).toBe('PK');
 });
 
 test('表格增强：函数库与参数提示、条件格式（规则/数据条/管理）、插入图表与图表工具、XLSX 导出含条件格式与图表',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'表格增强',email:'sheetplus'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'xlsx','销量');
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'xlsx','销量');
  const cell=(r:number,c:number)=>page.getByRole('textbox',{name:`第 ${r} 行第 ${c} 列`,exact:true});
  const fill=async(r:number,c:number,value:string)=>{await cell(r,c).click();await page.keyboard.insertText(value);await page.keyboard.press('Enter');};
  for(const [r,values]of [[1,['月份','北京','上海']],[2,['一月','10','7']],[3,['二月','25','12']],[4,['三月','18','30']]] as const)for(const [c,value]of values.entries())await fill(r,c+1,value);
@@ -121,7 +125,7 @@ test('表格增强：函数库与参数提示、条件格式（规则/数据条/
  const {unzipSync,strFromU8}=await import('fflate');const files=unzipSync(await readFile((await(await download).path())!));expect(Object.keys(files)).toContain('xl/charts/chart1.xml');expect(strFromU8(files['xl/worksheets/sheet1.xml'])).toContain('<conditionalFormatting sqref="B2:C4">');expect(strFromU8(files['xl/charts/chart1.xml'])).toContain('月度销量');
 });
 test('Word 页眉页脚与页码：插入选项卡打开、左中右与页码域、首页不同、页边显示与点击编辑、打印样式、DOCX 导出',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'页眉页脚',email:'header'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','报告');
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','报告');
  await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('正文第一段');
  await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'页眉',exact:true}).click();const dialog=page.getByRole('dialog',{name:'页眉和页脚',exact:true});
  await dialog.getByLabel('页眉左').fill('年度报告');await dialog.getByLabel('页眉右').fill('内部');await dialog.getByRole('button',{name:'第 X 页，共 Y 页',exact:true}).click();await expect(dialog.getByLabel('页脚中')).toHaveValue('第 {页码} 页，共 {总页数} 页');
@@ -141,8 +145,78 @@ test('Word 页眉页脚与页码：插入选项卡打开、左中右与页码域
  await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();
  const {unzipSync,strFromU8}=await import('fflate');const files=unzipSync(await readFile((await(await download).path())!));expect(strFromU8(files['word/header1.xml'])).toContain('年度报告');expect(strFromU8(files['word/footer1.xml'])).toContain('<w:fldSimple w:instr=" NUMPAGES ">');
 });
+test('Word 页眉页脚多行、图片与奇偶页不同：对话框编辑、页边显示、刷新保留、打印样式按奇偶页生成、DOCX 导出 evenAndOddHeaders 与图片',async({page})=>{
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','手册');
+ await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('正文');
+ await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'页眉',exact:true}).click();const dialog=page.getByRole('dialog',{name:'页眉和页脚',exact:true});
+ // Two lines on the left (Enter adds a line), a logo on the right.
+ const left=dialog.getByLabel('页眉左',{exact:true});await left.fill('产品手册');await left.press('End');await left.press('Enter');await left.pressSequentially('第二版');await expect(left).toHaveValue('产品手册\n第二版');
+ const chooser=page.waitForEvent('filechooser');await dialog.getByRole('button',{name:'插入图片（页眉·右）',exact:true}).click();await (await chooser).setFiles('assets/branding/mydoc-icon-v1.png');
+ await expect(dialog.locator('.word-header-picture')).toContainText('48 × 48');await expect(dialog.getByRole('button',{name:'删除图片（页眉·右）',exact:true})).toBeVisible();
+ await dialog.getByLabel('奇偶页不同').check();await expect(dialog.getByLabel('奇数页页眉左',{exact:true})).toHaveValue('产品手册\n第二版');await dialog.getByLabel('偶数页页眉右',{exact:true}).fill('偶数页 {页码}');
+ // Six lines are refused before saving.
+ await dialog.getByLabel('偶数页页脚中',{exact:true}).fill('1\n2\n3\n4\n5\n6');await dialog.getByRole('button',{name:'保存页眉页脚',exact:true}).click();await expect(dialog.getByRole('alert')).toContainText('最多 5 行');
+ await dialog.getByLabel('偶数页页脚中',{exact:true}).fill('');await dialog.getByRole('button',{name:'保存页眉页脚',exact:true}).click();await expect(dialog).toHaveCount(0);
+ const header=page.getByRole('button',{name:'编辑页眉',exact:true});await expect(header).toContainText('产品手册');await expect(header).toContainText('第二版');
+ const logo=header.locator('.word-margin-picture img');await expect(logo).toHaveJSProperty('complete',true);expect(await logo.evaluate((el:HTMLImageElement)=>el.naturalWidth)).toBe(1254);
+ // Two text lines: the left slot is about twice the height of one line of text.
+ const [two,one]=await header.evaluate(el=>{const span=el.querySelector(':scope>span')!,probe=document.createElement('span');probe.textContent='一';span.after(probe);const h=probe.getBoundingClientRect().height;probe.remove();return [span.getBoundingClientRect().height,h];});expect(two).toBeGreaterThan(one*1.8);
+ // The tall header pushes the body down instead of covering it.
+ const strip=(await header.boundingBox())!,first=(await page.getByRole('textbox',{name:'第 1 段',exact:true}).boundingBox())!;expect(first.y).toBeGreaterThanOrEqual(strip.y+strip.height);
+ await page.screenshot({path:'artifacts/word-header-image.png'});
+ await page.reload();await expect(page.getByRole('button',{name:'编辑页眉',exact:true}).locator('.word-margin-picture img')).toBeVisible();
+ // Print: default, even (:left) and the picture as a sized SVG image.
+ const css=page.waitForEvent('console',{predicate:message=>message.text().startsWith('print-css:'),timeout:15000});
+ // Headless print() does nothing; capture the print frame's stylesheet instead of opening the system dialog.
+ await page.evaluate(()=>{new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node instanceof HTMLIFrameElement&&node.title==='打印文档'){const win=node.contentWindow!;win.print=()=>{console.log('print-css:'+win.document.querySelector('style')!.textContent);};}}).observe(document.body,{childList:true});});
+ await page.getByRole('tab',{name:'视图',exact:true}).click();await page.getByRole('button',{name:'打印预览',exact:true}).first().click();await page.getByRole('button',{name:'打印 / 另存 PDF',exact:true}).click();
+ const style=(await css).text();expect(style).toContain('@top-left{content:"产品手册\\A 第二版"');expect(style).toContain('@page:left{');expect(style).toContain('"偶数页 " counter(page)');expect(style).toMatch(/@top-right\{content:url\("data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+"\)/);
+ await page.getByRole('button',{name:'关闭预览',exact:true}).click();
+ await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();
+ const {unzipSync,strFromU8}=await import('fflate');const files=unzipSync(await readFile((await(await download).path())!));
+ expect(strFromU8(files['word/settings.xml'])).toContain('<w:evenAndOddHeaders/>');expect(strFromU8(files['word/document.xml'])).toContain('w:type="even"');
+ const part=strFromU8(files['word/header1.xml']);expect(part.match(/<w:p>/g)).toHaveLength(2);expect(part).toContain('<a:blip r:embed="rIdImg1"/>');expect(Object.keys(files).filter(name=>name.startsWith('word/media/'))).toHaveLength(1);
+ // Removing the picture and the even variant leaves no stale picture behind.
+ await page.getByRole('button',{name:'编辑页眉',exact:true}).click();await dialog.getByRole('button',{name:'删除图片（奇数页页眉·右）',exact:true}).click();await dialog.getByLabel('奇偶页不同').uncheck();await expect(dialog.getByLabel('页眉左',{exact:true})).toHaveValue('产品手册\n第二版');await dialog.getByRole('button',{name:'保存页眉页脚',exact:true}).click();await expect(dialog).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'编辑页眉',exact:true}).locator('.word-margin-picture')).toHaveCount(0);await expect(page.getByRole('button',{name:'编辑页眉',exact:true})).toContainText('第二版');
+});
+test('Word 修订覆盖格式与结构：加粗与对齐留原格式，分段/合段留段落标记，插入与删除图片留标记，审阅窗格说明更改并可接受/拒绝，DOCX 导出 rPrChange/pPrChange',async({page})=>{
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','章程');
+ const first=page.getByRole('textbox',{name:'第 1 段',exact:true});await first.fill('第一条第二条');await page.getByRole('textbox',{name:'第 1 段',exact:true}).press('End');
+ await page.keyboard.press('Enter');await page.keyboard.insertText('第三条');const third=page.getByRole('textbox',{name:'第 2 段',exact:true});await expect(third).toHaveText('第三条');
+ await page.getByRole('tab',{name:'审阅',exact:true}).click();await page.getByRole('button',{name:'修订',exact:true}).click();await expect(page.getByRole('button',{name:'修订',exact:true})).toHaveAttribute('aria-pressed','true');
+ // Formatting: bold on 第一条 and centre the paragraph.
+ await selectText(page,'第 1 段',0,3);await page.getByRole('tab',{name:'开始',exact:true}).click();await page.getByRole('button',{name:'加粗',exact:true}).click();
+ await expect(first.locator('[data-format-revision]')).toHaveText('第一条');await page.getByRole('button',{name:'居中',exact:true}).click();await expect(page.locator('.word-paragraph-content[data-format-revision]')).toHaveCount(1);
+ // Structure: split after 第一条, then join 第三条 onto the paragraph above it.
+ await selectText(page,'第 1 段',3,3);await page.keyboard.press('Enter');const second=page.getByRole('textbox',{name:'第 2 段',exact:true});await expect(second).toHaveText('第二条');
+ await expect(page.getByLabel('修订：此处拆分了段落',{exact:true})).toHaveCount(1);
+ await selectText(page,'第 3 段',0,0);await page.keyboard.press('Backspace');await expect(page.getByRole('textbox',{name:'第 3 段',exact:true})).toHaveText('第三条');await expect(page.getByLabel('修订：此处的段落标记已删除',{exact:true})).toHaveCount(1);
+ // Picture: insert one (tracked), then delete it again as its own author (removed, no revision left), insert a second to keep.
+ await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByLabel('选择办公图片').setInputFiles({name:'图示.png',mimeType:'image/png',buffer:await readFile('assets/branding/mydoc-icon-v1.png')});
+ const figure=page.getByRole('figure',{name:'图片（新插入，待审阅）',exact:true});await expect(figure).toBeVisible();
+ await page.getByRole('tab',{name:'审阅',exact:true}).click();await page.getByRole('button',{name:'审阅窗格',exact:true}).click();const pane=page.getByRole('complementary',{name:'审阅窗格',exact:true});
+ await expect(pane.locator('li')).toHaveCount(5);for(const label of ['格式：加粗','段落格式：对齐','拆分段落','合并段落','插入图片'])await expect(pane).toContainText(label);
+ await page.screenshot({path:'artifacts/word-structure-revisions.png'});
+ // No-markup view hides paragraph-mark badges.
+ await page.getByRole('combobox',{name:'显示标记',exact:true}).selectOption('final');await expect(page.locator('.word-break-revision').first()).toBeHidden();await page.getByRole('combobox',{name:'显示标记',exact:true}).selectOption('all');
+ // Export before deciding: Word revision markup for formatting, paragraph marks and the picture.
+ await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();
+ const {unzipSync,strFromU8}=await import('fflate');const xml=strFromU8(unzipSync(await readFile((await(await download).path())!))['word/document.xml']);
+ expect(xml).toContain('<w:rPrChange');expect(xml).toContain('<w:pPrChange');expect(xml).toMatch(/<w:rPr><w:ins [^>]*\/><\/w:rPr>/);expect(xml).toMatch(/<w:rPr><w:del [^>]*\/><\/w:rPr>/);expect(xml).toMatch(/<w:ins [^>]*><w:r><w:drawing>/);
+ // Reject the formatting: bold and centring go away.
+ await pane.locator('li',{hasText:'格式：加粗'}).getByRole('button',{name:/^拒绝/}).click();await expect(first.locator('[data-format-revision]')).toHaveCount(0);await expect(first.locator('span').first()).not.toHaveCSS('font-weight','700');
+ await pane.locator('li',{hasText:'段落格式'}).getByRole('button',{name:/^拒绝/}).click();await expect(page.locator('.word-paragraph-content[data-format-revision]')).toHaveCount(0);
+ // Reject the split (paragraphs rejoin), accept the join (第二条第三条 become one), accept the picture.
+ await pane.locator('li',{hasText:'拆分段落'}).getByRole('button',{name:/^拒绝/}).click();await expect(first).toHaveText('第一条第二条');
+ await pane.locator('li',{hasText:'合并段落'}).getByRole('button',{name:/^接受/}).click();await expect(first).toHaveText('第一条第二条第三条');await expect(page.getByRole('textbox',{name:'第 2 段',exact:true})).toHaveCount(0);
+ await pane.locator('li',{hasText:'插入图片'}).getByRole('button',{name:/^接受/}).click();await expect(pane.locator('li')).toHaveCount(0);await expect(page.getByRole('figure',{name:'图片',exact:true})).toBeVisible();
+ // Deleting someone else's (here: an accepted) picture while tracking keeps it, struck.
+ await page.getByRole('figure',{name:'图片',exact:true}).click();await page.getByRole('button',{name:'删除图片',exact:true}).click();await expect(page.getByRole('figure',{name:'图片（已删除，待审阅）',exact:true})).toBeVisible();await expect(pane).toContainText('删除图片');
+ await page.reload();await expect(page.getByRole('figure',{name:'图片（已删除，待审阅）',exact:true})).toBeVisible();
+});
 test('Word 修订：打开修订后输入与删除留标记，审阅窗格、上下一处、接受/拒绝、无标记视图、DOCX 导出 w:ins/w:del',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'审阅者',email:'review'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','合同');
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','合同');
  const text=page.getByRole('textbox',{name:'第 1 段',exact:true});await text.fill('金额一百万元');
  await page.getByRole('tab',{name:'审阅',exact:true}).click();await page.getByRole('button',{name:'修订',exact:true}).click();await expect(page.getByRole('button',{name:'修订',exact:true})).toHaveAttribute('aria-pressed','true');
  // Replace 一 with 二: select it and type.
@@ -205,7 +279,7 @@ test('团队 Word 表格：两人同时增列与增行经服务端串行化，�
  }finally{await owner.close();await member.close();}
 });
 test('Word 图片浮动工具栏：选中显示不挤动正文，锁定比例、拖动角点、原始大小、替代文字与删除',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'图片工具',email:'image'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','图片编辑');
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','图片编辑');
  await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('图片上方正文');
  const png=await page.evaluate(async()=>{const canvas=document.createElement('canvas');canvas.width=200;canvas.height=100;const g=canvas.getContext('2d')!;g.fillStyle='#3a7';g.fillRect(0,0,200,100);const blob:Blob=await new Promise(r=>canvas.toBlob(b=>r(b!),'image/png'));return [...new Uint8Array(await blob.arrayBuffer())];});
  await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByLabel('选择办公图片').setInputFiles({name:'示例.png',mimeType:'image/png',buffer:Buffer.from(png)});
@@ -227,7 +301,7 @@ test('Word 图片浮动工具栏：选中显示不挤动正文，锁定比例、
  await figure.press('Delete');await expect(figure).toHaveCount(0);await expect(page.getByRole('textbox',{name:'第 1 段',exact:true})).toHaveText('图片上方正文');
 });
 test('Word 表格工具栏：浮动不挤动正文，行列对齐，按当前单元格增删行',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'表格行',email:'rows'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','行编辑');
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','行编辑');
  await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('表格上方正文');await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'新建表格',exact:true}).click();await page.getByRole('dialog',{name:'新建表格',exact:true}).getByRole('button',{name:'插入表格',exact:true}).click();
  const cell=(r:number,c:number)=>page.getByRole('textbox',{name:`表格 1 第 ${r} 行第 ${c} 列`,exact:true}),table=page.locator('.word-paper .office-word-table table');
  const shape=()=>table.evaluate(el=>[...el.querySelectorAll('tr')].map(row=>[...row.children].map(td=>Math.round(td.getBoundingClientRect().width))));
@@ -242,7 +316,7 @@ test('Word 表格工具栏：浮动不挤动正文，行列对齐，按当前单
  expect(new Set((await shape()).map(row=>row.length)).size).toBe(1);await page.screenshot({path:'artifacts/word-table-toolbar.png'});
 });
 test('Word 单元格回车分段、向右/向下合并与拆分，刷新及原生副本保留结构',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'合并单元格',email:'merge'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','合并编辑');await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'新建表格',exact:true}).click();await page.getByRole('dialog',{name:'新建表格',exact:true}).getByRole('button',{name:'插入表格',exact:true}).click();
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','合并编辑');await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'新建表格',exact:true}).click();await page.getByRole('dialog',{name:'新建表格',exact:true}).getByRole('button',{name:'插入表格',exact:true}).click();
  const content=(r:number,c:number)=>expect.poll(()=>cell(r,c).evaluate(el=>el.textContent));
  const cell=(r:number,c:number)=>page.getByRole('textbox',{name:`表格 1 第 ${r} 行第 ${c} 列`,exact:true});
  await cell(1,1).click();await page.keyboard.insertText('首段');await page.keyboard.press('Enter');await page.keyboard.insertText('次段');await page.keyboard.press('Shift+Enter');await page.keyboard.insertText('换行');
@@ -298,7 +372,7 @@ test('Word、表格、演示与 PDF 显示其他成员位置，点击可跳转�
  }finally{await owner.close();await member.close();}
 });
 test('导出记录：直接导出留档，后台导出完成后可再次下载，删除记录',async({page})=>{
- expect((await page.request.post('/api/cloud/register',{data:{name:'导出记录',email:'exports'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','导出方案');await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('导出记录正文');await expect(page.locator('.office-word-editor .save-status')).toHaveText('已保存到本机');
+ await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','导出方案');await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('导出记录正文');await expect(page.locator('.office-word-editor .save-status')).toHaveText('已保存到本机');
  await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const first=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();await first;
  const list=page.getByRole('navigation',{name:'文档列表',exact:true});await list.getByRole('button',{name:'文档操作 导出方案.docx',exact:true}).click();await page.getByRole('menuitem',{name:'导出记录',exact:true}).click();const dialog=page.getByRole('dialog',{name:'导出记录',exact:true});
  await expect(dialog.getByRole('listitem')).toHaveCount(1);await expect(dialog.getByRole('listitem').first()).toContainText('已完成');
@@ -326,7 +400,7 @@ test('表格断网时行列、格式与单元格编辑保存在本机，刷新�
  }finally{await owner.close();await member.close();}
 });
 test('Word 自动分页：正文超过一页显示分页线和页数，段前分页另起一页，打印预览不含分页线',async({page})=>{
- await page.setViewportSize({width:1440,height:1000});expect((await page.request.post('/api/cloud/register',{data:{name:'自动分页',email:'paging'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','分页');
+ await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','分页');
  const status=page.getByLabel('页数',{exact:true});await expect(status).toHaveText('共 1 页（按浏览器排版估算）');
  await page.getByRole('textbox',{name:'第 1 段',exact:true}).click();await page.keyboard.insertText('第一页正文');for(let i=0;i<45;i++){await page.keyboard.press('Shift+Enter');await page.keyboard.insertText('行 '+i);}
  await expect(status).toHaveText('共 2 页（按浏览器排版估算）');const marker=page.locator('.word-page-break-marker[data-page="2"]');await expect(marker).toHaveCount(1);
@@ -384,7 +458,7 @@ test('原位恢复自动保留当前版本，其他窗口旧队列归档后可�
 });
 
 test('表格任意行列插删、稳定类型与公式引用，Word 打印预览保持快照',async({page})=>{
- expect((await page.request.post('/api/cloud/register',{data:{name:'结构编辑',email:'structure'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'xlsx','行列编辑');const first=page.getByRole('textbox',{name:'第 1 行第 1 列',exact:true});await first.fill('001');await first.press('Tab');await first.focus();await page.getByLabel('单元格内容类型',{exact:true}).selectOption('text');await first.focus();await first.press('Tab');const second=page.getByRole('textbox',{name:'第 1 行第 2 列',exact:true});await second.fill('=A1+1');await second.press('Tab');await second.focus();await expect(page.getByText('正在提交…',{exact:true})).toHaveCount(0);await page.getByRole('button',{name:'在当前列左侧插入',exact:true}).click();await expect(page.getByRole('textbox',{name:'第 1 行第 3 列',exact:true})).toHaveValue('=A1+1');await first.focus();await page.getByRole('button',{name:'在当前列左侧插入',exact:true}).click();await expect(page.getByRole('textbox',{name:'第 1 行第 2 列',exact:true})).toHaveValue('001');await expect(page.getByRole('textbox',{name:'第 1 行第 4 列',exact:true})).toHaveValue('=(B1+1)');await page.getByRole('textbox',{name:'第 1 行第 2 列',exact:true}).focus();await page.getByRole('button',{name:'删除当前列',exact:true}).click();await expect(page.getByRole('textbox',{name:'第 1 行第 3 列',exact:true})).toHaveValue('=(#REF!+1)');
+ await localAccount(page);await page.goto('/#workspace=local');await create(page,'xlsx','行列编辑');const first=page.getByRole('textbox',{name:'第 1 行第 1 列',exact:true});await first.fill('001');await first.press('Tab');await first.focus();await page.getByLabel('单元格内容类型',{exact:true}).selectOption('text');await first.focus();await first.press('Tab');const second=page.getByRole('textbox',{name:'第 1 行第 2 列',exact:true});await second.fill('=A1+1');await second.press('Tab');await second.focus();await expect(page.getByText('正在提交…',{exact:true})).toHaveCount(0);await page.getByRole('button',{name:'在当前列左侧插入',exact:true}).click();await expect(page.getByRole('textbox',{name:'第 1 行第 3 列',exact:true})).toHaveValue('=A1+1');await first.focus();await page.getByRole('button',{name:'在当前列左侧插入',exact:true}).click();await expect(page.getByRole('textbox',{name:'第 1 行第 2 列',exact:true})).toHaveValue('001');await expect(page.getByRole('textbox',{name:'第 1 行第 4 列',exact:true})).toHaveValue('=(B1+1)');await page.getByRole('textbox',{name:'第 1 行第 2 列',exact:true}).focus();await page.getByRole('button',{name:'删除当前列',exact:true}).click();await expect(page.getByRole('textbox',{name:'第 1 行第 3 列',exact:true})).toHaveValue('=(#REF!+1)');
  await create(page,'docx','打印页面');await page.getByRole('textbox',{name:'第 1 段',exact:true}).fill('打印快照正文');await page.getByRole('button',{name:'打印预览',exact:true}).click();const preview=page.getByRole('dialog',{name:'Word 打印预览',exact:true});await expect(preview.locator('.word-print-preview')).toContainText('打印快照正文');await expect(preview.locator('[contenteditable]')).toHaveCount(0);await preview.getByRole('button',{name:'关闭预览',exact:true}).click();
 });
 
@@ -427,7 +501,7 @@ test('演示对象新增与删除经语义接口：丢响应重试不重复、�
  }finally{await owner.close();await member.close();}
 });
 test('Word 跨段连续选区：格式、远端定位、替换粘贴、撤销及定位评论',async({page})=>{
- expect((await page.request.post('/api/cloud/register',{data:{name:'跨段编辑',email:'flow-range'+crypto.randomUUID()+'@example.com',password:'test-password-12345'}})).ok()).toBe(true);await page.goto('/#workspace=local');await create(page,'docx','连续选区');const first=page.getByRole('textbox',{name:'第 1 段',exact:true});await first.fill('甲乙丙');await first.press('End');await first.press('Enter');const second=page.getByRole('textbox',{name:'第 2 段',exact:true});await page.keyboard.insertText('丁戊己');
+ await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','连续选区');const first=page.getByRole('textbox',{name:'第 1 段',exact:true});await first.fill('甲乙丙');await first.press('End');await first.press('Enter');const second=page.getByRole('textbox',{name:'第 2 段',exact:true});await page.keyboard.insertText('丁戊己');
  const select=async()=>{await first.evaluate(el=>{el.focus();const last=document.querySelector('[aria-label="第 2 段"][role=textbox]')!;const point=(element:Element,offset:number):[Node,number]=>{const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);let n;while(n=walker.nextNode()){if(offset<=(n.textContent?.length??0))return[n,offset];offset-=n.textContent?.length??0;}return[element,0];};const range=document.createRange();range.setStart(...point(el,1));range.setEnd(...point(last,2));const selection=window.getSelection();selection?.removeAllRanges();selection?.addRange(range);document.dispatchEvent(new Event('selectionchange'));});};
  await select();await page.getByRole('button',{name:'加粗',exact:true}).click();await expect(first.locator('span').last()).toHaveCSS('font-weight','700');await expect(second.locator('span').first()).toHaveCSS('font-weight','700');await select();await page.getByRole('button',{name:'评论',exact:true}).click();const comments=page.getByRole('dialog',{name:'文件评论'});await expect(comments).toContainText('关联当前所选内容');await comments.getByRole('textbox',{name:'办公评论内容'}).fill('跨段意见');await comments.getByRole('button',{name:'发送评论',exact:true}).click();await expect(comments.getByText('评论已保存',{exact:true})).toBeVisible();await comments.getByRole('button',{name:'定位原内容',exact:true}).click();await expect(comments).toHaveCount(0);await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('乙丙');
  await select();await first.evaluate(el=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain','替换\n新增');el.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData}));});await expect(first).toHaveText('甲替换');await expect(second).toHaveText('新增己');await second.press('ControlOrMeta+z');await expect(first).toHaveText('甲乙丙');await expect(second).toHaveText('丁戊己');

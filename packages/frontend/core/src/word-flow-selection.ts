@@ -1,8 +1,8 @@
 import {Y,LOCAL_ORIGIN} from '@mydoc/crdt';
 import type {WordBlock} from '../../../common/nbstore/src/office-word-table';
-import {captureWordSelection,setWordFont,wordMarkActive,clearWordFormatting,type WordMark,type WordFontKey} from './office-word-format';
+import {captureWordSelection,setWordFont,formatWordRun,wordMarkActive,clearWordFormatting,type WordMark,type WordFontKey} from './office-word-format';
 import {splitWordParagraph} from './office-word-flow';
-import {trackedReplace,type WordAuthor} from '../../../common/nbstore/src/office-word-revision';
+import {trackedReplace,deleteWordParagraphBreak,type WordAuthor} from '../../../common/nbstore/src/office-word-revision';
 export interface WordFlowSelection {start:Y.RelativePosition;end:Y.RelativePosition;}
 export function captureWordFlowSelection(first:Y.Text,start:number,last:Y.Text,end:number):WordFlowSelection{
  if(first.doc!==last.doc||!first.doc)throw new Error('文字选区无效');
@@ -21,16 +21,18 @@ export function resolveWordFlowSelection(doc:Y.Doc,selection:WordFlowSelection){
 export function wordFlowPlainText(doc:Y.Doc,selection:WordFlowSelection){return resolveWordFlowSelection(doc,selection).ranges.map(({text,start,end})=>text.toString().slice(start,end)).join('\n');}
 export function formatWordFlow(doc:Y.Doc,selection:WordFlowSelection,key:WordMark|WordFontKey|'clear',value?:number|string){
  const {ranges}=resolveWordFlowSelection(doc,selection),mark=['bold','italic','underline','strike'].includes(key),enabled=mark&&!ranges.filter(r=>r.end>r.start).every(r=>wordMarkActive(r.text,r.start,r.end,key as WordMark));
- doc.transact(()=>{for(const {text,start,end}of ranges){if(end<=start)continue;const selection=captureWordSelection(text,start,end)!;if(key==='clear')clearWordFormatting(text,selection);else if(mark)text.format(start,end-start,{[key]:enabled});else setWordFont(text,selection,key as WordFontKey,value);}},LOCAL_ORIGIN);
+ doc.transact(()=>{for(const {text,start,end}of ranges){if(end<=start)continue;const selection=captureWordSelection(text,start,end)!;if(key==='clear')clearWordFormatting(text,selection);else if(mark)formatWordRun(text,start,end,{[key]:enabled});else setWordFont(text,selection,key as WordFontKey,value);}},LOCAL_ORIGIN);
 }
 /**
  * Replace one contiguous text range as one local undo operation, retaining tail marks. With an author (track
- * changes on) every part of the range is marked deleted and the new text is inserted in the first paragraph; line
- * breaks become spaces because paragraph splits are not tracked.
+ * changes on) every part of the range and the paragraph marks inside it are marked deleted, and the new text is
+ * inserted in the first paragraph; typed line breaks become spaces.
  */
 export function replaceWordFlow(doc:Y.Doc,selection:WordFlowSelection,value:string,author?:WordAuthor){
  const {blocks,first,last,ranges}=resolveWordFlowSelection(doc,selection),head=ranges[0],tail=ranges[ranges.length-1];
- if(author){let offset=head.start;doc.transact(()=>{for(const range of [...ranges].reverse()){const inserted=range===head?value.replace(/\r\n|\r|\n/g,' '):'';const end=trackedReplace(range.text,range.start,range.end,inserted,author);if(range===head)offset=end;}},LOCAL_ORIGIN);return {text:head.text,offset};}
+ if(author){let offset=head.start;doc.transact(()=>{for(const range of [...ranges].reverse()){const inserted=range===head?value.replace(/\r\n|\r|\n/g,' '):'';const end=trackedReplace(range.text,range.start,range.end,inserted,author);if(range===head)offset=end;
+   // The paragraph marks inside the selection are deleted too; the author's own pending splits are undone.
+   if(range!==head&&deleteWordParagraphBreak(range.text,author)){const index=blocks.toArray().indexOf(range.text),previous=blocks.get(index-1);if(previous instanceof Y.Text){range.text.removeAttribute('insBreak');previous.applyDelta([{retain:previous.length},...range.text.toDelta()]);blocks.delete(index,1);}}}},LOCAL_ORIGIN);return {text:head.text,offset};}
  const normalized=value.replace(/\r\n|\r/g,'\n'),lines=normalized.split('\n');if(blocks.length-(last-first)+lines.length-1>10000||normalized.length>1000000)throw new Error('正文内容数量或字符数量超限');
  const suffix:ReturnType<Y.Text['toDelta']>=[];let offset=0;
  for(const part of tail.text.toDelta()){const text=String(part.insert??''),from=Math.max(0,tail.end-offset);if(from<text.length)suffix.push({...part,insert:text.slice(from)});offset+=text.length;}

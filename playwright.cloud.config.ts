@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: 'cloud.spec.ts',
+  testMatch: ['cloud.spec.ts', 'account.spec.ts', 'sync-queue.spec.ts'],
   timeout: 180000,
   workers: 1,
   use: {

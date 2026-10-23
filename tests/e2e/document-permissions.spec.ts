@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import {newNote} from './fixtures';
 
 test('文档权限管理、在线降权和恢复默认权限',async({browser})=>{
  const root=process.env.MYDOC_PERMISSION_TEST_URL??'http://127.0.0.1:4181';
@@ -13,9 +14,9 @@ test('文档权限管理、在线降权和恢复默认权限',async({browser})=>
   expect((await second.request.post(root+'/api/cloud/accept',{data:{token:invite.token}})).ok()).toBe(true);
   async function openTeam(page:typeof a){await page.goto(root);await page.getByLabel('工作区选项',{exact:true}).click();await page.getByRole('button',{name:'团队工作空间',exact:true}).click();await page.getByRole('dialog',{name:'团队工作空间'}).getByRole('button',{name:'打开',exact:true}).click();}
   await openTeam(a);
-  await a.getByRole('button',{name:'新建文件',exact:true}).first().click();await a.getByLabel('文档标题',{exact:true}).fill('授权文档');await a.getByRole('textbox',{name:'文档正文'}).fill('权限验证正文');
+  await newNote(a);await a.getByLabel('文档标题',{exact:true}).fill('授权文档');await a.getByRole('textbox',{name:'文档正文'}).fill('权限验证正文');
   await expect(a.getByRole('status').filter({hasText:'正在保存'})).toHaveCount(0);
-  await a.getByRole('button',{name:'新建文件',exact:true}).first().click();await a.getByLabel('文档标题',{exact:true}).fill('自由文档');
+  await newNote(a);await a.getByLabel('文档标题',{exact:true}).fill('自由文档');
   await openTeam(b);await b.getByRole('button',{name:'授权文档',exact:true}).first().click();
   await expect(b.getByRole('textbox',{name:'文档正文'})).toContainText('权限验证正文');
   await expect(b.getByLabel('文档标题',{exact:true})).toBeEnabled();await expect(b.getByRole('button',{name:'管理文档权限',exact:true})).toHaveCount(0);

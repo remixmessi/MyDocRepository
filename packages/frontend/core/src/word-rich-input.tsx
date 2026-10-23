@@ -3,7 +3,7 @@ import {useEffect,useLayoutEffect,useRef} from 'react';
 import {Y} from '@mydoc/crdt';
 import {validWordLink} from '../../../common/nbstore/src/office-word-link';
 import {WORD_HIGHLIGHTS,validWordHighlight,validWordFontFamily,validWordVertAlign} from '../../../common/nbstore/src/office-word-font';
-import {validWordRevisionMark,wordRevisionColor} from '../../../common/nbstore/src/office-word-revision';
+import {validWordRevisionMark,validWordRunFormatMark,wordRevisionColor} from '../../../common/nbstore/src/office-word-revision';
 
 /** DOM offsets are UTF-16 offsets, matching Y.Text and native browser selections. */
 export function wordDomSelection(element:HTMLElement){
@@ -37,6 +37,7 @@ function render(element:HTMLElement,text:Y.Text){
   if(validWordVertAlign(marks.vertAlign)){span.style.verticalAlign=marks.vertAlign==='superscript'?'super':'sub';span.style.fontSize=typeof marks.fontSize==='number'?marks.fontSize*0.65+'pt':'0.65em';}
   // Tracked changes: insertions underlined and deletions struck through, in the reviewer's colour.
   for(const kind of ['ins','del'] as const){const mark=marks[kind];if(!validWordRevisionMark(mark))continue;span.dataset.revision=kind;span.dataset.revisionId=mark.id;span.style.setProperty('--revision-color',wordRevisionColor(mark.author));span.title=`${mark.name} ${kind==='ins'?'插入':'删除'}：${new Date(mark.date).toLocaleString()}`;}
+  if(validWordRunFormatMark(marks.fmt)&&!span.dataset.revision){span.dataset.formatRevision='true';span.style.setProperty('--revision-color',wordRevisionColor(marks.fmt.author));span.title=`${marks.fmt.name} 设置格式：${new Date(marks.fmt.date).toLocaleString()}`;}
   fragment.append(span);
  }
  // A trailing line or paragraph break needs a <br> so the empty last line renders and can hold the caret.

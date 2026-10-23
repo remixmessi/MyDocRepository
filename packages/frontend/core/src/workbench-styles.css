@@ -747,17 +747,30 @@ textarea:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accen
 .word-margin-layer[data-part=header]{top:0}.word-margin-layer[data-part=footer]{bottom:0}
 .word-margin-text{position:absolute;display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;min-height:18px;padding:2px 4px;border:1px dashed transparent;border-radius:3px;background:transparent;color:#5f6875;font:9pt Calibri,'Microsoft YaHei',Arial,sans-serif;text-align:left;cursor:pointer}
 .word-margin-text>span:nth-child(2){text-align:center}.word-margin-text>span:nth-child(3){text-align:right}
+.word-margin-text:not([data-empty]){align-items:start}.word-margin-text>span{white-space:pre-line}
+.word-margin-picture{display:block;max-width:100%;margin-bottom:2px}.word-margin-picture img{display:block;width:100%;height:100%;object-fit:contain}
+.word-margin-text>span:nth-child(2)>.word-margin-picture{margin-inline:auto}.word-margin-text>span:nth-child(3)>.word-margin-picture{margin-left:auto}
 .word-margin-text:hover,.word-margin-text:focus-visible{border-color:#9aa4b2;background:#f7f9fc}
 .word-margin-text[data-empty]{display:flex;justify-content:center;opacity:0}.word-margin-text[data-empty]:hover,.word-margin-text[data-empty]:focus-visible{opacity:1}
 .word-margin-placeholder{color:#9aa4b2}
 .word-header-dialog{display:grid;gap:10px}.word-header-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0;padding:8px;border:1px solid var(--line);border-radius:6px}
-.word-header-row label{display:grid;gap:3px;font-size:12px}.word-header-row input{min-width:0}
+.word-header-row label{display:grid;gap:3px;font-size:12px}.word-header-row textarea{min-width:0;resize:vertical;font:inherit;line-height:1.4}
+.word-header-slot{display:grid;gap:4px;align-content:start}.word-header-picture{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.word-header-thumb{display:block;height:28px;max-width:96px;border:1px solid var(--line);border-radius:3px;overflow:hidden;background:white}.word-header-thumb img{display:block;width:100%;height:100%;object-fit:contain}
+.word-header-picture button,.word-header-add-picture{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;font-size:12px}.word-header-add-picture{justify-self:start}
+.word-header-options{display:flex;flex-wrap:wrap;gap:16px}
 .word-header-tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.word-header-tools span{margin-left:8px;color:var(--muted);font-size:12px}
 /* Word track changes. */
 .word-rich-input [data-revision=ins]{color:var(--revision-color);text-decoration:underline;text-decoration-color:var(--revision-color)}
 .word-rich-input [data-revision=del]{color:var(--revision-color);text-decoration:line-through;text-decoration-color:var(--revision-color)}
 .office-word-editor[data-markup=final] .word-rich-input [data-revision=del]{display:none}
 .office-word-editor[data-markup=final] .word-rich-input [data-revision=ins]{color:inherit;text-decoration:none}
+.word-rich-input [data-format-revision]{text-decoration:underline dotted;text-decoration-color:var(--revision-color);text-underline-offset:3px}
+.word-paragraph-content[data-format-revision]{box-shadow:-10px 0 0 -8px #8a94a6}
+.word-break-revision{display:inline-block;margin-right:2px;color:var(--revision-color);font-weight:600;user-select:none}.word-break-revision[data-revision=delBreak]{text-decoration:line-through}.word-break-revision[data-revision=insBreak]{text-decoration:underline}
+.office-word-image[data-revision]{outline:2px solid var(--revision-color);outline-offset:2px}.office-word-image[data-revision=del]{opacity:.45}
+.office-word-editor[data-markup=final] :is(.word-break-revision,.office-word-image[data-revision=del]){display:none}.office-word-editor[data-markup=final] .word-rich-input [data-format-revision]{text-decoration:inherit}
+.office-word-editor[data-markup=final] .word-paragraph-content[data-format-revision]{box-shadow:none}.office-word-editor[data-markup=final] .office-word-image[data-revision]{outline:none}
 .office-word-editor .word-body>.word-review-pane{flex:0 0 280px;display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--line);background:var(--panel)}
 .word-review-pane>header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--line)}.word-review-pane h3{margin:0;font-size:13px}
 .word-review-pane>p{padding:10px;color:var(--muted);font-size:12px}

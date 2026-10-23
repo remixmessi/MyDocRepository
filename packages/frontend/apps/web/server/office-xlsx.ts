@@ -68,7 +68,7 @@ export function encodeXlsxWorkbook(bytes:Uint8Array){
  const styles=readStyles(files['xl/styles.xml']),workbook=files['xl/workbook.xml']?xlsxXml(files['xl/workbook.xml']):undefined,properties=workbook&&child(workbook,'workbookPr'),date1904=!!properties&&['1','true'].includes(attribute(properties,'date1904')??'');
  const shared=selected.shared?xlsxXml(selected.shared):undefined;if(shared&&shared.name!=='sst')throw new Error('XLSX 共享字符串结构无效');const strings=shared?children(shared,'si').map(stringValue):[];if(strings.some(value=>value.length>10000))throw new Error('表格单元格内容无效');
  const doc=new Y.Doc();try{
-  doc.getMap('sheetCellTypes').set('$default','auto');let total=0,textConversions=false,objectCount=0;const dxfs=readDxfs(files['xl/styles.xml']);
+  doc.getMap('sheetCellTypes').set('$default','auto');let total=0,textConversions=false,objectCount=0,skippedRules=0,skippedCharts=0;const dxfs=readDxfs(files['xl/styles.xml']);
   for(const [index,source]of selected.sheets.entries()){
    if(!files[source.path])throw new Error('XLSX 关系指向缺失的工作表');const parsed=parseSheet(files[source.path],strings,styles,date1904);
    // Charts placed below or beside the data need those cells to exist, so the grid grows to cover chart anchors and data.
@@ -84,12 +84,14 @@ export function encodeXlsxWorkbook(bytes:Uint8Array){
    if(formats.size>SHEET_FORMAT_LIMITS.formats)throw new Error('XLSX 带格式单元格超过 5 万，请拆分工作簿');
    // Conditional formats (clamped to the sheet) and charts; the first rule in Excel's priority order ranks highest.
    const store=doc.getMap<SheetObject>('sheetObjects'),inside=(box:{top:number;left:number;bottom:number;right:number})=>({top:box.top,left:box.left,bottom:Math.min(box.bottom,rowKeys.length-1),right:Math.min(box.right,columnKeys.length-1)});
-   objects.rules.slice(0,SHEET_OBJECT_LIMITS.rulesPerSheet).forEach(({range,rule},i)=>{const box=inside(range);if(box.top>box.bottom||box.left>box.right||objectCount>=SHEET_OBJECT_LIMITS.objects)return;const value:SheetObject={kind:'conditional',sheet:id,range:sheetRangeKeys(sheet,box),rule,priority:objects.rules.length-i};if(validSheetObject(value)){store.set('cf-xlsx-'+index+'-'+i,value);objectCount++;}});
-   objects.charts.slice(0,SHEET_OBJECT_LIMITS.chartsPerSheet).forEach((chart,i)=>{const box=inside(chart.range);if(box.top>box.bottom||box.left>box.right||chart.anchor.row>=rowKeys.length||chart.anchor.column>=columnKeys.length||objectCount>=SHEET_OBJECT_LIMITS.objects)return;
+   // Everything not stored (unsupported, over a limit, or outside the sheet) is counted for the import report.
+   skippedRules+=objects.skippedRules+Math.max(0,objects.rules.length-SHEET_OBJECT_LIMITS.rulesPerSheet);skippedCharts+=objects.skippedCharts+Math.max(0,objects.charts.length-SHEET_OBJECT_LIMITS.chartsPerSheet);
+   objects.rules.slice(0,SHEET_OBJECT_LIMITS.rulesPerSheet).forEach(({range,rule},i)=>{const box=inside(range);if(box.top>box.bottom||box.left>box.right||objectCount>=SHEET_OBJECT_LIMITS.objects){skippedRules++;return;}const value:SheetObject={kind:'conditional',sheet:id,range:sheetRangeKeys(sheet,box),rule,priority:objects.rules.length-i};if(validSheetObject(value)){store.set('cf-xlsx-'+index+'-'+i,value);objectCount++;}else skippedRules++;});
+   objects.charts.slice(0,SHEET_OBJECT_LIMITS.chartsPerSheet).forEach((chart,i)=>{const box=inside(chart.range);if(box.top>box.bottom||box.left>box.right||chart.anchor.row>=rowKeys.length||chart.anchor.column>=columnKeys.length||objectCount>=SHEET_OBJECT_LIMITS.objects){skippedCharts++;return;}
     const value:SheetObject={kind:'chart',sheet:id,range:sheetRangeKeys(sheet,box),chartType:chart.chartType,title:chart.title,legend:chart.legend,...(chart.seriesInRows?{seriesInRows:true as const}:{}),anchor:{row:rowKeys[chart.anchor.row],column:columnKeys[chart.anchor.column]},width:chart.width,height:chart.height};
-    if(validSheetObject(value)){store.set('chart-xlsx-'+index+'-'+i,value);objectCount++;}});
+    if(validSheetObject(value)){store.set('chart-xlsx-'+index+'-'+i,value);objectCount++;}else skippedCharts++;});
   }
-  const source:XlsxSource={name:selected.sheets[0].name,sheetCount:selected.sheets.length,hasStyles:!!files['xl/styles.xml'],textConversions};if(!validXlsxSource(source))throw new Error('XLSX 工作表信息无效');for(const [key,value]of Object.entries(source))doc.getMap('sheetXlsx').set(key,value);
+  const source:XlsxSource={name:selected.sheets[0].name,sheetCount:selected.sheets.length,hasStyles:!!files['xl/styles.xml'],textConversions,...(skippedRules?{skippedRules}:{}),...(skippedCharts?{skippedCharts}:{})};if(!validXlsxSource(source))throw new Error('XLSX 工作表信息无效');for(const [key,value]of Object.entries(source))doc.getMap('sheetXlsx').set(key,value);
   if(doc.getMap('sheetCellTypes').size>10001)throw new Error('XLSX 类型覆盖超过 1 万，请拆分工作簿');return {doc,update:Y.encodeStateAsUpdate(doc)};
  }catch(error){doc.destroy();throw error;}
 }

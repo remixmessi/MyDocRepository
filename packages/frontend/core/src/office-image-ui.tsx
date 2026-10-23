@@ -4,15 +4,35 @@ import {Y} from '@mydoc/crdt';
 import {officeImageMime,createWordImage,OFFICE_IMAGE_COUNT,OFFICE_MEDIA_BYTES,officeImageNodes} from '../../../common/nbstore/src/office-image';
 import type {LocalWorkspace} from './workspace';
 import {createPresentationObject,presentationSize} from '../../../common/nbstore/src/office-presentation';
-export function OfficeImage({workspace,id,assetId,alt='图片'}:{workspace:LocalWorkspace;id:string;assetId:string;alt?:string}){
+import {validWordRevisionMark,wordRevisionColor,wordTrackingAuthor,markWordImageInserted,type WordRevisionMark} from '../../../common/nbstore/src/office-word-revision';
+/** A blob URL for a document picture, revoked on change or unmount; `retry` loads it again after an error. */
+export function useOfficeImageUrl(workspace:LocalWorkspace,id:string,assetId:string){
  const [state,setState]=useState<{url?:string;error?:string}>({}),[attempt,setAttempt]=useState(0);
  useEffect(()=>{let disposed=false,url:string|undefined;setState({});void workspace.documentAssets(id).get(assetId).then(asset=>{if(!asset)throw new Error('图片文件缺失或无权访问');officeImageMime(asset.bytes);if(disposed)return;url=URL.createObjectURL(new Blob([new Uint8Array(asset.bytes)],{type:asset.mime}));setState({url});}).catch(error=>{if(!disposed)setState({error:error instanceof Error?error.message:'图片加载失败'});});return()=>{disposed=true;if(url)URL.revokeObjectURL(url);};},[workspace,id,assetId,attempt]);
- if(state.error)return <span role="alert">{state.error}<button onClick={()=>setAttempt(value=>value+1)}>重试图片</button></span>;
+ return {...state,setState,retry:()=>setAttempt(value=>value+1)};
+}
+export function OfficeImage({workspace,id,assetId,alt='图片'}:{workspace:LocalWorkspace;id:string;assetId:string;alt?:string}){
+ const {retry,setState,...state}=useOfficeImageUrl(workspace,id,assetId);
+ if(state.error)return <span role="alert">{state.error}<button onClick={retry}>重试图片</button></span>;
  return state.url?<img src={state.url} alt={alt} className="office-image-content" onError={()=>setState({error:'图片无法解码，请重新插入有效图片'})}/>:<span role="status">正在加载图片…</span>;
+}
+/** A header/footer picture inside the page-margin button: no nested controls, a short text if it cannot load. */
+export function WordHeaderPicture({workspace,id,picture}:{workspace:LocalWorkspace;id:string;picture:{assetId:string;width:number;height:number;alt:string}}){
+ const {url,error}=useOfficeImageUrl(workspace,id,picture.assetId);
+ return <span className="word-margin-picture" style={{width:picture.width,aspectRatio:`${picture.width} / ${picture.height}`}}>{url?<img src={url} alt={picture.alt}/>:<span className="word-margin-placeholder">{error?'图片无法显示':'…'}</span>}</span>;
+}
+/**
+ * Checks a picture file against the document's image limits (count, 8 MB in total) and saves it as a document
+ * asset; the size is the natural size scaled down to fit `fit` pixels. The caller inserts the reference.
+ */
+export async function saveOfficeImage(workspace:LocalWorkspace,id:string,doc:Y.Doc,kind:'word'|'presentation',file:File,fit:number|{width:number;height:number}){
+ workspace.assertWritable(id);if(file.name.length>1000||/[\x00-\x1f]/.test(file.name))throw new Error('图片文件名称无效');const bytes=new Uint8Array(await file.arrayBuffer());officeImageMime(bytes);if(officeImageNodes(doc,kind).length>=OFFICE_IMAGE_COUNT)throw new Error('办公图片超过 1000 个');let total=bytes.length;for(const assetId of new Set(officeImageNodes(doc,kind).map(node=>String(node.get('assetId'))))){const existing=await workspace.documentAssets(id).get(assetId);if(!existing)throw new Error('已有图片缺失，请先处理');total+=existing.size;if(total>OFFICE_MEDIA_BYTES)throw new Error('办公图片总计不能超过 8 MB');}
+ const box=typeof fit==='number'?{width:fit,height:fit}:fit,blobUrl=URL.createObjectURL(new Blob([bytes]));let width=320,height=240;try{const image=new Image();image.src=blobUrl;await image.decode();const scale=Math.min(1,box.width/image.naturalWidth,box.height/image.naturalHeight);width=image.naturalWidth*scale;height=image.naturalHeight*scale;}finally{URL.revokeObjectURL(blobUrl);}
+ const asset=await workspace.documentAssets(id).save(file,true);workspace.assertWritable(id);return {asset,width,height};
 }
 export function InsertOfficeImage({workspace,id,doc,target,kind,disabled,onPresentationImage}:{workspace:LocalWorkspace;id:string;doc:Y.Doc;target:Y.Array<Y.Map<unknown>|Y.Text>|Y.Array<Y.Map<unknown>>;kind:'word'|'presentation';disabled:boolean;onPresentationImage?:(assetId:string,geometry:{width:number;height:number})=>Promise<void>}){
  const input=useRef<HTMLInputElement>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const insert=async(file:File)=>{setBusy(true);setError('');try{workspace.assertWritable(id);if(file.name.length>1000||/[\x00-\x1f]/.test(file.name))throw new Error('图片文件名称无效');const bytes=new Uint8Array(await file.arrayBuffer());officeImageMime(bytes);if(officeImageNodes(doc,kind).length>=OFFICE_IMAGE_COUNT)throw new Error('办公图片超过 1000 个');let total=bytes.length;for(const assetId of new Set(officeImageNodes(doc,kind).map(node=>String(node.get('assetId'))))){const existing=await workspace.documentAssets(id).get(assetId);if(!existing)throw new Error('已有图片缺失，请先处理');total+=existing.size;if(total>OFFICE_MEDIA_BYTES)throw new Error('办公图片总计不能超过 8 MB');}const blobUrl=URL.createObjectURL(new Blob([bytes]));let width=320,height=240;try{const image=new Image();image.src=blobUrl;await image.decode();const scale=Math.min(1,640/image.naturalWidth,640/image.naturalHeight);width=image.naturalWidth*scale;height=image.naturalHeight*scale;}finally{URL.revokeObjectURL(blobUrl);}const asset=await workspace.documentAssets(id).save(file,true);workspace.assertWritable(id);if(kind==='word')target.push([createWordImage(asset.id,width,height,file.name)]);else{if(!target.doc||target._item?.deleted)throw new Error('目标幻灯片已删除，请重新插入');const size=presentationSize(doc),ratio=height/width*size.width/size.height,imageWidth=Math.min(0.5,0.8/ratio);if(onPresentationImage)await onPresentationImage(asset.id,{width:imageWidth,height:imageWidth*ratio});else{const object=createPresentationObject('image');object.set('assetId',asset.id);object.set('width',imageWidth);object.set('height',imageWidth*ratio);target.push([object]);}}}catch(e){setError(e instanceof Error?e.message:'插入失败');}finally{setBusy(false);if(input.current)input.current.value='';}};
+ const insert=async(file:File)=>{setBusy(true);setError('');try{const {asset,width,height}=await saveOfficeImage(workspace,id,doc,kind,file,640);if(kind==='word'){const image=createWordImage(asset.id,width,height,file.name),author=wordTrackingAuthor(doc);if(author)markWordImageInserted(image,author);target.push([image]);}else{if(!target.doc||target._item?.deleted)throw new Error('目标幻灯片已删除，请重新插入');const size=presentationSize(doc),ratio=height/width*size.width/size.height,imageWidth=Math.min(0.5,0.8/ratio);if(onPresentationImage)await onPresentationImage(asset.id,{width:imageWidth,height:imageWidth*ratio});else{const object=createPresentationObject('image');object.set('assetId',asset.id);object.set('width',imageWidth);object.set('height',imageWidth*ratio);target.push([object]);}}}catch(e){setError(e instanceof Error?e.message:'插入失败');}finally{setBusy(false);if(input.current)input.current.value='';}};
  return <span className="office-image-insert"><input ref={input} type="file" accept="image/png,image/jpeg" aria-label="选择办公图片" hidden onChange={e=>{const file=e.target.files?.[0];if(file)void insert(file);}}/><button disabled={disabled||busy} onClick={()=>input.current?.click()}>{busy?'正在插入图片…':'插入图片'}</button>{error&&<span role="alert">{error}</span>}</span>;
 }
 const MAX_IMAGE_SIZE=10000;
@@ -41,7 +61,8 @@ export function WordImageEditor({block,workspace,id,disabled,onDelete}:{block:Y.
  };
  const keys=(event:React.KeyboardEvent<HTMLElement>)=>{if(event.target!==event.currentTarget||disabled)return;if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();onDelete();}};
  const place=()=>{const element=figure.current;if(element)setBelow(element.offsetTop<64);};
- return <figure ref={figure} className="office-word-image" tabIndex={0} aria-label="图片" title="点击选中，拖动角点调整大小" onFocus={place} onKeyDown={keys} data-toolbar={below?'below':undefined}>
+ const revision=validWordRevisionMark(block.get('del'))?'del':validWordRevisionMark(block.get('ins'))?'ins':undefined,revisionMark=revision&&block.get(revision) as WordRevisionMark|undefined,itemId=block._item?.id;
+ return <figure ref={figure} className="office-word-image" data-word-image={itemId?`${itemId.client}:${itemId.clock}`:undefined} data-revision={revision} style={revisionMark?{['--revision-color' as string]:wordRevisionColor(revisionMark.author)}:undefined} tabIndex={0} aria-label={revision==='del'?'图片（已删除，待审阅）':revision==='ins'?'图片（新插入，待审阅）':'图片'} title="点击选中，拖动角点调整大小" onFocus={place} onKeyDown={keys} data-toolbar={below?'below':undefined}>
   <div className="office-word-image-frame" style={{width:shown.width,aspectRatio:`${shown.width} / ${shown.height}`,maxWidth:'100%'}}><OfficeImage workspace={workspace} id={id} assetId={String(block.get('assetId'))} alt={String(block.get('alt'))}/>
    {!disabled&&(['nw','ne','sw','se'] as const).map(corner=><span key={corner} className="word-image-handle" data-corner={corner} aria-hidden="true" onPointerDown={event=>resize(event,corner)}/>)}
    {drag&&<span className="word-image-size-tip" aria-hidden="true">{drag.width} × {drag.height}</span>}
