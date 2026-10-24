@@ -8,8 +8,10 @@ import {validWordFontSize,validWordColor,validWordHighlight,validWordVertAlign,v
 import {validWordPage} from '../../../../common/nbstore/src/office-word-page';
 import {validWordHeaderFooter,parseWordHeaderImageKey,WORD_HEADER_IMAGE_MAX} from '../../../../common/nbstore/src/office-word-header';
 import {validWordRevisionMark,validWordRunFormatMark,validWordParagraphFormatMark,wordRevisionMarks,WORD_RUN_FORMAT_VALID,WORD_PARAGRAPH_FORMAT_VALID} from '../../../../common/nbstore/src/office-word-revision';
-import {readWordHeaderFooter} from './office-word-headers';
+import {readWordHeaderFooter,wordHeaderXmls} from './office-word-headers';
 import {readWordPage} from './office-word-page';
+import {isWordToc,validateWordToc,createWordToc,validWordWatermark,validWordNoteId,validateWordNotes,createWordNote,WORD_TOC_LIMIT,WORD_NOTE_CHAR,WORD_NOTE_LIMITS} from '../../../../common/nbstore/src/office-word-reference';
+import {replaceWordTocs,readWordWatermark,readWordNoteBodies,WORD_TOC_MARKER} from './office-word-reference';
 import {validWordAlignment,validWordLeftIndent,validWordRightIndent,validWordFirstLineIndent,validWordLineSpacing,validWordParagraphSpace} from '../../../../common/nbstore/src/office-word-layout';
 import {wordLayoutReader} from './office-word-layout';
 import {validWordLink} from '../../../../common/nbstore/src/office-word-link';
@@ -48,7 +50,7 @@ function runAttributes(xml:string){
 }
 export function encodeDocxWord(bytes:Uint8Array){
  const files=readOfficePackage(bytes),data=files['word/document.xml'];if(!data)throw new Error('DOCX 缺少正文');
- const xml=readOfficeXml(data),headingFor=wordHeadingReader(files['word/styles.xml']),listFor=wordListReader(files['word/numbering.xml'],files['word/styles.xml']),linkFor=wordLinkReader(files['word/_rels/document.xml.rels']),layoutFor=wordLayoutReader(files['word/styles.xml']),runStyleFor=wordRunStyleReader(files['word/styles.xml']),doc=new Y.Doc(),paragraphs=doc.getArray<WordBlock>('paragraphs');
+ const xml=replaceWordTocs(readOfficeXml(data)),headingFor=wordHeadingReader(files['word/styles.xml']),listFor=wordListReader(files['word/numbering.xml'],files['word/styles.xml']),linkFor=wordLinkReader(files['word/_rels/document.xml.rels']),layoutFor=wordLayoutReader(files['word/styles.xml']),runStyleFor=wordRunStyleReader(files['word/styles.xml']),doc=new Y.Doc(),paragraphs=doc.getArray<WordBlock>('paragraphs');
  try{
   // Body and header pictures share one registry, so a logo used in both is stored once.
   const registry=new Map<string,OfficeMedia>(),images=packageImageReader(files,'word/document.xml',registry);
@@ -57,6 +59,9 @@ export function encodeDocxWord(bytes:Uint8Array){
    const spans=[...source.matchAll(/<w:(ins|del)\b([^>]*?)>([\s\S]*?)<\/w:\1>/g)].map(span=>({kind:span[1] as 'ins'|'del',start:span.index!,end:span.index!+span[0].length,attributes:span[2]}));
    for(const drawing of source.matchAll(/<w:drawing\b[\s\S]*?<\/w:drawing>/g)){const span=spans.find(item=>drawing.index!>=item.start&&drawing.index!<item.end);const value=drawing[0],embed=/\br:embed\s*=\s*(["'])(.*?)\1/.exec(value)?.[2];if(!embed)throw new Error('DOCX 图片缺少内嵌关系');const extent=/<wp:extent\b([^>]*?)\/?>/.exec(value)?.[1]??'',width=Number(/\bcx=["'](\d+)["']/.exec(extent)?.[1])/9525,height=Number(/\bcy=["'](\d+)["']/.exec(extent)?.[1])/9525;const alt=/<wp:docPr\b[^>]*\bdescr=(["'])(.*?)\1/.exec(value)?.[2]??'图片';const image=createWordImage(images.read(embed),width,height,decodeWordXml(alt));if(span)image.set(span.kind,revisionMark(revisionOf(span.kind,span.attributes)));paragraphs.push([image]);}};
   const page=readWordPage(xml);if(page)doc.getMap('pageSettings').set('layout',page);
+  {const watermark=readWordWatermark(wordHeaderXmls(files,xml),page??{width:11906,height:16838,top:1440,right:1440,bottom:1440,left:1440});if(watermark)doc.getMap('pageSettings').set('watermark',watermark);}
+  // Footnote and endnote references become a note character with the body text stored in wordNotes.
+  const noteBodies={footnote:readWordNoteBodies(files,'footnote'),endnote:readWordNoteBodies(files,'endnote')};let noteCount=0;
   const headerFooter=readWordHeaderFooter(files,xml,registry);if(headerFooter?.value){doc.getMap('pageSettings').set('headerFooter',headerFooter.value);
    if(Object.keys(headerFooter.images).length){const map=new Y.Map<Y.Map<unknown>>();for(const [key,image]of Object.entries(headerFooter.images))map.set(key,createWordImage(image.assetId,image.width,image.height,image.alt));doc.getMap('pageSettings').set('headerImages',map);}}
   // Revisions keep Word's author and date; the id is made unique per kind so ins/del of one edit stay distinct.
@@ -84,7 +89,8 @@ export function encodeDocxWord(bytes:Uint8Array){
     const style=(xml:string)=>({...runStyleFor(paragraphStyle&&decodeWordXml(paragraphStyle),wordRunProperties(xml),!!heading),...runAttributes(xml)}) as Record<string,unknown>,current=style(run.xml);
     // w:rPrChange holds the run properties before a tracked formatting change.
     const change=/<w:rPrChange\b([^>]*?)(?:\/>|>([\s\S]*?)<\/w:rPrChange>)/.exec(run.xml),format=change?formatRevision(current,style(`<w:r><w:rPr>${/<w:rPr(?:\s[^>]*)?>([\s\S]*?)<\/w:rPr>/.exec(change[2]??'')?.[1]??''}</w:rPr></w:r>`),WORD_RUN_FORMAT_VALID,revisionOf('fmt',change[1])):undefined;
-    text.insert(text.length,value,{...current,...(run.href?{href:run.href}:{}),...(run.revision?{[run.revision.kind]:revisionMark(run.revision)}:{}),...(format?{fmt:format}:{})});
+    const runMarks:Record<string,unknown>={...current,...(run.href?{href:run.href}:{}),...(run.revision?{[run.revision.kind]:revisionMark(run.revision)}:{}),...(format?{fmt:format}:{})};text.insert(text.length,value.replaceAll(WORD_NOTE_CHAR,''),runMarks);
+    for(const ref of run.xml.matchAll(/<w:(footnote|endnote)Reference\b([^>]*?)\/?>/g)){const kind=ref[1] as 'footnote'|'endnote',source=/\bw:id\s*=\s*(["'])(.*?)\1/.exec(ref[2])?.[2]??'';if(++noteCount>WORD_NOTE_LIMITS.notes)throw new Error('Word 脚注与尾注超过 1000 条');const id='docx-'+kind+'-'+noteCount;createWordNote(doc,id,kind,noteBodies[kind].get(source)??'');const {vertAlign:_,...marks}=runMarks;text.insert(text.length,WORD_NOTE_CHAR,{...marks,note:id});}
    }
   };
   let tables=0,cells=0;
@@ -102,7 +108,8 @@ export function encodeDocxWord(bytes:Uint8Array){
      if(cell.colSpan>1)text.setAttribute('colSpan',cell.colSpan);if(cell.rowSpan>1)text.setAttribute('rowSpan',cell.rowSpan);
     }));
     const layout=wordTableLayout(table);if([...layout.anchors.values()].reduce((n,a)=>n+a.colSpan*a.rowSpan,0)!==rows.length*rows[0].length)throw new Error('Word 合并单元格区域重叠或无效');
-   }else{const source=match[2]??'',hasImage=/<w:drawing\b/.test(source);if(hasImage&&/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/.test(source))throw new Error('图片与文字须放在独立段落，请先拆分图文混排段落');
+   }else if(new RegExp(`<w:pStyle w:val="${WORD_TOC_MARKER}-(\\d)"`).test(match[2]??'')){pendingBreak=undefined;paragraphs.push([createWordToc(Number(new RegExp(`${WORD_TOC_MARKER}-(\\d)`).exec(match[2]!)![1]) as 1|2|3)]);}
+   else{const source=match[2]??'',hasImage=/<w:drawing\b/.test(source);if(hasImage&&/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/.test(source))throw new Error('图片与文字须放在独立段落，请先拆分图文混排段落');
     if(!hasImage){const text=new Y.Text();paragraphs.push([text]);fill(text,source);if(pendingBreak&&paragraphs.length>1&&paragraphs.get(paragraphs.length-2) instanceof Y.Text)text.setAttribute(pendingBreak.kind,pendingBreak.mark);}else appendImages(source);
     pendingBreak=hasImage?undefined:paragraphMark(source);}
    if(paragraphs.length>MAX_WORD_PARAGRAPHS)throw new Error('Word 段落超过 10 万');
@@ -121,23 +128,24 @@ export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,opt
  try{
   if(current)Y.applyUpdate(doc,current);Y.applyUpdate(doc,update);
   if(doc.store.pendingStructs||doc.store.pendingDs)throw new Error('Word 更新缺少依赖，请重新同步');
-  validateOfficeComments(doc);if([...doc.share.keys()].some(key=>!['officeComments','officeCommentOperations','paragraphs','pageSettings','wordTableOperations'].includes(key))||paragraphs._map.size)throw new Error('Word 更新包含非法根结构');
+  validateOfficeComments(doc);if([...doc.share.keys()].some(key=>!['officeComments','officeCommentOperations','paragraphs','pageSettings','wordTableOperations','wordNotes'].includes(key))||paragraphs._map.size)throw new Error('Word 更新包含非法根结构');validateWordNotes(doc);
   if(doc.share.has('wordTableOperations')){const receipts=doc.getMap('wordTableOperations');if(receipts.size>10000||[...receipts.values()].some(value=>typeof value!=='string'||!/^[a-f0-9]{64}:(\d+-\d+)?$/.test(value)))throw new Error('Word 表格操作回执无效');}
   if(current){const previous=new Y.Doc();try{Y.applyUpdate(previous,current);
    const receipts=(value:Y.Doc)=>JSON.stringify(value.share.has('wordTableOperations')?value.getMap('wordTableOperations').toJSON():{});if(receipts(previous)!==receipts(doc))throw new Error('请通过表格操作接口修改表格结构');
    if(options.lockTables){const after=tableStructures(doc);for(const [table,structure]of tableStructures(previous)){const next=after.get(table);if(next!==undefined&&next!==structure)throw new Error('团队文档的表格行列与合并请通过表格工具修改，请刷新后重试');}}
   }finally{previous.destroy();}}
   // pageSettings: `layout` (paper and margins) and optional `headerFooter`; either may be absent.
-  if(settings._start||[...settings.keys()].some(key=>!['layout','headerFooter','headerImages','trackChanges'].includes(key))||settings.has('trackChanges')&&typeof settings.get('trackChanges')!=='boolean'||settings.has('layout')&&!validWordPage(settings.get('layout'))||settings.has('headerFooter')&&!validWordHeaderFooter(settings.get('headerFooter')))throw new Error('Word 页面设置无效');
+  if(settings._start||[...settings.keys()].some(key=>!['layout','headerFooter','headerImages','trackChanges','watermark'].includes(key))||settings.has('watermark')&&!validWordWatermark(settings.get('watermark'))||settings.has('trackChanges')&&typeof settings.get('trackChanges')!=='boolean'||settings.has('layout')&&!validWordPage(settings.get('layout'))||settings.has('headerFooter')&&!validWordHeaderFooter(settings.get('headerFooter')))throw new Error('Word 页面设置无效');
   // headerImages: one picture per header/footer slot. Pictures of a variant that was switched off are ignored, not
   // rejected, because two members' concurrent edits can legitimately leave them behind.
   let images=0;if(settings.has('headerImages')){const map=settings.get('headerImages');if(!(map instanceof Y.Map)||map._start||[...map.entries()].some(([key,image])=>!parseWordHeaderImageKey(key)||!isWordImage(image)))throw new Error('Word 页眉页脚图片无效');for(const image of map.values()){validateWordImage(image as Y.Map<unknown>);if(Number((image as Y.Map<unknown>).get('width'))>WORD_HEADER_IMAGE_MAX.width||Number((image as Y.Map<unknown>).get('height'))>WORD_HEADER_IMAGE_MAX.height)throw new Error('Word 页眉页脚图片过大');images++;}}
   if(paragraphs.length>MAX_WORD_PARAGRAPHS)throw new Error('Word 段落超过 10 万');
   let length=0,fragments=0;const lists=new Map<string,WordList>(),links=new Set<string>(),revisions=new Map<string,string>();
-  const texts:Y.Text[]=[],cellTexts=new Set<Y.Text>();let tables=0,cells=0;
+  const texts:Y.Text[]=[],cellTexts=new Set<Y.Text>();let tables=0,cells=0,tocs=0;
   for(const block of paragraphs.toArray()){
    if(block instanceof Y.Text){texts.push(block);continue;}
    if(isWordImage(block)){validateWordImage(block,true);if(++images>OFFICE_IMAGE_COUNT)throw new Error('Word 图片超过 1000 个');continue;}
+   if(isWordToc(block)){validateWordToc(block);if(++tocs>WORD_TOC_LIMIT)throw new Error('Word 目录最多 20 个');continue;}
    if(!(block instanceof Y.Map)||++tables>WORD_TABLE_LIMITS.tables)throw new Error('Word 表格结构或数量无效');
    const contents=validateWordTable(block);cells+=contents.length;if(cells>WORD_TABLE_LIMITS.cells)throw new Error('Word 单元格超过 2 万');texts.push(...contents);for(const cell of contents)cellTexts.add(cell);
   }
@@ -152,7 +160,7 @@ export function validateWordUpdate(current:Uint8Array|null,update:Uint8Array,opt
     if(++fragments>200_000)throw new Error('Word 格式片段过多');
     if(typeof part.attributes?.href==='string'){links.add(part.attributes.href);if(links.size>9998)throw new Error('Word 超链接数量过多');}
     if(typeof part.insert!=='string')throw new Error('Word 不支持嵌入对象');
-    if(Object.entries(part.attributes??{}).some(([key,attribute])=>key==='fontSize'?!validWordFontSize(attribute):key==='color'?!validWordColor(attribute):key==='highlight'?!validWordHighlight(attribute):key==='vertAlign'?!validWordVertAlign(attribute):key==='fontFamily'?!validWordFontFamily(attribute):key==='href'?!validWordLink(attribute):key==='ins'||key==='del'?!validWordRevisionMark(attribute):key==='fmt'?!validWordRunFormatMark(attribute):!MARKS.includes(key)||typeof attribute!=='boolean'))throw new Error('Word 不支持该富文本属性');
+    if(Object.entries(part.attributes??{}).some(([key,attribute])=>key==='fontSize'?!validWordFontSize(attribute):key==='color'?!validWordColor(attribute):key==='highlight'?!validWordHighlight(attribute):key==='vertAlign'?!validWordVertAlign(attribute):key==='fontFamily'?!validWordFontFamily(attribute):key==='href'?!validWordLink(attribute):key==='ins'||key==='del'?!validWordRevisionMark(attribute):key==='fmt'?!validWordRunFormatMark(attribute):key==='note'?!validWordNoteId(attribute):!MARKS.includes(key)||typeof attribute!=='boolean'))throw new Error('Word 不支持该富文本属性');
    }
   }
   // One revision id has one author, name and time wherever it appears (text, formatting, paragraph marks, pictures).

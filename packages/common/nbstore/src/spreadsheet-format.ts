@@ -1,15 +1,29 @@
 import * as Y from 'yjs';
 import {sheetColumnIds,sheetRowIdentity} from './sheet-columns';
-export interface SheetCellFormat {bold?:true;italic?:true;underline?:true;color?:string;fill?:string;align?:'left'|'center'|'right';numberFormat?:string;}
-export const SHEET_FORMAT_KEYS=['bold','italic','underline','color','fill','align','numberFormat'] as const;
+/** Border of one cell side: `style` or `style:RRGGBB` (Excel line styles that browsers can draw). */
+export const SHEET_BORDER_STYLES=['thin','medium','thick','dashed','dotted','double'] as const;
+export type SheetBorderStyle=typeof SHEET_BORDER_STYLES[number];
+export const SHEET_BORDER_SIDES=['borderTop','borderRight','borderBottom','borderLeft'] as const;
+export type SheetBorderSide=typeof SHEET_BORDER_SIDES[number];
+export interface SheetCellFormat {bold?:true;italic?:true;underline?:true;strike?:true;fontSize?:number;color?:string;fill?:string;align?:'left'|'center'|'right';verticalAlign?:'top'|'middle'|'bottom';wrap?:true;borderTop?:string;borderRight?:string;borderBottom?:string;borderLeft?:string;numberFormat?:string;}
+export const SHEET_FORMAT_KEYS=['bold','italic','underline','strike','fontSize','color','fill','align','verticalAlign','wrap',...SHEET_BORDER_SIDES,'numberFormat'] as const;
 export const SHEET_FORMAT_LIMITS={formats:50000,merges:10000,batch:2000,span:1000};
+/** Default font size in points (Calibri 11 in Excel/WPS); cells without `fontSize` use it. */
+export const SHEET_DEFAULT_FONT_SIZE=11;
+export const SHEET_FONT_SIZES=[8,9,10,11,12,14,16,18,20,24,28,36,48,72];
 export const SHEET_NUMBER_FORMATS=['0','0.00','#,##0','#,##0.00','0%','0.00%','¥#,##0.00','$#,##0.00','yyyy-mm-dd','yyyy/m/d','yyyy年m月d日','hh:mm','hh:mm:ss','yyyy-mm-dd hh:mm','@'];
 export const validSheetNumberFormat=(value:unknown):value is string=>typeof value==='string'&&value!=='General'&&value.length>=1&&value.length<=64&&!/[\x00-\x1f]/.test(value);
 const color=(value:unknown)=>typeof value==='string'&&/^[0-9A-F]{6}$/.test(value);
+export function parseSheetBorder(value:unknown):{style:SheetBorderStyle;color:string}|undefined{
+ if(typeof value!=='string')return;const [style,hex,...rest]=value.split(':');if(rest.length||!SHEET_BORDER_STYLES.includes(style as SheetBorderStyle)||hex!==undefined&&!color(hex))return;return {style:style as SheetBorderStyle,color:hex??'000000'};
+}
+export const validSheetFontSize=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)&&value>=6&&value<=96&&Math.round(value*10)===value*10;
 export function validSheetCellFormat(value:unknown):value is SheetCellFormat{
  if(!value||typeof value!=='object'||Array.isArray(value)||value instanceof Y.AbstractType)return false;const v=value as Record<string,unknown>,keys=Object.keys(v);
- return keys.length>0&&keys.every(key=>(SHEET_FORMAT_KEYS as readonly string[]).includes(key))&&['bold','italic','underline'].every(key=>v[key]===undefined||v[key]===true)&&['color','fill'].every(key=>v[key]===undefined||color(v[key]))&&(v.align===undefined||['left','center','right'].includes(v.align as string))&&(v.numberFormat===undefined||validSheetNumberFormat(v.numberFormat));
+ return keys.length>0&&keys.every(key=>(SHEET_FORMAT_KEYS as readonly string[]).includes(key))&&['bold','italic','underline','strike','wrap'].every(key=>v[key]===undefined||v[key]===true)&&['color','fill'].every(key=>v[key]===undefined||color(v[key]))&&(v.align===undefined||['left','center','right'].includes(v.align as string))&&(v.verticalAlign===undefined||['top','middle','bottom'].includes(v.verticalAlign as string))&&(v.fontSize===undefined||validSheetFontSize(v.fontSize))&&SHEET_BORDER_SIDES.every(key=>v[key]===undefined||!!parseSheetBorder(v[key]))&&(v.numberFormat===undefined||validSheetNumberFormat(v.numberFormat));
 }
+/** CSS for one border side (double needs 3 px to show both lines). */
+export function sheetBorderCss(value:string|undefined){const border=parseSheetBorder(value);if(!border)return;const width={thin:1,medium:2,thick:3,dashed:1,dotted:1,double:3}[border.style],line=['dashed','dotted','double'].includes(border.style)?border.style:'solid';return `${width}px ${line} #${border.color}`;}
 export const validSheetMerge=(value:unknown):value is {rowSpan:number;colSpan:number}=>!!value&&typeof value==='object'&&!Array.isArray(value)&&!(value instanceof Y.AbstractType)&&Object.keys(value).length===2&&['rowSpan','colSpan'].every(key=>Number.isInteger((value as Record<string,unknown>)[key])&&Number((value as Record<string,unknown>)[key])>=1&&Number((value as Record<string,unknown>)[key])<=SHEET_FORMAT_LIMITS.span)&&(value as {rowSpan:number}).rowSpan*(value as {colSpan:number}).colSpan>=2;
 /** Keys use stable row and column identities so formats and merges follow structure edits. */
 export const sheetCellKey=(sheetId:string,rowKey:string,columnKey:string)=>sheetId+':'+rowKey+':'+columnKey;

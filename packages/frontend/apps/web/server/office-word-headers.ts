@@ -4,6 +4,8 @@ import {decodeWordXml} from './office-word-link';
 import {packageImageReader,type OfficeMedia} from './office-media';
 import {validWordHeaderFooter,WORD_PAGE_TOKEN,WORD_PAGES_TOKEN,WORD_HEADER_LINES,WORD_HEADER_SLOTS,WORD_HEADER_IMAGE_MAX,wordHeaderParts,wordHeaderImageKey,emptyWordLine,type WordHeaderFooter,type WordHeaderLine,type WordHeaderPair,type WordHeaderPart,type WordHeaderScope,type WordHeaderSlot} from '../../../../common/nbstore/src/office-word-header';
 import type {WordPageLayout} from '../../../../common/nbstore/src/office-word-page';
+import type {WordWatermark} from '../../../../common/nbstore/src/office-word-reference';
+import {wordWatermarkXml,WORD_VML_NAMESPACES} from './office-word-reference';
 
 /** A header/footer picture as stored in `pageSettings.headerImages` (the Word image map fields). */
 export type WordHeaderImage={assetId:string;width:number;height:number;alt:string};
@@ -60,10 +62,21 @@ function readLine(xml:string,image:(drawing:string)=>WordHeaderImage|undefined){
  * `wordHeaderImageKey`) and the picture media; undefined when the document has none. Even pages only count when
  * settings.xml turns on evenAndOddHeaders, as in Word. Pictures that cannot be read are skipped.
  */
-export function readWordHeaderFooter(files:Record<string,Uint8Array>,documentXml:string,registry?:Map<string,OfficeMedia>):{value?:WordHeaderFooter;images:Record<string,WordHeaderImage>;media:OfficeMedia[]}|undefined{
- const sections=[...documentXml.replace(/<w:sectPrChange\b[^>]*>[\s\S]*?<\/w:sectPrChange>/g,'').matchAll(/<w:sectPr(?=\s|\/|>)(?:[^>]*\/\s*>|[^>]*>([\s\S]*?)<\/w:sectPr>)/g)],section=sections.at(-1)?.[1];if(!section)return;
+/** Relationship id → part path for document.xml (internal targets under word/ only). */
+function documentRelations(files:Record<string,Uint8Array>){
  const relations=new Map<string,string>(),rels=files['word/_rels/document.xml.rels'];
  if(rels)for(const item of readOfficeXml(rels).matchAll(/<Relationship\b([^>]*)\/?>/g)){const id=attr(item[1],'Id'),target=attr(item[1],'Target');if(id&&target&&attr(item[1],'TargetMode')!=='External'&&!/[\\:#?]/.test(target)){const path=target.startsWith('/')?target.slice(1):posix.normalize(posix.join('word',target));if(path.startsWith('word/')&&!path.split('/').includes('..'))relations.set(id,path);}}
+ return relations;
+}
+const lastSection=(documentXml:string)=>[...documentXml.replace(/<w:sectPrChange\b[^>]*>[\s\S]*?<\/w:sectPrChange>/g,'').matchAll(/<w:sectPr(?=\s|\/|>)(?:[^>]*\/\s*>|[^>]*>([\s\S]*?)<\/w:sectPr>)/g)].at(-1)?.[1];
+/** XML of every header part the last section references (for the watermark reader). */
+export function wordHeaderXmls(files:Record<string,Uint8Array>,documentXml:string){
+ const section=lastSection(documentXml),relations=documentRelations(files);if(!section)return [];
+ return [...section.matchAll(/<w:headerReference\b([^>]*)\/?>/g)].flatMap(ref=>{const path=relations.get(attr(ref[1],'r:id')??'');return path&&files[path]?[readOfficeXml(files[path])]:[];});
+}
+export function readWordHeaderFooter(files:Record<string,Uint8Array>,documentXml:string,registry?:Map<string,OfficeMedia>):{value?:WordHeaderFooter;images:Record<string,WordHeaderImage>;media:OfficeMedia[]}|undefined{
+ const section=lastSection(documentXml);if(!section)return;
+ const relations=documentRelations(files);
  const media:OfficeMedia[]=[],images:Record<string,WordHeaderImage>={},shared=registry??new Map<string,OfficeMedia>();
  const part=(scope:WordHeaderScope,kind:WordHeaderPart):WordHeaderLine=>{
   const type=scope==='main'?'default':scope;
@@ -98,7 +111,7 @@ type ExportImage={image:WordHeaderImage;file:string};
  * One header/footer part: one paragraph per line with centre and right tab stops at the middle and right edge of the
  * text area. A slot's picture is its first line; slots with fewer lines leave that tab position empty.
  */
-function partXml(kind:'hdr'|'ftr',line:WordHeaderLine,images:Partial<Record<WordHeaderSlot,ExportImage>>,page:WordPageLayout,drawingId:()=>number){
+function partXml(kind:'hdr'|'ftr',line:WordHeaderLine,images:Partial<Record<WordHeaderSlot,ExportImage>>,page:WordPageLayout,drawingId:()=>number,prefix=''){
  const width=page.width-page.left-page.right,relations:string[]=[],runs=(text:string)=>wordHeaderParts(text).map(part=>'field' in part?`<w:fldSimple w:instr=" ${part.field} "><w:r><w:t>1</w:t></w:r></w:fldSimple>`:`<w:r><w:t xml:space="preserve">${xmlText(part.text)}</w:t></w:r>`).join('');
  const cells=Object.fromEntries(WORD_HEADER_SLOTS.map(slot=>{
   const entry=images[slot],items=line[slot]?line[slot].split('\n').map(runs):[];
@@ -107,24 +120,27 @@ function partXml(kind:'hdr'|'ftr',line:WordHeaderLine,images:Partial<Record<Word
  })) as Record<WordHeaderSlot,string[]>;
  const rows=Math.max(1,...WORD_HEADER_SLOTS.map(slot=>cells[slot].length)),tab='<w:r><w:tab/></w:r>';
  const paragraphs=Array.from({length:rows},(_,row)=>{const [left,center,right]=WORD_HEADER_SLOTS.map(slot=>cells[slot][row]??'');return `<w:p><w:pPr><w:tabs><w:tab w:val="center" w:pos="${Math.round(width/2)}"/><w:tab w:val="right" w:pos="${width}"/></w:tabs></w:pPr>${left+(center||right?tab+center:'')+(right?tab+right:'')}</w:p>`;}).join('');
- return {xml:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${kind} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ${WORD_DRAWING_NAMESPACES}>${paragraphs}</w:${kind}>`,relations};
+ return {xml:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${kind} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ${WORD_DRAWING_NAMESPACES} ${WORD_VML_NAMESPACES}>${prefix}${paragraphs}</w:${kind}>`,relations};
 }
 /**
  * Parts, relationships, content types and sectPr references for export; empty when there is nothing to write.
  * `image` returns the media file name (under word/media/) of a stored picture and `drawingId` the next drawing id.
  */
-export function wordHeaderFooterParts(value:WordHeaderFooter|undefined,page:WordPageLayout,pictures:Record<string,WordHeaderImage>={},image:(assetId:string)=>string=()=>{throw new Error('页眉图片缺失');},drawingId:()=>number=()=>1){
- const files:Record<string,string>={},relations:string[]=[],types:string[]=[],references:string[]=[];if(!value)return {files,relations,types,references,titlePage:false,evenPages:false};
+export function wordHeaderFooterParts(value:WordHeaderFooter|undefined,page:WordPageLayout,pictures:Record<string,WordHeaderImage>={},image:(assetId:string)=>string=()=>{throw new Error('页眉图片缺失');},drawingId:()=>number=()=>1,watermark?:WordWatermark){
+ const files:Record<string,string>={},relations:string[]=[],types:string[]=[],references:string[]=[];
+ // A watermark lives in every header; a document with only a watermark gets an empty default header for it.
+ if(!value&&watermark){const empty={left:'',center:'',right:''};value={header:empty,footer:empty};}
+ if(!value)return {files,relations,types,references,titlePage:false,evenPages:false};let marks=0;
  const add=(kind:WordHeaderPart,scope:WordHeaderScope,line:WordHeaderLine,n:number)=>{
   const slots=Object.fromEntries(WORD_HEADER_SLOTS.flatMap(slot=>{const picture=pictures[wordHeaderImageKey(scope,kind,slot)];return picture?[[slot,{image:picture,file:image(picture.assetId)}]]:[];}));
-  const name=`${kind}${n}.xml`,id=`rId${kind==='header'?'Hdr':'Ftr'}${n}`,part=partXml(kind==='header'?'hdr':'ftr',line,slots,page,drawingId);files['word/'+name]=part.xml;
+  const name=`${kind}${n}.xml`,id=`rId${kind==='header'?'Hdr':'Ftr'}${n}`,part=partXml(kind==='header'?'hdr':'ftr',line,slots,page,drawingId,kind==='header'&&watermark?wordWatermarkXml(watermark,page,++marks):'');files['word/'+name]=part.xml;
   if(part.relations.length)files[`word/_rels/${name}.rels`]=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${part.relations.join('')}</Relationships>`;
   relations.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}" Target="${name}"/>`);
   types.push(`<Override PartName="/word/${name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${kind}+xml"/>`);references.push(`<w:${kind}Reference w:type="${scope==='main'?'default':scope}" r:id="${id}"/>`);
  };
  const has=(scope:WordHeaderScope,kind:WordHeaderPart)=>WORD_HEADER_SLOTS.some(slot=>pictures[wordHeaderImageKey(scope,kind,slot)]);
  // First-page and even-page variants are written even when empty, so a blank first or even page stays blank.
- for(const kind of ['header','footer'] as const)if(!emptyWordLine(value[kind])||has('main',kind))add(kind,'main',value[kind],1);
+ for(const kind of ['header','footer'] as const)if(!emptyWordLine(value[kind])||has('main',kind)||kind==='header'&&watermark)add(kind,'main',value[kind],1);
  if(value.first){add('header','first',value.first.header,2);add('footer','first',value.first.footer,2);}
  if(value.even){add('header','even',value.even.header,3);add('footer','even',value.even.footer,3);}
  // CT_SectPr: header references before footer references.

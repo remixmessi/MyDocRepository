@@ -75,13 +75,13 @@ it('原件原生批注：受限进程识别附注/高亮/手绘并一次性转�
  add({Type:'Annot',Subtype:'Square',Rect:[250,100,300,120],AP:{N:appearance}});
  add({Type:'Annot',Subtype:'Link',Rect:[10,10,60,30],A:{S:'URI',URI:PDFHexString.fromText('https://example.com/')}});
  const source=await pdf.save(),natives=readNativeAnnotations(await PDFDocument.load(source));
- expect(natives.map(native=>[native.subtype,!!native.annotation])).toEqual([['Text',true],['Highlight',true],['Ink',true],['Ink',false],['Square',false]]);expect(natives[0].annotation).toMatchObject({type:'comment',content:'原件附注 😀',x:30,y:400});expect(natives[0].author).toBe('原作者');expect(natives[3].reason).toContain('多笔画');
+ expect(natives.map(native=>[native.subtype,!!native.annotation])).toEqual([['Text',true],['Highlight',true],['Ink',true],['Ink',true],['Square',false]]);expect(natives[3].annotation).toMatchObject({points:[200,200,210,210,220,220,230,230],strokes:[2,2]});expect(natives[0].annotation).toMatchObject({type:'comment',content:'原件附注 😀',x:30,y:400});expect(natives[0].author).toBe('原作者');
  const pool=new OfficeParserPool();try{expect(JSON.parse(Buffer.from(await pool.pdfNativeAnnotations(source)).toString())).toHaveLength(5);}finally{pool.close();}
  const dir=mkdtempSync(join(tmpdir(),'mydoc-pdf-native-')),cloud=new CloudServer(join(dir,'cloud.sqlite'));try{
   const doc=new Y.Doc();doc.getArray('annotations');doc.getMap('pdfOperations').set('$schema','0'.repeat(64));cloud.database.append('cloud:space','pdf',Buffer.from(Y.encodeStateAsUpdate(doc)));
-  const operationId=randomUUID(),first=importNativePdfAnnotations(cloud.database,'space','pdf','actor',operationId,natives);Y.applyUpdate(doc,first.update);expect(first.imported).toBe(3);
+  const operationId=randomUUID(),first=importNativePdfAnnotations(cloud.database,'space','pdf','actor',operationId,natives);Y.applyUpdate(doc,first.update);expect(first.imported).toBe(4);
   expect(importNativePdfAnnotations(cloud.database,'space','pdf','actor',operationId,natives).repeated).toBe(true);expect(()=>importNativePdfAnnotations(cloud.database,'space','pdf','actor',randomUUID(),natives)).toThrow('已导入');
-  const annotations=doc.getArray<Y.Map<unknown>>('annotations');expect(annotations.length).toBe(3);expect(annotations.get(0).get('author')).toBe('原作者');expect(()=>validatePdfUpdate(null,Y.encodeStateAsUpdate(doc))).not.toThrow();
+  const annotations=doc.getArray<Y.Map<unknown>>('annotations');expect(annotations.length).toBe(4);expect(annotations.get(0).get('author')).toBe('原作者');expect(()=>validatePdfUpdate(null,Y.encodeStateAsUpdate(doc))).not.toThrow();
   // Edit one imported annotation and delete another, as the semantic operations would.
   annotations.get(0).set('content','协作修改后的附注');annotations.delete(1,1);
   const exported=await PDFDocument.load(await exportAnnotatedPdf(packPdfExport(Y.encodeStateAsUpdate(doc),source))),list=exported.getPage(0).node.lookup(PDFName.of('Annots'),PDFArray),subtypes=list.asArray().map((_,i)=>(list.lookup(i,PDFDict).get(PDFName.of('Subtype')) as PDFName).decodeText());

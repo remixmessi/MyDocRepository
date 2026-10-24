@@ -1,10 +1,18 @@
 import * as Y from 'yjs';
 export const LEGACY_SLIDE='first';
 export const MAX_PRESENTATION_SLIDES=200;
-export interface PresentationSlide {id:string;objects:Y.Array<Y.Map<unknown>>;notes:string;}
+/** Slide transitions with a direct PresentationML element (p:fade, p:push, …); absent means none. */
+export const PRESENTATION_TRANSITIONS=['fade','push','wipe','cover','zoom'] as const;
+export type PresentationTransition=typeof PRESENTATION_TRANSITIONS[number];
+export const PRESENTATION_TRANSITION_LABELS:Record<PresentationTransition,string>={fade:'淡出',push:'推入',wipe:'擦除',cover:'覆盖',zoom:'缩放'};
+export const validPresentationBackground=(value:unknown):value is string=>typeof value==='string'&&/^[0-9A-Fa-f]{6}$/.test(value);
+export const validPresentationTransition=(value:unknown):value is PresentationTransition=>PRESENTATION_TRANSITIONS.includes(value as never);
+export interface PresentationSlide {id:string;objects:Y.Array<Y.Map<unknown>>;notes:string;background?:string;transition?:PresentationTransition;}
+/** The first imported slide keeps its data on the legacy roots; its slide settings live on the `presentation` map. */
+function slideSettings(doc:Y.Doc,id:string){return id===LEGACY_SLIDE?(doc.share.has('presentation')?doc.getMap('presentation'):undefined):doc.getMap<Y.Map<unknown>>('slides').get(id);}
 export function presentationSlides(doc:Y.Doc):PresentationSlide[]{
  const order=doc.share.has('slideOrder')?doc.getArray<string>('slideOrder').toArray():[LEGACY_SLIDE];
- return order.map(id=>{const slide=id===LEGACY_SLIDE?undefined:doc.getMap<Y.Map<unknown>>('slides').get(id);return {id,objects:id===LEGACY_SLIDE?doc.getArray<Y.Map<unknown>>('objects'):slide!.get('objects') as Y.Array<Y.Map<unknown>>,notes:String(id===LEGACY_SLIDE?(doc.share.has('presentation')?doc.getMap('presentation').get('notes')??'':''):slide!.get('notes')??'')};});
+ return order.map(id=>{const slide=id===LEGACY_SLIDE?undefined:doc.getMap<Y.Map<unknown>>('slides').get(id),settings=slideSettings(doc,id),background=settings?.get('background'),transition=settings?.get('transition');return {id,objects:id===LEGACY_SLIDE?doc.getArray<Y.Map<unknown>>('objects'):slide!.get('objects') as Y.Array<Y.Map<unknown>>,notes:String(id===LEGACY_SLIDE?(doc.share.has('presentation')?doc.getMap('presentation').get('notes')??'':''):slide!.get('notes')??''),...(validPresentationBackground(background)?{background}:{}),...(validPresentationTransition(transition)?{transition}:{})};});
 }
 export function presentationSize(doc:Y.Doc){const meta=doc.share.has('presentation')?doc.getMap('presentation'):undefined;return {width:Number(meta?.get('width')??12192000),height:Number(meta?.get('height')??6858000)};}
 export function createPresentationObject(type='text'){
@@ -17,10 +25,17 @@ export function changePresentationSlide(doc:Y.Doc,action:'add'|'duplicate'|'dele
   const order=doc.getArray<string>('slideOrder');if(!order.length)order.push([LEGACY_SLIDE]);
   if(action==='add'||action==='duplicate'){
    selected=crypto.randomUUID();const slide=new Y.Map<unknown>(),objects=new Y.Array<Y.Map<unknown>>();slide.set('objects',objects);slide.set('notes',action==='duplicate'?current[index].notes:'');
+   // A new slide keeps the current background and transition, like a new slide in WPS/PowerPoint following the deck design.
+   if(current[index].background)slide.set('background',current[index].background);if(current[index].transition)slide.set('transition',current[index].transition);
    if(action==='duplicate')for(const object of current[index].objects)objects.push([object.clone()]);
    doc.getMap<Y.Map<unknown>>('slides').set(selected,slide);order.insert(index+1,[selected]);
-  }else if(action==='delete'){order.delete(index,1);if(id===LEGACY_SLIDE){const objects=doc.getArray('objects');objects.delete(0,objects.length);if(doc.share.has('presentation'))doc.getMap('presentation').delete('notes');}else doc.getMap('slides').delete(id);selected=order.get(Math.min(index,order.length-1));}
+  }else if(action==='delete'){order.delete(index,1);if(id===LEGACY_SLIDE){const objects=doc.getArray('objects');objects.delete(0,objects.length);if(doc.share.has('presentation'))for(const key of ['notes','background','transition'])doc.getMap('presentation').delete(key);}else doc.getMap('slides').delete(id);selected=order.get(Math.min(index,order.length-1));}
   else{const target=action==='up'?index-1:index+1;if(target<0||target>=order.length)return;order.delete(index,1);order.insert(target,[id]);}
  });return selected;
 }
 export function setPresentationNotes(doc:Y.Doc,id:string,notes:string){if(id===LEGACY_SLIDE)doc.getMap('presentation').set('notes',notes);else doc.getMap<Y.Map<unknown>>('slides').get(id)?.set('notes',notes);}
+/** Background and transition are plain slide settings (last writer wins, like notes). `ids` defaults to one slide; pass all ids for “应用到全部”. */
+export function setPresentationSlideSetting(doc:Y.Doc,ids:string[],key:'background'|'transition',value:string|undefined){
+ if(value!==undefined&&!(key==='background'?validPresentationBackground(value):validPresentationTransition(value)))throw new Error(key==='background'?'背景颜色无效':'切换效果无效');
+ doc.transact(()=>{for(const id of ids){const settings=id===LEGACY_SLIDE?doc.getMap('presentation'):doc.getMap<Y.Map<unknown>>('slides').get(id);if(!settings)continue;if(value===undefined)settings.delete(key);else settings.set(key,key==='background'?value.toUpperCase():value);}});
+}

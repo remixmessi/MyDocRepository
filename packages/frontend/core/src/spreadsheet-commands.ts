@@ -34,11 +34,18 @@ export function autoSumPlan(grid:string[][],range:SheetRange,fn='SUM'):{row:numb
  return Array.from({length:range.right-range.left+1},(_,i)=>range.left+i).map(c=>({row,column:c,formula:`=${fn}(${cellName(range.top,c)}:${cellName(range.bottom,c)})`}));
 }
 /** Sort whole rows of the range by one column. Numbers before text, empty cells last, stable. */
-export function sortedRows(grid:string[][],range:SheetRange,key:number,descending:boolean){
- const rows=Array.from({length:range.bottom-range.top+1},(_,i)=>range.top+i);
+export function sortedRows(grid:string[][],range:SheetRange,key:number,descending:boolean){return sortedRowsBy(grid,range,[{column:key,descending}]);}
+export type SheetSortKey={column:number;descending:boolean};
+/**
+ * 自定义排序: whole rows ordered by several keys in turn (the next key breaks ties). Within a key numbers come before
+ * text and empty cells last in either direction (only the order inside each group flips). `header` keeps the first row.
+ */
+export function sortedRowsBy(grid:string[][],range:SheetRange,keys:SheetSortKey[],header=false){
+ const rows=Array.from({length:range.bottom-range.top+1},(_,i)=>range.top+i),fixed=header?rows.splice(0,1):[];
  const rank=(value:string)=>{const text=value.trim();return !text?2:NUMBER.test(text)?0:1;};
- return [...rows].sort((a,b)=>{const x=grid[a]?.[key]??'',y=grid[b]?.[key]??'',rx=rank(x),ry=rank(y);if(rx!==ry)return rx-ry;if(rx===2)return 0;
-  const order=rx===0?Number(x)-Number(y):x.localeCompare(y,'zh-CN',{numeric:true});return descending?-order:order;});
+ const compare=(a:number,b:number,{column,descending}:SheetSortKey)=>{const x=grid[a]?.[column]??'',y=grid[b]?.[column]??'',rx=rank(x),ry=rank(y);if(rx!==ry)return rx-ry;if(rx===2)return 0;
+  const order=rx===0?Number(x)-Number(y):x.localeCompare(y,'zh-CN',{numeric:true});return descending?-order:order;};
+ return [...fixed,...rows.sort((a,b)=>{for(const key of keys){const order=compare(a,b,key);if(order)return order;}return 0;})];
 }
 /** Shift the number of decimals in a simple number format (`0`, `0.00`, `#,##0.0`, `0.0%`). */
 export function adjustDecimals(code:string|undefined,delta:1|-1){
@@ -60,4 +67,39 @@ export function rangeToTsv(grid:string[][],range:SheetRange){
 }
 export function cellEdits(sheet:Y.Array<Y.Array<string>>,edits:{row:number;column:number;value:string;cellType?:SpreadsheetCellType}[]):SheetCellEdit[]{
  return edits.map(edit=>({row:edit.row,column:edit.column,value:edit.value,base:cellRevision(sheet,edit.row,edit.column),...(edit.cellType?{cellType:edit.cellType}:{})}));
+}
+/** Border presets of the ribbon (所有框线、外侧框线、上/下/左/右框线、粗外框、无框线) as per-cell patches. */
+export type BorderPreset='all'|'outside'|'thickOutside'|'top'|'bottom'|'left'|'right'|'none';
+export function borderPatches(range:SheetRange,preset:BorderPreset,line='thin'):{row:number;column:number;format:Record<string,string|null>}[]{
+ const result:{row:number;column:number;format:Record<string,string|null>}[]=[],outer=preset==='thickOutside'?'thick':line;
+ for(let r=range.top;r<=range.bottom;r++)for(let c=range.left;c<=range.right;c++){
+  const edge={borderTop:r===range.top,borderBottom:r===range.bottom,borderLeft:c===range.left,borderRight:c===range.right},format:Record<string,string|null>={};
+  if(preset==='none')Object.assign(format,{borderTop:null,borderBottom:null,borderLeft:null,borderRight:null});
+  else if(preset==='all')Object.assign(format,{borderTop:line,borderBottom:line,borderLeft:line,borderRight:line});
+  else if(preset==='outside'||preset==='thickOutside'){for(const [side,on]of Object.entries(edge))if(on)format[side]=outer;}
+  else{const side=({top:'borderTop',bottom:'borderBottom',left:'borderLeft',right:'borderRight'} as const)[preset];if(edge[side])format[side]=line;}
+  if(Object.keys(format).length)result.push({row:r,column:c,format});
+ }
+ return result;
+}
+/**
+ * 删除重复项: rows of the range whose values in `keys` (absolute columns) repeat an earlier row are removed; the kept
+ * rows move up in order and the freed rows at the bottom are cleared. Text is compared case-insensitively after trimming.
+ */
+export function dedupePlan(grid:string[][],range:SheetRange,keys:number[],header:boolean){
+ const start=range.top+(header?1:0),seen=new Set<string>(),kept:number[]=[];
+ for(let r=start;r<=range.bottom;r++){const key=JSON.stringify(keys.map(c=>(grid[r]?.[c]??'').trim().toLowerCase()));if(seen.has(key))continue;seen.add(key);kept.push(r);}
+ const order=[...kept,...Array.from({length:range.bottom-start+1-kept.length},()=>-1)],edits:{row:number;column:number;value:string;source:number}[]=[];
+ order.forEach((source,i)=>{const target=start+i;for(let c=range.left;c<=range.right;c++){const value=source<0?'':grid[source]?.[c]??'';if(value!==(grid[target]?.[c]??''))edits.push({row:target,column:c,value,source});}});
+ return {removed:range.bottom-start+1-kept.length,kept:kept.length,edits};
+}
+/** 分列: split one column by a delimiter into it and the columns to its right. */
+export function splitPlan(grid:string[][],range:SheetRange,column:number,delimiter:string,width:number){
+ if(!delimiter)return {edits:[],overwrite:0,overflow:false,columns:0};const edits:{row:number;column:number;value:string}[]=[];let overwrite=0,columns=1,overflow=false;
+ for(let r=range.top;r<=range.bottom;r++){
+  const value=grid[r]?.[column]??'';if(!value||value.trim().startsWith('='))continue;const parts=(delimiter===' '?value.trim().split(/\s+/):value.split(delimiter)).map(part=>part.trim());if(parts.length<2)continue;
+  columns=Math.max(columns,parts.length);if(column+parts.length>width){overflow=true;continue;}
+  parts.forEach((part,i)=>{const c=column+i,current=grid[r]?.[c]??'';if(i&&current!=='')overwrite++;if(part!==current)edits.push({row:r,column:c,value:part});});
+ }
+ return {edits,overwrite,overflow,columns};
 }

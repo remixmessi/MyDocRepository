@@ -20,8 +20,13 @@ export type ConditionalRule=
 export type SheetConditionalFormat={kind:'conditional';sheet:string;range:SheetRangeKeys;rule:ConditionalRule;priority:number};
 export type SheetChartType='column'|'bar'|'line'|'pie'|'area';
 export type SheetChart={kind:'chart';sheet:string;range:SheetRangeKeys;chartType:SheetChartType;title:string;seriesInRows?:true;legend:boolean;anchor:{row:string;column:string};width:number;height:number};
-export type SheetObject=SheetConditionalFormat|SheetChart;
-export const SHEET_OBJECT_LIMITS={objects:1000,rulesPerSheet:200,chartsPerSheet:50,text:255,title:200,series:20,points:500};
+/** Data validation (数据有效性): a literal dropdown list or a number/text-length comparison. */
+export type SheetValidationOperator='between'|'notBetween'|'equal'|'notEqual'|'greaterThan'|'lessThan'|'greaterOrEqual'|'lessOrEqual';
+export type SheetValidationRule={type:'list';items:string[]}|{type:'whole'|'decimal'|'textLength';operator:SheetValidationOperator;value:string;value2?:string};
+export type SheetValidation={kind:'validation';sheet:string;range:SheetRangeKeys;rule:SheetValidationRule;errorStyle:'stop'|'warning';message?:string;prompt?:string};
+export type SheetObject=SheetConditionalFormat|SheetChart|SheetValidation;
+export const SHEET_OBJECT_LIMITS={objects:1000,rulesPerSheet:200,chartsPerSheet:50,validationsPerSheet:200,text:255,title:200,series:20,points:500,listItems:100,listText:255};
+export const SHEET_VALIDATION_OPERATORS:SheetValidationOperator[]=['between','notBetween','equal','notEqual','greaterThan','lessThan','greaterOrEqual','lessOrEqual'];
 export const SHEET_CHART_TYPES:SheetChartType[]=['column','bar','line','pie','area'];
 const COMPARE=['greaterThan','lessThan','equal','notEqual','greaterOrEqual','lessOrEqual'],BETWEEN=['between','notBetween'],TEXT=['textContains','textNotContains','beginsWith','endsWith'],PLAIN=['duplicate','unique','blank','notBlank','aboveAverage','belowAverage'];
 
@@ -43,9 +48,18 @@ export function validConditionalRule(value:unknown):value is ConditionalRule{
  if(type==='colorScale')return exact(value,['type','colors'])&&Array.isArray(value.colors)&&[2,3].includes(value.colors.length)&&value.colors.every(hex);
  return type==='dataBar'&&exact(value,['type','color'])&&hex(value.color);
 }
+/** Excel stores a literal list as one quoted, comma-separated formula of at most 255 characters. */
+export function validValidationRule(value:unknown):value is SheetValidationRule{
+ if(!record(value))return false;
+ if(value.type==='list')return exact(value,['type','items'])&&Array.isArray(value.items)&&value.items.length>=1&&value.items.length<=SHEET_OBJECT_LIMITS.listItems&&value.items.every(item=>typeof item==='string'&&item.trim()!==''&&item===item.trim()&&!item.includes(',')&&shortText(item))&&new Set(value.items).size===value.items.length&&value.items.join(',').length<=SHEET_OBJECT_LIMITS.listText;
+ if(!['whole','decimal','textLength'].includes(value.type as string)||!SHEET_VALIDATION_OPERATORS.includes(value.operator as SheetValidationOperator))return false;
+ const between=value.operator==='between'||value.operator==='notBetween',ok=(text:unknown)=>typeof text==='string'&&text.trim()!==''&&Number.isFinite(Number(text))&&(value.type!=='decimal'?Number.isInteger(Number(text)):true)&&(value.type!=='textLength'||Number(text)>=0);
+ return exact(value,between?['type','operator','value','value2']:['type','operator','value'])&&ok(value.value)&&(!between||ok(value.value2));
+}
 export function validSheetObject(value:unknown):value is SheetObject{
  if(!record(value)||typeof value.sheet!=='string'||!/^[a-zA-Z0-9-]{1,128}$/.test(value.sheet)||!validRange(value.range))return false;
  if(value.kind==='conditional')return exact(value,['kind','sheet','range','rule','priority'])&&validConditionalRule(value.rule)&&typeof value.priority==='number'&&Number.isFinite(value.priority)&&Math.abs(value.priority)<=1e9;
+ if(value.kind==='validation')return exact(value,['kind','sheet','range','rule','errorStyle'],['message','prompt'])&&validValidationRule(value.rule)&&(value.errorStyle==='stop'||value.errorStyle==='warning')&&[value.message,value.prompt].every(text=>text===undefined||shortText(text)&&(text as string).length>0);
  return value.kind==='chart'&&exact(value,['kind','sheet','range','chartType','title','legend','anchor','width','height'],['seriesInRows'])&&SHEET_CHART_TYPES.includes(value.chartType as SheetChartType)
   &&typeof value.title==='string'&&value.title.length<=SHEET_OBJECT_LIMITS.title&&!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value.title)&&typeof value.legend==='boolean'&&(value.seriesInRows===undefined||value.seriesInRows===true)
   &&record(value.anchor)&&exact(value.anchor,['row','column'])&&rowKey(value.anchor.row)&&columnKey(value.anchor.column)
@@ -162,4 +176,27 @@ export function chartData(range:ResolvedRange,value:(row:number,column:number)=>
  const count=Math.min(seriesInRows?rows:columns,SHEET_OBJECT_LIMITS.series),points=seriesInRows?columns:rows;
  const series:ChartSeries[]=Array.from({length:Math.max(0,count)},(_,s)=>({name:seriesName(s)||'系列'+(s+1),values:Array.from({length:Math.max(0,points)},(_,p)=>numberOf(seriesInRows?at(r0+s,c0+p):at(r0+p,c0+s))??null)}));
  return {categories:Array.from({length:Math.max(0,points)},(_,i)=>category(i)),series,headerRow,headerColumn};
+}
+
+// ---- data validation ------------------------------------------------------------------------------------------------
+export function sheetValidations(doc:Y.Doc,sheetId:string){return sheetObjects(doc,sheetId).flatMap(([id,object])=>object.kind==='validation'?[[id,object as SheetValidation] as const]:[]);}
+/** The validation covering a cell (the first stored one wins when ranges overlap). */
+export function sheetValidationAt(doc:Y.Doc,sheet:Y.Array<Y.Array<string>>,sheetId:string,row:number,column:number){
+ for(const [id,validation]of sheetValidations(doc,sheetId)){const range=resolveSheetRange(sheet,validation.range);if(range&&row>=range.top&&row<=range.bottom&&column>=range.left&&column<=range.right)return {id,validation,range};}
+}
+/** Whether a typed value passes the rule; blank cells always pass (Excel's “忽略空值”). */
+export function validationAccepts(rule:SheetValidationRule,value:string){
+ const text=value.trim();if(!text)return true;
+ if(rule.type==='list')return rule.items.some(item=>item.toLowerCase()===text.toLowerCase());
+ const amount=rule.type==='textLength'?[...value].length:Number(text);if(!Number.isFinite(amount)||rule.type==='whole'&&!Number.isInteger(amount))return false;
+ const a=Number(rule.value),b=Number(rule.value2),low=Math.min(a,b),high=Math.max(a,b);
+ switch(rule.operator){case 'between':return amount>=low&&amount<=high;case 'notBetween':return amount<low||amount>high;case 'equal':return amount===a;case 'notEqual':return amount!==a;case 'greaterThan':return amount>a;case 'lessThan':return amount<a;case 'greaterOrEqual':return amount>=a;case 'lessOrEqual':return amount<=a;}
+}
+const OPERATOR_TEXT:Record<SheetValidationOperator,string>={between:'介于',notBetween:'不介于',equal:'等于',notEqual:'不等于',greaterThan:'大于',lessThan:'小于',greaterOrEqual:'大于或等于',lessOrEqual:'小于或等于'};
+/** Message shown when a value is rejected; a custom message wins. */
+export function validationMessage(validation:SheetValidation){
+ if(validation.message)return validation.message;const rule=validation.rule;
+ if(rule.type==='list')return '输入值必须是下拉列表中的一项：'+rule.items.join('、');
+ const what={whole:'整数',decimal:'数字',textLength:'文本长度'}[rule.type],range=rule.operator==='between'||rule.operator==='notBetween'?`${rule.value} 与 ${rule.value2}`:rule.value;
+ return (rule.type==='textLength'?'文本长度必须':'输入值必须是'+what+'，且')+OPERATOR_TEXT[rule.operator]+' '+range;
 }

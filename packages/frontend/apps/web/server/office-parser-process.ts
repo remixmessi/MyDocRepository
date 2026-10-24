@@ -6,7 +6,7 @@ import {spawn} from 'node:child_process';
 import {MAX_OFFICE_FILE_BYTES} from '../../../../common/nbstore/src/office';
 import type {OfficeParserFormat} from './office-parser-model';
 
-export type OfficeJobOptions=DelimitedImportOptions|{sheetId:string}|{targetWorkspace?:string};
+export type OfficeJobOptions=DelimitedImportOptions|{sheetId:string}|{targetWorkspace?:string}|{pages?:number[]};
 export type OfficeWorkerTask=OfficeParserFormat|'pdf-form-spec'|'pdf-native-annotations'|'export-pdf-flattened'|'export-pdf-annotations'|'personal-workspace-archive'|'workspace-archive'|'import-delimited'|'export-docx'|'export-pptx'|'export-xlsx-text'|'export-xlsx-formula'|'export-xlsx-formula-cache'|`export-${'csv'|'tsv'}-${'escaped'|'raw'}${''|'-values'}`|`validate-${'text'|'word'|'spreadsheet'|'pdf'|'presentation'}`;
 
 declare const __MYDOC_OFFICE_PARSER_SOURCE__:string;
@@ -78,7 +78,8 @@ export class OfficeParserPool {
  preparePersonalArchive(bytes:Uint8Array,targetWorkspace:string,signal?:AbortSignal){return this.execute('personal-workspace-archive',bytes,signal,{targetWorkspace});}
  prepareWorkspaceArchive(bytes:Uint8Array,targetWorkspace?:string,signal?:AbortSignal){return this.execute('workspace-archive',bytes,signal,{targetWorkspace});}
  // The parser process cannot read files, so the bundled Unicode font travels with the job.
- exportAnnotatedPdf(bytes:Uint8Array,signal?:AbortSignal,flatten=false){return this.execute(flatten?'export-pdf-flattened':'export-pdf-annotations',wrapPdfFont(bytes,loadPdfFont()),signal);}
+ /** `pages`: 1-based positions of the arranged pages to keep (提取页面); all pages when absent. */
+ exportAnnotatedPdf(bytes:Uint8Array,signal?:AbortSignal,flatten=false,pages?:number[]){return this.execute(flatten?'export-pdf-flattened':'export-pdf-annotations',wrapPdfFont(bytes,loadPdfFont()),signal,pages?{pages}:undefined);}
  get activeCount(){return this.jobs.size;}
  parse(format:OfficeParserFormat,bytes:Uint8Array,signal?:AbortSignal){return this.execute(format,bytes,signal);}
  exportPptx(bytes:Uint8Array,signal?:AbortSignal){return this.execute('export-pptx',bytes,signal);}

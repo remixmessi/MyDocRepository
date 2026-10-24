@@ -1,6 +1,6 @@
 import type * as Y from 'yjs';
 import {posix} from 'node:path';
-import {chartData,resolveSheetRange,sheetObjects,validConditionalRule,SHEET_CHART_TYPES,SHEET_OBJECT_LIMITS,type ConditionalRule,type ConditionalStyle,type SheetChart,type SheetChartType,type SheetConditionalFormat} from '../../../../common/nbstore/src/spreadsheet-objects';
+import {chartData,resolveSheetRange,sheetObjects,sheetValidations,validConditionalRule,validValidationRule,SHEET_CHART_TYPES,SHEET_OBJECT_LIMITS,type ConditionalRule,type ConditionalStyle,type SheetChart,type SheetChartType,type SheetConditionalFormat,type SheetValidationRule,type SheetValidationOperator} from '../../../../common/nbstore/src/spreadsheet-objects';
 import {xlsxXml,attribute,children,type XlsxXml} from './office-xlsx-xml';
 /** Office default series colours (same order as the editor's charts). */
 const CHART_COLORS=['4472C4','ED7D31','A5A5A5','FFC000','5B9BD5','70AD47','264478','9E480E','636363','997300'];
@@ -52,6 +52,18 @@ export function conditionalXml(doc:Y.Doc,sheetId:string,sheet:Y.Array<Y.Array<st
  const rules=sheetObjects(doc,sheetId).flatMap(([,object])=>object.kind==='conditional'?[object as SheetConditionalFormat]:[]).sort((a,b)=>b.priority-a.priority);let priority=0;
  return rules.map(rule=>{const range=resolveSheetRange(sheet,rule.range);if(!range)return '';const ref=cell(range.top,range.left)+(range.bottom>range.top||range.right>range.left?':'+cell(range.bottom,range.right):'');
   return `<conditionalFormatting sqref="${ref}">${ruleXml(rule.rule,++priority,cell(range.top,range.left),dxf)}</conditionalFormatting>`;}).join('');
+}
+
+const VALIDATION_OPERATORS:Record<SheetValidationOperator,string>={between:'between',notBetween:'notBetween',equal:'equal',notEqual:'notEqual',greaterThan:'greaterThan',lessThan:'lessThan',greaterOrEqual:'greaterThanOrEqual',lessOrEqual:'lessThanOrEqual'};
+/** `<dataValidations>` for one sheet: literal lists as a quoted formula, comparisons with operator and bounds. */
+export function validationXml(doc:Y.Doc,sheetId:string,sheet:Y.Array<Y.Array<string>>){
+ const items=sheetValidations(doc,sheetId).flatMap(([,validation])=>{
+  const range=resolveSheetRange(sheet,validation.range);if(!range)return [];const ref=cell(range.top,range.left)+(range.bottom>range.top||range.right>range.left?':'+cell(range.bottom,range.right):''),rule=validation.rule;
+  const messages=`${validation.message?` errorTitle="输入值无效" error="${escape(validation.message)}"`:''}${validation.prompt?` promptTitle="提示" prompt="${escape(validation.prompt)}"`:''}`;
+  const formulas=rule.type==='list'?`<formula1>${escape('"'+rule.items.join(',').replaceAll('"','""')+'"')}</formula1>`:`<formula1>${escape(rule.value)}</formula1>${rule.value2!==undefined?`<formula2>${escape(rule.value2)}</formula2>`:''}`;
+  return [`<dataValidation type="${rule.type}"${rule.type!=='list'?` operator="${VALIDATION_OPERATORS[rule.operator]}"`:''} errorStyle="${validation.errorStyle}" allowBlank="1" showInputMessage="1" showErrorMessage="1"${messages} sqref="${ref}">${formulas}</dataValidation>`];
+ });
+ return items.length?`<dataValidations count="${items.length}">${items.join('')}</dataValidations>`:'';
 }
 
 /** One chart part plus its anchor in the sheet's drawing. */
@@ -144,7 +156,8 @@ function ruleFrom(node:XlsxXml,dxfs:(ConditionalStyle|undefined)[]):ConditionalR
  return rule&&validConditionalRule(rule)?rule as ConditionalRule:undefined;
 }
 export type ImportedChart={chartType:SheetChartType;title:string;legend:boolean;seriesInRows:boolean;range:Box;anchor:{row:number;column:number};width:number;height:number};
-export type ImportedSheetObjects={rules:{range:Box;rule:ConditionalRule}[];charts:ImportedChart[];skippedRules:number;skippedCharts:number};
+export type ImportedValidation={range:Box;rule:SheetValidationRule;errorStyle:'stop'|'warning';message?:string;prompt?:string};
+export type ImportedSheetObjects={rules:{range:Box;rule:ConditionalRule}[];charts:ImportedChart[];validations:ImportedValidation[];skippedRules:number;skippedCharts:number;skippedValidations:number};
 const resolve=(from:string,target:string)=>{if(/[\\:#?]/.test(target))return;const path=target.startsWith('/')?target.slice(1):posix.normalize(posix.join(posix.dirname(from),target));return path.startsWith('xl/')&&!path.split('/').includes('..')?path:undefined;};
 const relsFor=(path:string)=>posix.join(posix.dirname(path),'_rels',posix.basename(path)+'.rels');
 function relations(files:Record<string,Uint8Array>,path:string){const bytes=files[relsFor(path)],map=new Map<string,{type:string;target:string}>();if(!bytes)return map;const root=xlsxXml(bytes);
@@ -169,7 +182,17 @@ function chartFrom(bytes:Uint8Array,sheetName:string):Omit<ImportedChart,'anchor
 }
 /** Conditional formats and charts of one worksheet; unsupported ones are counted, never fail the import. */
 export function readSheetObjects(files:Record<string,Uint8Array>,sheetPath:string,sheetName:string,worksheet:XlsxXml,dxfs:(ConditionalStyle|undefined)[]):ImportedSheetObjects{
- const result:ImportedSheetObjects={rules:[],charts:[],skippedRules:0,skippedCharts:0};
+ const result:ImportedSheetObjects={rules:[],charts:[],validations:[],skippedRules:0,skippedCharts:0,skippedValidations:0};
+ // Literal lists and number/text-length rules (Excel only blocks input when showErrorMessage is on and the style is stop); range-based lists, dates, times and custom formulas are counted as skipped.
+ const operators=Object.fromEntries(Object.entries(VALIDATION_OPERATORS).map(([key,value])=>[value,key])) as Record<string,SheetValidationOperator>;
+ for(const node of children(first(worksheet,'dataValidations')??worksheet,'dataValidation')){
+  const type=attribute(node,'type'),boxes=(attribute(node,'sqref')??'').split(/\s+/).filter(Boolean).map(parseBox),f1=first(node,'formula1')?.text,f2=first(node,'formula2')?.text;let rule:Record<string,unknown>|undefined;
+  if(type==='list'&&f1&&/^"(?:[^"]|"")*"$/.test(f1.trim()))rule={type:'list',items:[...new Set(f1.trim().slice(1,-1).replaceAll('""','"').split(',').map(item=>item.trim()).filter(Boolean))]};
+  else if(['whole','decimal','textLength'].includes(type??'')){const operator=operators[attribute(node,'operator')??'between'];rule=operator==='between'||operator==='notBetween'?{type,operator,value:f1?.trim(),value2:f2?.trim()}:{type,operator,value:f1?.trim()};}
+  const text=(name:string)=>{const value=attribute(node,name);return value&&value.length<=SHEET_OBJECT_LIMITS.text&&!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value)?value:undefined;},message=text('error'),prompt=text('prompt');
+  if(!rule||!validValidationRule(rule)||!boxes.length||boxes.some(box=>!box)){result.skippedValidations++;continue;}
+  for(const box of boxes)result.validations.push({range:box!,rule:rule as SheetValidationRule,errorStyle:['1','true'].includes(attribute(node,'showErrorMessage')??'0')&&(attribute(node,'errorStyle')??'stop')==='stop'?'stop':'warning',...(message?{message}:{}),...(prompt?{prompt}:{})});
+ }
  const formats=children(worksheet,'conditionalFormatting').flatMap(format=>children(format,'cfRule').map(rule=>({ranges:(attribute(format,'sqref')??'').split(/\s+/).filter(Boolean),rule,priority:Number(attribute(rule,'priority')??1e6)}))).sort((a,b)=>a.priority-b.priority);
  for(const {ranges,rule}of formats){const parsed=ruleFrom(rule,dxfs),boxes=ranges.map(parseBox);if(!parsed||!boxes.length||boxes.some(box=>!box)){result.skippedRules++;continue;}for(const box of boxes)result.rules.push({range:box!,rule:parsed});}
  try{

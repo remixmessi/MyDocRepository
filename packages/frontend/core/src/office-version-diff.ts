@@ -1,7 +1,7 @@
 import {Y} from '@mydoc/crdt';
 import {decodeBinary} from './backup';
 import type {OfficeKind} from '../../../common/nbstore/src/office';
-const roots:Record<OfficeKind,string[]>={text:['text','textSettings'],word:['paragraphs','pageSettings'],spreadsheet:['sheetColumns','sheet','workbookSheets','sheetOrder','sheetCellTypes','sheetImport','sheetXlsx','sheetFormats','sheetMerges','sheetObjects'],pdf:['pdfFields','annotations'],presentation:['objects','slides','slideOrder','presentation']};
+const roots:Record<OfficeKind,string[]>={text:['text','textSettings'],word:['paragraphs','pageSettings','wordNotes'],spreadsheet:['sheetColumns','sheet','workbookSheets','sheetOrder','sheetCellTypes','sheetImport','sheetXlsx','sheetFormats','sheetMerges','sheetObjects','sheetDimensions'],pdf:['pdfFields','annotations','pdfPages'],presentation:['objects','slides','slideOrder','presentation']};
 type Snapshot={resource:{kind:OfficeKind;name:string};state:{data:string;sha256:string};original:null|{sha256:string};media?:{id:string;sha256:string}[]};
 function canonical(value:unknown):unknown{
  if(value instanceof Y.Text)return {attributes:canonical(value.getAttributes()),runs:canonical(value.toDelta())};
@@ -16,7 +16,7 @@ export function officeVersionContent(snapshot:Snapshot){
   Y.applyUpdate(doc,decodeBinary(snapshot.state.data));if(doc.store.pendingStructs||doc.store.pendingDs)throw new Error('版本比较数据缺少依赖');
   const content=Object.fromEntries([...roots[snapshot.resource.kind],'officeComments'].filter(root=>doc.share.has(root)).map(root=>{
    // Yjs decodes a root as AbstractType until its expected shared type is requested.
-   const mapRoots=['pdfFields','sheetColumns','textSettings','pageSettings','workbookSheets','sheetCellTypes','sheetImport','sheetXlsx','sheetFormats','sheetMerges','sheetObjects','presentation','slides','officeComments'];
+   const mapRoots=['pdfFields','sheetColumns','textSettings','pageSettings','workbookSheets','sheetCellTypes','sheetImport','sheetXlsx','sheetFormats','sheetMerges','sheetObjects','sheetDimensions','presentation','slides','officeComments','wordNotes','pdfPages'];
    const value=root==='text'?doc.getText(root):mapRoots.includes(root)?doc.getMap(root):doc.getArray(root);return [root,canonical(value)];
   }));
   return JSON.stringify({name:snapshot.resource.name,content,original:snapshot.original?.sha256??null,media:[...(snapshot.media??[])].map(({id,sha256})=>({id,sha256})).sort((a,b)=>a.id.localeCompare(b.id))},null,2);

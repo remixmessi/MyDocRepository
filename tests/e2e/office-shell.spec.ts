@@ -547,3 +547,187 @@ test('团队协作：@提及通知直达讨论、远端光标与选区、批注�
   await b.getByRole('textbox',{name:'第 1 行第 1 列',exact:true}).click();await expect(members.getByRole('button',{name:'跟随 owner',exact:true})).toBeVisible();
  }finally{await owner.close();await member.close();}
 });
+
+test('演示按 WPS 功能：文字格式、形状、层次、拖动、背景、切换、全屏放映与演讲者视图及原生副本',async({page})=>{
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'pptx','演示增强');
+ const text=page.getByRole('textbox',{name:'第 1 个文本框',exact:true});await text.fill('季度汇报');await expect(page.locator('.presentation-field-state')).toHaveCount(0);
+ await page.getByRole('button',{name:'加粗',exact:true}).click();await expect(text).toHaveCSS('font-weight','700');await page.getByLabel('字号',{exact:true}).selectOption('40');await page.getByRole('button',{name:'居中',exact:true}).click();await expect(text).toHaveCSS('text-align','center');
+ const small=await text.evaluate(el=>parseFloat(getComputedStyle(el).fontSize));expect(small).toBeGreaterThan(20);
+ await page.getByRole('tab',{name:'插入',exact:true}).click();await page.getByRole('button',{name:'新增五角星',exact:true}).click();const objects=page.locator('.presentation-canvas .presentation-object');await expect(objects).toHaveCount(2);await expect(page.locator('.presentation-canvas .presentation-star5 polygon')).toHaveCount(1);await expect(page.getByRole('group',{name:/对象 2 · 五角星/})).toBeVisible();
+ await page.getByRole('tab',{name:'开始',exact:true}).click();
+ const x=page.getByLabel('对象 2 x',{exact:true}),before=Number(await x.inputValue()),star=page.locator('.presentation-canvas .presentation-star5'),box=(await star.boundingBox())!;
+ await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2+120,box.y+box.height/2+40,{steps:5});await page.mouse.up();await expect.poll(async()=>Number(await x.inputValue())).toBeGreaterThan(before+0.05);
+ const resize=page.getByRole('button',{name:'调整对象 2 大小',exact:true}),width=page.getByLabel('对象 2 width',{exact:true}),w0=Number(await width.inputValue()),handle=(await resize.boundingBox())!;await page.mouse.move(handle.x+5,handle.y+5);await page.mouse.down();await page.mouse.move(handle.x-60,handle.y+5,{steps:4});await page.mouse.up();await expect.poll(async()=>Number(await width.inputValue())).toBeLessThan(w0-0.02);
+ await star.focus();await page.keyboard.press('Shift+ArrowDown');const y=page.getByLabel('对象 2 y',{exact:true}),y0=Number(await y.inputValue());await expect.poll(async()=>Number(await y.inputValue())).toBeGreaterThan(y0);
+ // A new star is painted on top; 置于底层 moves it under the text box.
+ await expect(objects.last()).toHaveClass(/presentation-star5/);await page.getByRole('button',{name:'置于底层',exact:true}).click();await expect(objects.first()).toHaveClass(/presentation-star5/);
+ await page.getByRole('tab',{name:'设计',exact:true}).click();await page.getByLabel('幻灯片背景颜色',{exact:true}).fill('#ffeeaa');await expect(page.locator('.presentation-canvas')).toHaveCSS('background-color','rgb(255, 238, 170)');
+ await page.getByRole('tab',{name:'切换',exact:true}).click();await page.getByRole('button',{name:'推入',exact:true}).click();await expect(page.getByRole('button',{name:'推入',exact:true})).toHaveAttribute('aria-pressed','true');
+ await page.getByRole('tab',{name:'开始',exact:true}).click();await page.getByRole('button',{name:'新增幻灯片',exact:true}).click();await expect(page.getByRole('navigation',{name:'幻灯片列表'}).getByRole('button')).toHaveCount(2);await expect(page.locator('.presentation-canvas')).toHaveCSS('background-color','rgb(255, 238, 170)');await page.getByRole('button',{name:'新增文本框',exact:true}).click();await page.getByRole('textbox',{name:'第 1 个文本框',exact:true}).fill('第二页内容');await page.getByLabel('演讲备注',{exact:true}).fill('提醒：讲预算');await expect(page.locator('.presentation-field-state')).toHaveCount(0);
+ await page.getByRole('tab',{name:'放映',exact:true}).click();await page.getByRole('button',{name:'从头开始',exact:true}).click();const show=page.getByRole('dialog',{name:'幻灯片放映',exact:true});await expect(show).toBeFocused();await expect(show).toContainText('季度汇报');await expect(show.locator('.presentation-show-toolbar')).toContainText('1 / 2');
+ await page.keyboard.press('ArrowRight');await expect(show.locator('.presentation-show-current')).toContainText('第二页内容');await expect(show.locator('.presentation-show-current [data-transition=push]')).toHaveCount(1);await expect(show.locator('[data-leaving]')).toHaveCount(0);await page.keyboard.press('b');await expect(show.getByRole('status',{name:'黑屏'})).toBeVisible();await page.keyboard.press('b');await expect(show.getByRole('status',{name:'黑屏'})).toHaveCount(0);
+ await show.getByRole('button',{name:'演讲者视图',exact:true}).click();await expect(show.getByRole('region',{name:'演讲备注'})).toContainText('提醒：讲预算');await expect(show.getByRole('timer',{name:'已用时间'})).toBeVisible();await page.screenshot({path:'artifacts/pptx-presenter-view.png'});
+ await page.keyboard.press('ArrowRight');await expect(show.getByRole('status').filter({hasText:'放映结束'})).toBeVisible();await page.keyboard.press('ArrowRight');await expect(show).toHaveCount(0);
+ await page.getByRole('button',{name:'从头开始',exact:true}).click();await expect(show).toBeVisible();await page.keyboard.press('Escape');await expect(show).toHaveCount(0);
+ await page.reload();await page.getByRole('navigation',{name:'幻灯片列表'}).getByRole('button',{name:'第 1 张',exact:true}).click();await expect(page.getByRole('textbox',{name:'第 1 个文本框',exact:true})).toHaveCSS('font-weight','700');
+ await page.getByRole('button',{name:'导出 PPTX 副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('dialog',{name:'导出 PPTX 副本',exact:true}).getByRole('button',{name:'下载演示副本',exact:true}).click();
+ const {encodePptxPresentation}=await import('../../packages/frontend/apps/web/server/office-presentation'),{presentationSlides}=await import('../../packages/common/nbstore/src/office-presentation'),{presentationPaintOrder}=await import('../../packages/common/nbstore/src/presentation-field'),parsed=encodePptxPresentation(await readFile((await (await download).path())!));
+ try{const [one,two]=presentationSlides(parsed.doc);expect(one).toMatchObject({background:'FFEEAA',transition:'push'});expect(two.background).toBe('FFEEAA');expect(two.notes).toBe('提醒：讲预算');expect(presentationPaintOrder(one.objects.toArray()).map(entry=>entry.object.get('type'))).toEqual(['star5','text']);expect(one.objects.toArray().find(object=>object.get('type')==='text')!.toJSON()).toMatchObject({text:'季度汇报',bold:true,fontSize:40,align:'center'});}finally{parsed.doc.destroy();}
+ await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);expect(errors).toEqual([]);
+});
+
+test('表格按 WPS 功能：删除线/字号/框线/换行/垂直对齐、清除格式、数据有效性下拉与拒绝、删除重复项、分列、冻结窗格及原生副本',async({page})=>{
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'xlsx','数据工具');
+ const cell=(r:number,c:number)=>page.getByRole('textbox',{name:`第 ${r} 行第 ${c} 列`,exact:true}),settled=()=>expect(page.getByText('正在提交…',{exact:true})).toHaveCount(0);
+ const fill=async(r:number,c:number,value:string)=>{await cell(r,c).fill(value);await cell(r,c).press('Enter');await settled();};
+ for(const [r,c,v] of [[1,1,'城市'],[1,2,'数量'],[2,1,'北京'],[2,2,'10'],[3,1,'上海'],[3,2,'20'],[4,1,'北京'],[4,2,'10'],[5,1,'广州'],[5,2,'30'],[1,4,'a,b,c']] as const)await fill(r,c,v);
+ const nameBox=page.getByLabel('名称框',{exact:true}),pick=async(ref:string)=>{await nameBox.fill(ref);await nameBox.press('Enter');};
+ // 删除重复项: 北京/10 appears twice; the later row goes and the rows below move up.
+ await pick('A1:B5');await page.getByRole('tab',{name:'数据',exact:true}).click();await page.getByRole('button',{name:'删除重复项',exact:true}).click();const dedupe=page.getByRole('dialog',{name:'删除重复项',exact:true});await expect(dedupe.getByRole('status')).toHaveText('将删除 1 行重复值，保留 3 行');await dedupe.getByRole('button',{name:'删除重复项',exact:true}).click();
+ await expect(page.getByRole('status').filter({hasText:'发现 1 个重复项'})).toBeVisible();await expect(cell(4,1)).toHaveValue('广州');await expect(cell(4,2)).toHaveValue('30');await expect(cell(5,1)).toHaveValue('');
+ // 分列 D1 by comma into D1:F1.
+ await cell(1,4).click();await page.getByRole('button',{name:'分列',exact:true}).click();const split=page.getByRole('dialog',{name:'分列',exact:true});await expect(split.getByRole('status')).toContainText('最多 3 列');await split.getByRole('button',{name:'分列',exact:true}).click();await expect(cell(1,4)).toHaveValue('a');await expect(cell(1,6)).toHaveValue('c');
+ // 有效性: a dropdown list on A2:A6 that stops other input.
+ await pick('A2:A6');await page.getByRole('button',{name:'有效性',exact:true}).click();const dv=page.getByRole('dialog',{name:'数据有效性',exact:true});await expect(dv).toContainText('A2:A6');await dv.getByLabel('序列来源',{exact:true}).fill('北京，上海,广州');await dv.getByLabel('输入提示',{exact:true}).fill('从列表选择城市');await dv.getByRole('button',{name:'确定',exact:true}).click();await expect(dv).toHaveCount(0);
+ await cell(5,1).click();await expect(page.getByRole('note').filter({hasText:'从列表选择城市'})).toBeVisible();await page.keyboard.insertText('深圳');await page.keyboard.press('Tab');await expect(page.getByRole('alert')).toContainText('下拉列表中的一项：北京、上海、广州');await expect(cell(5,1)).toHaveValue('深圳');
+ await page.getByRole('button',{name:'使用最新内容',exact:true}).click();await expect(cell(5,1)).toHaveValue('');await cell(5,1).click();await page.getByRole('button',{name:'打开下拉列表',exact:true}).click();await page.getByRole('listbox',{name:'可选值'}).getByRole('option',{name:'上海',exact:true}).click();await settled();await expect(cell(5,1)).toHaveValue('上海');
+ await cell(6,1).click();await page.keyboard.press('Alt+ArrowDown');await page.keyboard.press('ArrowDown');await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await settled();await expect(cell(6,1)).toHaveValue('广州');
+ // 替换 bypasses the rule like Excel's paste; the value stays and is marked with a dashed outline.
+ await page.getByRole('button',{name:'查找替换',exact:true}).click();await page.getByLabel('查找内容',{exact:true}).fill('广州');await page.getByLabel('替换为',{exact:true}).fill('杭州');await page.getByRole('button',{name:'全部替换',exact:true}).click();await expect(cell(6,1)).toHaveValue('杭州');
+ await expect(page.locator('td:has(> input[aria-label="第 6 行第 1 列"])')).toHaveAttribute('data-invalid','true');await expect(page.locator('td:has(> input[aria-label="第 2 行第 1 列"])')).not.toHaveAttribute('data-invalid','true');await page.getByRole('button',{name:'关闭查找',exact:true}).click();await page.getByRole('tab',{name:'开始',exact:true}).click();
+ // 删除线、字号、外侧框线、自动换行、顶端对齐、清除格式.
+ await cell(1,1).click();await page.getByRole('button',{name:'删除线',exact:true}).click();await expect(cell(1,1)).toHaveCSS('text-decoration-line','line-through');await page.getByLabel('字号',{exact:true}).selectOption('16');await expect(cell(1,1)).toHaveCSS('font-size',/^18\.\d+px$/);
+ await pick('A1:B1');await page.getByRole('button',{name:'框线',exact:true}).click();await page.getByRole('menuitemradio',{name:'双线',exact:true}).click();await page.getByRole('button',{name:'框线',exact:true}).click();await page.getByRole('button',{name:'框线',exact:true}).click();await page.getByRole('menuitem',{name:'外侧框线',exact:true}).click();
+ const border=(ref:string)=>page.locator(`td:has(> input[aria-label="${ref}"]) > .spreadsheet-cell-border`);await expect(border('第 1 行第 1 列')).toHaveCSS('border-left-style','double');await expect(border('第 1 行第 1 列')).toHaveCSS('border-right-style','none');await expect(border('第 1 行第 2 列')).toHaveCSS('border-right-style','double');
+ await cell(3,3).click();await page.keyboard.insertText('这是一段很长的说明文字，需要在单元格内自动换行显示，不能被截断。');await page.keyboard.press('Enter');await settled();await cell(3,3).click();const before=(await page.locator('td:has(> input[aria-label="第 3 行第 3 列"])').boundingBox())!.height;await page.getByRole('button',{name:'自动换行',exact:true}).click();await expect(page.locator('td:has(> input[aria-label="第 3 行第 3 列"]) .spreadsheet-wrap-text')).toBeVisible();await cell(2,1).click();
+ await expect.poll(async()=>(await page.locator('td:has(> input[aria-label="第 3 行第 3 列"])').boundingBox())!.height).toBeGreaterThan(before*1.5);
+ await cell(2,2).click();await page.getByRole('button',{name:'顶端对齐',exact:true}).click();await expect(page.locator('td:has(> input[aria-label="第 2 行第 2 列"])')).toHaveCSS('vertical-align','top');await page.getByRole('button',{name:'清除格式',exact:true}).click();await expect(page.locator('td:has(> input[aria-label="第 2 行第 2 列"])')).toHaveCSS('vertical-align','middle');
+ // 冻结至当前单元格 B2: row 1 and column A stay in place while scrolling.
+ await cell(2,2).click();await page.getByRole('tab',{name:'视图',exact:true}).click();await page.getByRole('button',{name:'冻结至当前单元格',exact:true}).click();const scroll=page.locator('.spreadsheet-scroll');await expect(scroll).toHaveAttribute('data-freeze-rows','1');await expect(scroll).toHaveAttribute('data-freeze-columns','1');
+ const header=page.locator('td:has(> input[aria-label="第 1 行第 3 列"])'),top0=(await header.boundingBox())!.y;await scroll.evaluate(element=>{element.scrollTop=200;element.scrollLeft=300;});await expect.poll(async()=>(await header.boundingBox())!.y).toBeCloseTo(top0,0);
+ const first=page.locator('td:has(> input[aria-label="第 8 行第 1 列"])'),left0=(await page.locator('td:has(> input[aria-label="第 1 行第 1 列"])').boundingBox())!.x;await expect.poll(async()=>(await first.boundingBox())!.x).toBeCloseTo(left0,0);
+ await page.getByRole('button',{name:'取消冻结',exact:true}).click();await expect(scroll).not.toHaveAttribute('data-freeze-rows','1');await scroll.evaluate(element=>{element.scrollTop=0;element.scrollLeft=0;});await page.screenshot({path:'artifacts/xlsx-wps-tools.png'});
+ // Native copy keeps validation, borders, strike and font size.
+ await page.getByRole('button',{name:'导出',exact:true}).click();await page.getByRole('menuitem',{name:'导出 XLSX 文本副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('dialog',{name:'导出 XLSX 文本副本',exact:true}).getByRole('button',{name:'下载文本副本',exact:true}).click();
+ const {encodeXlsxWorkbook}=await import('../../packages/frontend/apps/web/server/office-spreadsheet'),{sheetValidations}=await import('../../packages/common/nbstore/src/spreadsheet-objects'),{sheetCellFormat}=await import('../../packages/common/nbstore/src/spreadsheet-format');
+ const parsed=encodeXlsxWorkbook(await readFile((await (await download).path())!));try{expect(sheetValidations(parsed.doc,'first').map(([,v])=>v.rule)).toEqual([{type:'list',items:['北京','上海','广州']}]);expect(sheetCellFormat(parsed.doc,'first',parsed.doc.getArray('sheet'),0,0)).toMatchObject({strike:true,fontSize:16,borderTop:'double',borderLeft:'double',borderBottom:'double'});expect(sheetCellFormat(parsed.doc,'first',parsed.doc.getArray('sheet'),2,2)).toMatchObject({wrap:true});}finally{parsed.doc.destroy();}
+ await page.reload();await expect(cell(5,1)).toHaveValue('上海');await expect(page.locator('td:has(> input[aria-label="第 3 行第 3 列"]) .spreadsheet-wrap-text')).toBeVisible();expect(errors).toEqual([]);
+});
+
+test('Word 按 WPS 引用功能：自动目录随标题更新并可跳转、脚注与尾注编号、水印、打印与原生副本',async({page})=>{
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'docx','引用功能');
+ const para=(n:number)=>page.getByRole('textbox',{name:`第 ${n} 段`,exact:true});await expect(para(1)).toBeFocused();
+ await page.keyboard.insertText('第一章 概述');await page.getByLabel('第 1 段类型',{exact:true}).selectOption('1');await para(1).press('End');await para(1).press('Enter');await page.keyboard.insertText('正文内容');await para(2).press('Enter');await page.keyboard.insertText('1.1 背景');await page.getByLabel('第 3 段类型',{exact:true}).selectOption('2');
+ // 脚注 after “正文”, 尾注 at the end of the paragraph.
+ await selectText(page,'第 2 段',2,2);await page.getByRole('tab',{name:'引用',exact:true}).click();await page.getByRole('button',{name:'插入脚注',exact:true}).click();const footnote=page.getByLabel('脚注 1',{exact:true});await expect(footnote).toBeFocused();await page.keyboard.insertText('数据来源说明');
+ await selectText(page,'第 2 段',5,5);await page.getByRole('button',{name:'插入尾注',exact:true}).click();await expect(page.getByLabel('尾注 i',{exact:true})).toBeFocused();await page.keyboard.insertText('参考文献');
+ const refs=para(2).locator('.word-note-ref');await expect(refs).toHaveCount(2);await expect(refs.first()).toHaveAttribute('data-label','1');await expect(refs.last()).toHaveAttribute('data-label','i');await expect(para(2)).toHaveText(/^正文.内容.$/);
+ // Typing right after a reference stays plain text.
+ // Typing right after a reference (arrow key across it) stays plain text in place.
+ await selectText(page,'第 2 段',2,2);await page.keyboard.press('ArrowRight');await page.keyboard.insertText('甲');await expect(para(2)).toHaveText(/^正文.甲内容.$/);await expect(refs).toHaveCount(2);await expect(para(2).locator('.word-note-ref',{hasText:'甲'})).toHaveCount(0);
+ await para(2).press('End');await page.keyboard.insertText('乙');await expect(para(2)).toHaveText(/^正文.甲内容.乙$/);
+ await refs.first().click();await expect(footnote).toBeFocused();await page.locator('[data-word-note] .word-note-label').first().click();await expect(para(2)).toBeFocused();
+ // 目录 before the first heading; entries follow edits and jump to the heading.
+ await selectText(page,'第 1 段',0,0);await page.getByRole('button',{name:'插入目录',exact:true}).click();const toc=page.getByRole('region',{name:'目录',exact:true});await expect(toc.getByRole('link')).toHaveText(['第一章 概述1','1.1 背景1']);
+ await para(3).click();await para(3).press('End');await page.keyboard.insertText('与目标');await expect(toc.getByRole('link').nth(1)).toContainText('1.1 背景与目标');
+ await toc.getByRole('link',{name:/1\.1 背景与目标/}).click();await expect(para(3)).toBeFocused();
+ await page.getByLabel('目录显示级别',{exact:true}).selectOption('1');await page.getByRole('button',{name:'更新目录',exact:true}).click();await expect(toc.getByRole('link')).toHaveCount(1);
+ // 水印 on every page behind the text.
+ await page.getByRole('tab',{name:'布局',exact:true}).click();await page.getByRole('button',{name:'水印',exact:true}).click();const dialog=page.getByRole('dialog',{name:'水印',exact:true});await dialog.getByRole('button',{name:'草稿',exact:true}).click();await dialog.getByLabel('水印颜色',{exact:true}).fill('#ff0000');await dialog.getByRole('button',{name:'确定',exact:true}).click();
+ await expect(page.locator('.word-watermark span')).toHaveText('草稿');await expect(page.locator('.word-watermark span')).toHaveCSS('color','rgb(255, 0, 0)');await page.locator('.word-paper').evaluate(element=>element.scrollIntoView({block:'start'}));await page.locator('.word-paper').screenshot({path:'artifacts/docx-references.png'});
+ await page.getByRole('button',{name:'打印预览',exact:true}).first().click();const preview=page.getByRole('dialog',{name:'Word 打印预览',exact:true});await expect(preview).toContainText('数据来源说明');await expect(preview.locator('.office-word-toc')).toContainText('第一章 概述');await expect(preview.locator('.word-toc-tools')).toHaveCount(0);await expect(preview.locator('.word-watermark-print')).toHaveCount(1);await preview.getByRole('button',{name:'关闭预览',exact:true}).click();
+ await page.getByRole('button',{name:'导出 DOCX 正文副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'确认导出正文副本',exact:true}).click();
+ const {encodeDocxWord}=await import('../../packages/frontend/apps/web/server/office-word'),{wordNoteRefs,isWordToc}=await import('../../packages/common/nbstore/src/office-word-reference'),{wordBlockTexts}=await import('../../packages/common/nbstore/src/office-word-table');
+ const parsed=encodeDocxWord(await readFile((await (await download).path())!));try{const blocks=parsed.doc.getArray('paragraphs').toArray() as never[];expect(isWordToc(blocks[0])).toBe(true);expect(parsed.doc.getMap('pageSettings').get('watermark')).toMatchObject({text:'草稿',color:'#FF0000'});expect(wordNoteRefs(parsed.doc,wordBlockTexts(blocks)).map(ref=>[ref.label,String((parsed.doc.getMap('wordNotes').get(ref.id) as {get:(key:string)=>unknown}).get('text'))])).toEqual([['1','数据来源说明'],['i','参考文献']]);}finally{parsed.doc.destroy();}
+ await page.reload();await expect(page.getByRole('region',{name:'目录',exact:true})).toContainText('第一章 概述');await expect(page.getByLabel('脚注 1',{exact:true})).toHaveValue('数据来源说明');await expect(page.locator('.word-watermark span')).toHaveText('草稿');expect(errors).toEqual([]);
+});
+
+test('PDF 按 WPS 页面功能：旋转、删除、移动、插入空白页、提取、恢复、水印、手写签名及导出',async({page,baseURL})=>{
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>void dialog.accept());
+ await page.setViewportSize({width:1440,height:900});const {PDFDocument}=await import('pdf-lib');const pdf=await PDFDocument.create();for(let i=1;i<=3;i++){const p=pdf.addPage([400,520]);p.drawText('Report page '+i,{x:40,y:470,size:16});}
+ await collaborationAccount(page.context(),baseURL!,'owner');await page.goto('/#workspace=local');
+ await page.getByRole('button',{name:'导入文件',exact:true}).click();const d=page.getByRole('dialog',{name:'导入办公文件',exact:true});await d.getByLabel('办公文件',{exact:true}).setInputFiles({name:'页面.pdf',mimeType:'application/pdf',buffer:Buffer.from(await pdf.save())});await d.getByRole('button',{name:'导入',exact:true}).click();
+ const strip=page.getByRole('navigation',{name:'页面缩略图'}),thumb=(n:number)=>strip.getByRole('button',{name:`第 ${n} 页`,exact:true}),status=page.locator('.office-document-status');await expect(status).toContainText('/ 3');
+ await page.getByRole('tab',{name:'页面',exact:true}).click();
+ // Rotate page 2, then delete page 1: the old page 2 becomes page 1 and keeps its rotation.
+ await thumb(2).click();await page.getByRole('button',{name:'向右旋转',exact:true}).click();await expect(thumb(2)).toContainText('90°');
+ await thumb(1).click();await page.getByRole('button',{name:'删除页面',exact:true}).click();await expect(status).toContainText('/ 2');await expect(thumb(1)).toContainText('90°');await expect(page.getByRole('img',{name:'PDF 第 1 页'})).toBeVisible();
+ // Insert a blank page after page 1, then move the last page up past it.
+ await page.getByRole('button',{name:'插入空白页',exact:true}).click();await expect(status).toContainText('/ 3');await expect(page.getByRole('img',{name:'PDF 第 2 页（空白页）'})).toBeVisible();await expect(thumb(2)).toContainText('空白页');
+ await thumb(3).click();await page.getByRole('button',{name:'上移页面',exact:true}).click();await expect(thumb(3)).toContainText('空白页');
+ // Multi-select with checkboxes, rotate both left.
+ await strip.getByLabel('选择第 1 页').check();await strip.getByLabel('选择第 2 页').check();await page.getByRole('button',{name:'向左旋转',exact:true}).click();await expect(thumb(1)).not.toContainText('°');await expect(thumb(2)).toContainText('270°');
+ // Watermark shows on the page.
+ await page.getByRole('button',{name:'水印',exact:true}).click();const wm=page.getByRole('dialog',{name:'PDF 水印',exact:true});await wm.getByRole('button',{name:'内部资料',exact:true}).click();await wm.getByRole('button',{name:'确定',exact:true}).click();await expect(page.locator('.pdf-watermark span')).toHaveText('内部资料');await expect(status).toContainText('水印：内部资料');
+ // Signature: draw two strokes, place it on page 1.
+ await thumb(1).click();await page.getByRole('tab',{name:'批注',exact:true}).click();await page.getByRole('button',{name:'签名',exact:true}).click();const pad=page.getByLabel('签名书写区');const box=(await pad.boundingBox())!;
+ for(const [y0,y1]of [[40,120],[120,40]]){await page.mouse.move(box.x+60,box.y+y0);await page.mouse.down();for(let i=1;i<=8;i++)await page.mouse.move(box.x+60+i*30,box.y+y0+(y1-y0)*i/8);await page.mouse.up();}
+ await expect(page.getByRole('dialog',{name:'签名'}).getByRole('status')).toHaveText('已书写 2 笔');await page.getByRole('button',{name:'确定并放置',exact:true}).click();
+ const layer=page.getByLabel('PDF 批注定位层',{exact:true});await layer.scrollIntoViewIfNeeded();await layer.click({position:{x:100,y:80}});await expect(layer.locator('g polyline')).toHaveCount(2);await expect(page.getByRole('heading',{name:/批注列表 · 1/})).toBeVisible();
+ await page.screenshot({path:'artifacts/pdf-pages.png'});
+ // Export follows the arrangement; extraction writes only the chosen pages.
+ await page.getByRole('tab',{name:'开始',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'导出带批注 PDF',exact:true}).click();const exported=await PDFDocument.load(await readFile((await (await download).path())!));
+ // Old page 2 (rotated right then left), old page 3 (rotated left), then the blank page.
+ expect(exported.getPages().map(p=>[Math.round(p.getWidth()),p.getRotation().angle])).toEqual([[400,0],[400,270],[400,0]]);expect(exported.getPage(0).node.Annots()?.size()).toBe(1);
+ await page.getByRole('tab',{name:'页面',exact:true}).click();await page.getByRole('button',{name:'提取页面',exact:true}).click();const ex=page.getByRole('dialog',{name:'提取页面',exact:true});await ex.getByLabel('提取页码范围').fill('2-3');await expect(ex.getByRole('status')).toContainText('将提取 2 页');const extracted=page.waitForEvent('download');await ex.getByRole('button',{name:'提取',exact:true}).click();
+ expect((await PDFDocument.load(await readFile((await (await extracted).path())!))).getPageCount()).toBe(2);
+ await page.reload();await page.getByRole('tab',{name:'页面',exact:true}).click();await expect(status).toContainText('/ 3');await expect(strip.getByRole('button',{name:'第 3 页',exact:true})).toContainText('空白页');
+ await page.getByRole('button',{name:'恢复原始页面',exact:true}).click();await expect(status).toContainText('/ 3');await expect(thumb(1)).not.toContainText('°');await expect(thumb(3)).not.toContainText('空白页');expect(errors).toEqual([]);
+});
+
+test('表格行和列：拖动列宽行高、最适合列宽、隐藏与取消隐藏行列、多列自定义排序及原生副本',async({page})=>{
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'xlsx','行和列');
+ const cell=(r:number,c:number)=>page.getByRole('textbox',{name:`第 ${r} 行第 ${c} 列`,exact:true}),settled=()=>expect(page.getByText('正在提交…',{exact:true})).toHaveCount(0);
+ const fill=async(r:number,c:number,value:string)=>{await cell(r,c).fill(value);await cell(r,c).press('Enter');await settled();};
+ for(const [r,c,v] of [[1,1,'部门'],[1,2,'销量'],[2,1,'乙'],[2,2,'30'],[3,1,'甲'],[3,2,'10'],[4,1,'乙'],[4,2,'5'],[5,1,'甲'],[5,2,'40'],[1,3,'很长很长很长的一段备注文字用于测试最适合列宽']] as const)await fill(r,c,v);
+ const header=(name:string)=>page.locator('.spreadsheet-scroll thead th',{hasText:new RegExp('^'+name+'$')}).first(),widthOf=async(name:string)=>(await header(name).boundingBox())!.width;
+ // Drag the right edge of column A wider.
+ const before=await widthOf('A'),handle=(await page.getByRole('separator',{name:'调整 A 列宽度'}).boundingBox())!;await page.mouse.move(handle.x+3,handle.y+5);await page.mouse.down();await page.mouse.move(handle.x+83,handle.y+5,{steps:5});await page.mouse.up();await settled();
+ await expect.poll(()=>widthOf('A')).toBeGreaterThan(before+60);await expect(page.getByRole('status').filter({hasText:'列宽'})).toBeVisible();
+ // Row 1 taller from its bottom edge.
+ const row=page.getByRole('separator',{name:'调整第 1 行高度'}),rowBox=(await row.boundingBox())!,rowHeader=page.locator('.spreadsheet-scroll tbody th').first(),h0=(await rowHeader.boundingBox())!.height;await page.mouse.move(rowBox.x+10,rowBox.y+3);await page.mouse.down();await page.mouse.move(rowBox.x+10,rowBox.y+33,{steps:4});await page.mouse.up();await settled();await expect.poll(async()=>(await rowHeader.boundingBox())!.height).toBeGreaterThan(h0+20);
+ // 最适合的列宽 for C, via the 行和列 menu.
+ await cell(1,3).click();const c0=await widthOf('C');await page.getByRole('button',{name:'行和列',exact:true}).click();await page.getByRole('menuitem',{name:'最适合的列宽',exact:true}).click();await settled();await expect.poll(()=>widthOf('C')).toBeGreaterThan(c0+60);
+ // Hide column B and row 3; arrows skip them; unhide from a neighbouring selection.
+ await cell(1,2).click();await page.getByRole('button',{name:'行和列',exact:true}).click();await page.getByRole('menuitem',{name:'隐藏列',exact:true}).click();await expect(cell(1,2)).toHaveCount(0);await expect(header('C')).toHaveAttribute('data-hidden-before','true');
+ await cell(3,1).click();await page.getByRole('button',{name:'行和列',exact:true}).click();await page.getByRole('menuitem',{name:'隐藏行',exact:true}).click();await expect(cell(3,1)).toHaveCount(0);
+ await cell(2,1).click();await page.keyboard.press('ArrowDown');await expect(cell(4,1)).toBeFocused();await page.keyboard.press('ArrowRight');await expect(cell(4,3)).toBeFocused();
+ await cell(2,1).click();await page.getByRole('button',{name:'行和列',exact:true}).click();await page.getByRole('menuitem',{name:'取消隐藏行',exact:true}).click();await expect(cell(3,1)).toBeVisible();
+ await page.getByLabel('名称框',{exact:true}).fill('A1:C1');await page.getByLabel('名称框',{exact:true}).press('Enter');await page.getByRole('button',{name:'行和列',exact:true}).click();await page.getByRole('menuitem',{name:'取消隐藏列',exact:true}).click();await expect(cell(1,2)).toBeVisible();
+ // 自定义排序: 部门 ascending, then 销量 descending, header kept.
+ await page.getByLabel('名称框',{exact:true}).fill('A1:B5');await page.getByLabel('名称框',{exact:true}).press('Enter');await page.getByRole('tab',{name:'数据',exact:true}).click();await page.getByRole('button',{name:'自定义排序',exact:true}).click();
+ const sort=page.getByRole('dialog',{name:'排序',exact:true});await expect(sort.getByLabel('数据包含标题')).toBeChecked();await sort.getByRole('button',{name:'添加条件',exact:true}).click();await sort.getByLabel('第 2 关键字列').selectOption({label:'销量（B 列）'});await sort.getByLabel('第 2 关键字次序').selectOption('desc');await sort.getByRole('button',{name:'确定',exact:true}).click();await settled();
+ expect(await Promise.all([1,2,3,4,5].map(async r=>(await cell(r,1).inputValue())+(await cell(r,2).inputValue())))).toEqual(['部门销量','甲40','甲10','乙30','乙5']);
+ await page.screenshot({path:'artifacts/xlsx-rows-columns.png'});
+ // Native copy carries the widths and heights.
+ await page.getByRole('button',{name:'导出',exact:true}).click();await page.getByRole('menuitem',{name:'导出 XLSX 文本副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('dialog',{name:'导出 XLSX 文本副本',exact:true}).getByRole('button',{name:'下载文本副本',exact:true}).click();
+ const {encodeXlsxWorkbook}=await import('../../packages/frontend/apps/web/server/office-spreadsheet'),{sheetDimensions}=await import('../../packages/common/nbstore/src/spreadsheet-dimensions');
+ const parsed=encodeXlsxWorkbook(await readFile((await (await download).path())!));try{const dims=sheetDimensions(parsed.doc,'first',parsed.doc.getArray('sheet'));expect(dims.columns[0]?.size).toBeGreaterThan(150);expect(dims.columns[2]?.size).toBeGreaterThan(150);expect(dims.rows[0]?.size).toBeGreaterThan(40);expect(dims.columns[1]).toBeUndefined();}finally{parsed.doc.destroy();}
+ await page.reload();await expect.poll(()=>widthOf('A')).toBeGreaterThan(before+60);expect(errors).toEqual([]);
+});
+
+test('演示动画：进入效果、开始方式、动画窗格排序与删除、放映逐步出现、后退不重播及 PPTX 副本',async({page})=>{
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1440,height:1000});await localAccount(page);await page.goto('/#workspace=local');await create(page,'pptx','动画');
+ const text=page.getByRole('textbox',{name:'第 1 个文本框',exact:true});await text.fill('第一要点');await expect(page.locator('.presentation-field-state')).toHaveCount(0);
+ await page.getByRole('button',{name:'新增矩形',exact:true}).click();await page.getByLabel('对象 2 y',{exact:true}).fill('0.5');await page.getByLabel('对象 2 y',{exact:true}).blur();await page.getByRole('button',{name:'新增圆形',exact:true}).click();await page.getByLabel('对象 3 y',{exact:true}).fill('0.7');await page.getByLabel('对象 3 y',{exact:true}).blur();await expect(page.locator('.presentation-field-state')).toHaveCount(0);
+ const objects=page.locator('.presentation-canvas .presentation-object');await page.getByRole('tab',{name:'动画',exact:true}).click();
+ // Text: fade on click; rectangle: fly in on click; ellipse: zoom with the rectangle.
+ await objects.nth(0).click({position:{x:4,y:4}});await page.getByRole('button',{name:'淡入',exact:true}).click();await objects.nth(1).click();await page.getByRole('button',{name:'飞入（自底部）',exact:true}).click();await objects.nth(2).click();await page.getByRole('button',{name:'缩放',exact:true}).click();await page.getByLabel('动画开始方式',{exact:true}).selectOption('with');
+ const pane=page.getByRole('region',{name:'动画窗格'});await expect(pane.getByRole('listitem')).toHaveCount(3);await expect(pane.locator('.presentation-animation-step')).toHaveText(['1','2','2']);await expect(page.locator('.presentation-animation-mark')).toHaveText(['1','2','2']);
+ // Move the zoom first, then back; delete it and add it again.
+ await pane.getByRole('button',{name:'上移动画 3',exact:true}).click();await expect(pane.locator('.presentation-animation-item').nth(1)).toContainText('缩放');await pane.getByRole('button',{name:'下移动画 2',exact:true}).click();await expect(pane.locator('.presentation-animation-item').nth(2)).toContainText('缩放');
+ await pane.getByRole('button',{name:'删除动画 3',exact:true}).click();await expect(pane.getByRole('listitem')).toHaveCount(2);await objects.nth(2).click();await page.getByRole('button',{name:'缩放',exact:true}).click();await page.getByLabel('动画开始方式',{exact:true}).selectOption('with');await expect(pane.locator('.presentation-animation-step')).toHaveText(['1','2','2']);
+ // Show: everything animated starts hidden; each click reveals one step; going back hides it again.
+ await page.getByRole('tab',{name:'放映',exact:true}).click();await page.getByRole('button',{name:'从头开始',exact:true}).click();const show=page.getByRole('dialog',{name:'幻灯片放映',exact:true}),shown=show.locator('.presentation-show-current article');
+ const visibility=()=>shown.evaluateAll(list=>list.map(element=>getComputedStyle(element).visibility));
+ await expect.poll(visibility).toEqual(['hidden','hidden','hidden']);await expect(show.locator('.presentation-show-toolbar')).toContainText('动画 0/2');
+ await page.keyboard.press('ArrowRight');await expect.poll(visibility).toEqual(['visible','hidden','hidden']);await page.keyboard.press('ArrowRight');await expect.poll(visibility).toEqual(['visible','visible','visible']);await expect(show.locator('.presentation-show-toolbar')).toContainText('动画 2/2');
+ await page.keyboard.press('ArrowLeft');await expect.poll(visibility).toEqual(['visible','hidden','hidden']);
+ // On the first slide the toolbar's 上一张 still steps back through the builds, then disables.
+ const previous=show.getByRole('button',{name:'上一张',exact:true});await previous.click();await expect.poll(visibility).toEqual(['hidden','hidden','hidden']);await expect(previous).toBeDisabled();
+ await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await expect(show.getByRole('status').filter({hasText:'放映结束'})).toBeVisible();await page.keyboard.press('Escape');await expect(show).toHaveCount(0);
+ await page.getByRole('button',{name:'导出 PPTX 副本',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('dialog',{name:'导出 PPTX 副本',exact:true}).getByRole('button',{name:'下载演示副本',exact:true}).click();
+ const {encodePptxPresentation}=await import('../../packages/frontend/apps/web/server/office-presentation'),{presentationSlides}=await import('../../packages/common/nbstore/src/office-presentation'),{presentationBuilds}=await import('../../packages/common/nbstore/src/presentation-field');
+ const parsed=encodePptxPresentation(await readFile((await (await download).path())!));try{expect(presentationBuilds(presentationSlides(parsed.doc)[0].objects.toArray()).map(build=>[build.effect,build.trigger,build.step])).toEqual([['fade','click',1],['flyBottom','click',2],['zoom','with',2]]);}finally{parsed.doc.destroy();}
+ expect(errors).toEqual([]);
+});

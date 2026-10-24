@@ -8,11 +8,12 @@ import {createHash} from 'node:crypto';
 import type {SQLiteProjectDatabase} from '../../../../common/nbstore/server/database';
 import {cellRevision,structureRevision,MAX_SHEET_BATCH_CELLS,type SheetCellEdit,type SheetOperation} from '../../../../common/nbstore/src/spreadsheet-operation';
 import {validateSpreadsheetUpdate} from './office-spreadsheet';
-import {sheetCellKey,resolveSheetMerges,adjustSheetFormatsForStructure,clearSheetFormats,validSheetCellFormat,validSheetNumberFormat,SHEET_FORMAT_LIMITS,type SheetCellFormat} from '../../../../common/nbstore/src/spreadsheet-format';
-import {adjustSheetObjectsForStructure,clearSheetObjects,resolveSheetRange,sheetObjectRevision,sheetObjects,validSheetObject,validSheetObjectId,SHEET_OBJECT_LIMITS,type SheetObject} from '../../../../common/nbstore/src/spreadsheet-objects';
+import {sheetCellKey,resolveSheetMerges,adjustSheetFormatsForStructure,clearSheetFormats,validSheetCellFormat,validSheetNumberFormat,SHEET_FORMAT_KEYS,SHEET_FORMAT_LIMITS,type SheetCellFormat} from '../../../../common/nbstore/src/spreadsheet-format';
+import {clearSheetDimensions,sheetDimensionKey,validSheetSize,SHEET_DIMENSION_LIMITS,type SheetDimension} from '../../../../common/nbstore/src/spreadsheet-dimensions';
+import {adjustSheetObjectsForStructure,clearSheetObjects,resolveSheetRange,sheetObjectRevision,sheetObjects,sheetValidationAt,validationAccepts,validationMessage,validSheetObject,validSheetObjectId,SHEET_OBJECT_LIMITS,type SheetObject} from '../../../../common/nbstore/src/spreadsheet-objects';
 export class SheetOperationError extends Error {constructor(message:string,readonly status=400){super(message);}}
 export function submitSheetOperation(database:SQLiteProjectDatabase,workspace:string,id:string,user:string,input:SheetOperation){
- if(!input||!['insertRow','deleteRow','insertColumn','deleteColumn','setCell','appendRow','deleteLastRow','setCells','addSheet','deleteSheet','moveSheetLeft','moveSheetRight','renameSheet','setFormat','mergeCells','unmergeCells','putSheetObject','deleteSheetObject'].includes(input.type)||typeof input.operationId!=='string'||!/^[a-zA-Z0-9-]{16,80}$/.test(input.operationId)||typeof input.base!=='string'||input.base.length>131072)throw new SheetOperationError('表格操作参数无效');
+ if(!input||!['insertRow','deleteRow','insertColumn','deleteColumn','setCell','appendRow','deleteLastRow','setCells','addSheet','deleteSheet','moveSheetLeft','moveSheetRight','renameSheet','setFormat','mergeCells','unmergeCells','putSheetObject','deleteSheetObject','setDimensions'].includes(input.type)||typeof input.operationId!=='string'||!/^[a-zA-Z0-9-]{16,80}$/.test(input.operationId)||typeof input.base!=='string'||input.base.length>131072)throw new SheetOperationError('表格操作参数无效');
  if(input.cellType!==undefined&&(input.type!=='setCell'||!validSpreadsheetCellType(input.cellType)))throw new SheetOperationError('单元格内容类型无效');
  if(input.cells!==undefined&&input.type!=='setCells')throw new SheetOperationError('批量单元格参数无效');
  let edits:SheetCellEdit[]|undefined;
@@ -31,8 +32,10 @@ export function submitSheetOperation(database:SQLiteProjectDatabase,workspace:st
  if((input.targets!==undefined||input.format!==undefined)!==(input.type==='setFormat')||(input.rowSpan!==undefined||input.colSpan!==undefined)!==(input.type==='mergeCells'))throw new SheetOperationError('格式或合并参数无效');
  if(input.type==='setFormat'){
   const format=input.format,targets=input.targets;
-  if(!Array.isArray(targets)||!targets.length||targets.length>SHEET_FORMAT_LIMITS.batch||targets.some(target=>!target||Object.keys(target).length!==2||!stableKey(target.rowKey)||!stableColumn(target.columnKey))||new Set(targets.map(target=>target.rowKey+':'+target.columnKey)).size!==targets.length)throw new SheetOperationError('格式目标需包含 1–2000 个不重复的单元格');
-  if(!format||typeof format!=='object'||Array.isArray(format)||!Object.keys(format).length||Object.entries(format).some(([key,value])=>value!==null&&!(key==='numberFormat'?validSheetNumberFormat(value):validSheetCellFormat({[key]:value}))))throw new SheetOperationError('单元格格式无效');
+  const patch=(value:unknown,empty:boolean)=>!!value&&typeof value==='object'&&!Array.isArray(value)&&(empty||Object.keys(value).length>0)&&Object.entries(value).every(([key,item])=>(SHEET_FORMAT_KEYS as readonly string[]).includes(key)&&(item===null||(key==='numberFormat'?validSheetNumberFormat(item):validSheetCellFormat({[key]:item}))));
+  if(!Array.isArray(targets)||!targets.length||targets.length>SHEET_FORMAT_LIMITS.batch||targets.some(target=>!target||typeof target!=='object'||Object.keys(target).some(key=>!['rowKey','columnKey','format'].includes(key))||!stableKey(target.rowKey)||!stableColumn(target.columnKey))||new Set(targets.map(target=>target.rowKey+':'+target.columnKey)).size!==targets.length)throw new SheetOperationError('格式目标需包含 1–2000 个不重复的单元格');
+  // The shared patch may be empty only when every target carries its own.
+  if(targets.some(target=>target.format!==undefined&&!patch(target.format,false))||!patch(format,targets.every(target=>target.format!==undefined)))throw new SheetOperationError('单元格格式无效');
  }
  if(input.type==='mergeCells'&&(!Number.isInteger(input.rowSpan)||!Number.isInteger(input.colSpan)||input.rowSpan!<1||input.colSpan!<1||input.rowSpan!>SHEET_FORMAT_LIMITS.span||input.colSpan!>SHEET_FORMAT_LIMITS.span||input.rowSpan!*input.colSpan!<2))throw new SheetOperationError('合并范围无效，至少包含两个单元格');
  if(formatOperation&&input.type!=='setFormat'&&(!stableKey(input.rowKey)||!stableColumn(input.columnKey)))throw new SheetOperationError('合并单元格稳定标识无效');
@@ -41,9 +44,13 @@ export function submitSheetOperation(database:SQLiteProjectDatabase,workspace:st
  const objectOperation=input.type==='putSheetObject'||input.type==='deleteSheetObject';
  if((input.objectId!==undefined||input.object!==undefined)&&!objectOperation)throw new SheetOperationError('工作表对象参数无效');
  if(objectOperation&&(!validSheetObjectId(input.objectId)||(input.type==='putSheetObject')!==(input.object!==undefined)||input.type==='putSheetObject'&&!validSheetObject(input.object)||input.type==='putSheetObject'&&input.object!.sheet!==(input.sheet??FIRST_WORKSHEET)))throw new SheetOperationError('条件格式或图表参数无效');
+ // Row heights / column widths / hidden: per key and field, last writer wins (like formats).
+ const dimensionOperation=input.type==='setDimensions';
+ if((input.axis!==undefined||input.dimensions!==undefined)!==dimensionOperation)throw new SheetOperationError('行高列宽参数无效');
+ if(dimensionOperation&&(!['row','column'].includes(input.axis as string)||!Array.isArray(input.dimensions)||!input.dimensions.length||input.dimensions.length>SHEET_DIMENSION_LIMITS.batch||new Set(input.dimensions.map(target=>target?.key)).size!==input.dimensions.length||input.dimensions.some(target=>!target||typeof target!=='object'||Object.keys(target).some(key=>!['key','size','hidden'].includes(key))||!(input.axis==='row'?stableKey(target.key):stableColumn(target.key))||target.size===undefined&&target.hidden===undefined||target.size!==undefined&&target.size!==null&&!validSheetSize(input.axis!,target.size)||target.hidden!==undefined&&target.hidden!==null&&target.hidden!==true)))throw new SheetOperationError('行高列宽或隐藏设置无效');
  const sheetId=input.sheet??FIRST_WORKSHEET;
  const fields:unknown[]=[user,input.type,input.row??null,input.column??null,input.value??null,input.base];if(input.cellType!==undefined)fields.push(input.cellType);if(edits)fields.push(edits);if(input.sheet!==undefined)fields.push(input.sheet);if(input.name!==undefined)fields.push(input.name);
- if(input.objectId!==undefined)fields.push(input.objectId,input.object??null);if(input.rowKey!==undefined)fields.push(input.rowKey,input.columnKey);if(input.targets!==undefined)fields.push(input.targets,input.format);if(input.rowSpan!==undefined)fields.push(input.rowSpan,input.colSpan);
+ if(input.objectId!==undefined)fields.push(input.objectId,input.object??null);if(input.rowKey!==undefined)fields.push(input.rowKey,input.columnKey);if(input.targets!==undefined)fields.push(input.targets,input.format);if(input.rowSpan!==undefined)fields.push(input.rowSpan,input.colSpan);if(dimensionOperation)fields.push(input.axis,input.dimensions);
  const signature=createHash('sha256').update(JSON.stringify(fields)).digest('hex');
  return database.db.transaction(()=>{
   const scope='cloud:'+workspace,current=database.load(scope,id);if(!current)throw new SheetOperationError('表格不存在',404);
@@ -68,7 +75,7 @@ export function submitSheetOperation(database:SQLiteProjectDatabase,workspace:st
     const index=order.toArray().indexOf(sheetId);
     if(input.type==='addSheet'){const grid=new Y.Array<Y.Array<string>>(),meta=new Y.Map<unknown>();meta.set('name',input.name);meta.set('defaultType','auto');meta.set('sheet',grid);const id='tab-'+input.operationId;entries.set(id,meta);order.push([id]);for(let r=0;r<20;r++){const row=new Y.Array<string>();row.push(Array(8).fill(''));grid.push([row]);}}
     else if(input.type==='renameSheet')entries.get(sheetId)!.set('name',input.name);
-    else if(input.type==='deleteSheet'){clearSheetCellTypes(doc,sheetId);clearSheetFormats(doc,sheetId);clearSheetObjects(doc,sheetId);if(doc.share.has('sheetColumns'))doc.getMap('sheetColumns').delete(sheetId);order.delete(index,1);entries.delete(sheetId);if(sheetId===FIRST_WORKSHEET)sheet.delete(0,sheet.length);}
+    else if(input.type==='deleteSheet'){clearSheetCellTypes(doc,sheetId);clearSheetFormats(doc,sheetId);clearSheetDimensions(doc,sheetId);clearSheetObjects(doc,sheetId);if(doc.share.has('sheetColumns'))doc.getMap('sheetColumns').delete(sheetId);order.delete(index,1);entries.delete(sheetId);if(sheetId===FIRST_WORKSHEET)sheet.delete(0,sheet.length);}
     else{const target=input.type==='moveSheetLeft'?index-1:index+1;if(target>=0&&target<order.length){order.delete(index,1);order.insert(target,[sheetId]);}}
    }else if(objectOperation){
     const objects=doc.getMap<SheetObject>('sheetObjects'),current=objects.get(input.objectId!);
@@ -78,15 +85,20 @@ export function submitSheetOperation(database:SQLiteProjectDatabase,workspace:st
     else{
      const value=input.object!;if(!resolveSheetRange(sheet,value.range))throw new SheetOperationError('所选区域的行列已删除，请重新选择',409);
      if(value.kind==='chart'&&!resolveSheetRange(sheet,{top:value.anchor.row,bottom:value.anchor.row,left:value.anchor.column,right:value.anchor.column}))throw new SheetOperationError('图表位置的行列已删除，请重新放置',409);
-     if(!current){const same=sheetObjects(doc,sheetId).filter(([,object])=>object.kind===value.kind).length;if(objects.size>=SHEET_OBJECT_LIMITS.objects||same>=(value.kind==='chart'?SHEET_OBJECT_LIMITS.chartsPerSheet:SHEET_OBJECT_LIMITS.rulesPerSheet))throw new SheetOperationError(value.kind==='chart'?'每张工作表最多 50 个图表':'每张工作表最多 200 条条件格式规则',413);}
+     if(current&&validSheetObject(current)&&current.kind!==value.kind)throw new SheetOperationError('对象类型不能更改',409);
+     if(!current){const same=sheetObjects(doc,sheetId).filter(([,object])=>object.kind===value.kind).length,limit={chart:SHEET_OBJECT_LIMITS.chartsPerSheet,conditional:SHEET_OBJECT_LIMITS.rulesPerSheet,validation:SHEET_OBJECT_LIMITS.validationsPerSheet}[value.kind];if(objects.size>=SHEET_OBJECT_LIMITS.objects||same>=limit)throw new SheetOperationError({chart:'每张工作表最多 50 个图表',conditional:'每张工作表最多 200 条条件格式规则',validation:'每张工作表最多 200 条数据有效性规则'}[value.kind],413);}
      objects.set(input.objectId!,value);
     }
+   }else if(dimensionOperation){
+    const axis=input.axis!,present=new Set(axis==='row'?sheet.toArray().map(sheetRowIdentity):sheetColumnIds(sheet)),map=doc.getMap<SheetDimension>('sheetDimensions');
+    for(const target of input.dimensions!){if(!present.has(target.key))throw new SheetOperationError(axis==='row'?'所选行已删除，请重新选择':'所选列已删除，请重新选择',409);const key=sheetDimensionKey(sheetId,axis,target.key),next:Record<string,unknown>={...map.get(key)};for(const field of ['size','hidden'] as const){const value=target[field];if(value===null)delete next[field];else if(value!==undefined)next[field]=value;}if(Object.keys(next).length)map.set(key,next as SheetDimension);else map.delete(key);}
+    if(map.size>SHEET_DIMENSION_LIMITS.entries)throw new SheetOperationError('行高列宽设置超过 2 万项',413);
    }else if(formatOperation){
     const rows=sheet.toArray(),columns=sheetColumnIds(sheet),rowIndex=new Map(rows.map((row,i)=>[sheetRowIdentity(row),i])),locate=(rowKey:string,columnKey:string)=>{const row=rowIndex.get(rowKey),column=columns.indexOf(columnKey);if(row===undefined||column<0)throw new SheetOperationError('目标单元格所属行列已删除，请重新选择',409);return {row,column};};
     if(input.type==='setFormat'){
      // Formatting is commutative per field: each patch applies in commit order without discarding other fields.
      const formats=doc.getMap<SheetCellFormat>('sheetFormats');
-     for(const target of input.targets!){locate(target.rowKey,target.columnKey);const key=sheetCellKey(sheetId,target.rowKey,target.columnKey),next:Record<string,unknown>={...formats.get(key)};for(const [field,value]of Object.entries(input.format!)){if(value===null)delete next[field];else next[field]=value;}if(Object.keys(next).length)formats.set(key,next as SheetCellFormat);else formats.delete(key);}
+     for(const target of input.targets!){locate(target.rowKey,target.columnKey);const key=sheetCellKey(sheetId,target.rowKey,target.columnKey),next:Record<string,unknown>={...formats.get(key)};for(const [field,value]of Object.entries({...input.format!,...target.format})){if(value===null)delete next[field];else next[field]=value;}if(Object.keys(next).length)formats.set(key,next as SheetCellFormat);else formats.delete(key);}
      if(formats.size>SHEET_FORMAT_LIMITS.formats)throw new SheetOperationError('工作簿格式单元格超过 5 万，请先清除部分格式',413);
     }else{
      const anchor=locate(input.rowKey!,input.columnKey!),key=sheetCellKey(sheetId,input.rowKey!,input.columnKey!),merges=doc.getMap<{rowSpan:number;colSpan:number}>('sheetMerges'),layout=resolveSheetMerges(doc,sheetId,sheet);
@@ -116,12 +128,14 @@ export function submitSheetOperation(database:SQLiteProjectDatabase,workspace:st
     if(cellRevision(sheet,row,column)!==input.base)throw new SheetOperationError('此单元格已被他人修改，请选择保留的内容',409);
     const owner=resolveSheetMerges(doc,sheetId,sheet).owner.get(row+':'+column);if(value&&owner&&owner!==row+':'+column)throw new SheetOperationError('此单元格已被合并，输入已保留，请先拆分合并区域',409);
     const kind=input.cellType??spreadsheetCellType(doc,row,column,sheetId);if(kind==='formula'&&!value.trim().startsWith('='))throw new SheetOperationError('公式类型的内容必须以 = 开头，请选择文本或自动');
+    // “停止”样式的数据有效性拒绝不符合的直接输入（公式除外）；粘贴与批量修改与 Excel 一样不受限，界面标出无效值。
+    const rule=sheetValidationAt(doc,sheet,sheetId,row,column);if(rule&&rule.validation.errorStyle==='stop'&&!(kind!=='text'&&value.trim().startsWith('='))&&!validationAccepts(rule.validation.rule,value))throw new SheetOperationError(validationMessage(rule.validation),422);
     const target=sheet.get(row);
     while(target.length<=column)target.push(['']);target.delete(column,1);target.insert(column,[value]);if(input.cellType!==undefined)setSpreadsheetCellType(doc,row,column,kind,sheetId);
    }else{
     if(structureRevision(doc)!==input.base)throw new SheetOperationError('表格已更新，请刷新后重试结构操作',409);
         const action=input.type==='appendRow'?'insertRow':input.type==='deleteLastRow'?'deleteRow':input.type,index=input.type==='appendRow'?sheet.length:input.type==='deleteLastRow'?sheet.length-1:action.endsWith('Column')?input.column:input.row;
-    try{if(Number.isSafeInteger(index)&&index!>=0&&index!<=(action.endsWith('Column')?sheetColumnIds(sheet).length:sheet.length)){adjustSheetFormatsForStructure(doc,sheetId,sheet,action.endsWith('Column')?'column':'row',index!,action.startsWith('delete'));adjustSheetObjectsForStructure(doc,sheetId,sheet,action.endsWith('Column')?'column':'row',index!,action.startsWith('delete'));}changeSheetStructure(doc,sheetId,action,index!,input.operationId);}catch(error){throw new SheetOperationError(error instanceof Error?error.message:'结构操作失败');}
+    try{if(Number.isSafeInteger(index)&&index!>=0&&index!<=(action.endsWith('Column')?sheetColumnIds(sheet).length:sheet.length)){adjustSheetFormatsForStructure(doc,sheetId,sheet,action.endsWith('Column')?'column':'row',index!,action.startsWith('delete'));adjustSheetObjectsForStructure(doc,sheetId,sheet,action.endsWith('Column')?'column':'row',index!,action.startsWith('delete'));if(action.startsWith('delete')){const axis=action.endsWith('Column')?'column':'row';clearSheetDimensions(doc,sheetId,{axis,key:axis==='row'?sheetRowIdentity(sheet.get(index!)):sheetColumnIds(sheet)[index!]});}}changeSheetStructure(doc,sheetId,action,index!,input.operationId);}catch(error){throw new SheetOperationError(error instanceof Error?error.message:'结构操作失败');}
    }
    receipts.set(input.operationId,signature);
    const update=Y.encodeStateAsUpdate(doc,vector);validateSpreadsheetUpdate(current,update);

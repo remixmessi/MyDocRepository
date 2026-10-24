@@ -8,23 +8,33 @@ import {strToU8,zipSync} from 'fflate';
 import {validateSpreadsheetUpdate} from './office-spreadsheet';
 import {toXlsxFormula} from '../../../../common/nbstore/src/spreadsheet-functions';
 import {readOfficePackage,readOfficeXml} from './office-package';
-import {conditionalXml,dxfRegistry,sheetCharts} from './office-xlsx-objects';
+import {conditionalXml,dxfRegistry,sheetCharts,validationXml} from './office-xlsx-objects';
+import {sheetDimensions,pixelsToExcelWidth,pixelsToPoints,type SheetDimension} from '../../../../common/nbstore/src/spreadsheet-dimensions';
+/** `<cols>`: adjacent columns with the same width and visibility share one range (CT_Worksheet puts it before sheetData). */
+function columnsXml(columns:(SheetDimension|undefined)[]){
+ const ranges:{min:number;max:number;value:SheetDimension}[]=[];columns.forEach((value,c)=>{if(!value)return;const last=ranges.at(-1);if(last&&last.max===c&&JSON.stringify(last.value)===JSON.stringify(value))last.max=c+1;else ranges.push({min:c+1,max:c+1,value});});
+ return ranges.length?`<cols>${ranges.map(range=>`<col min="${range.min}" max="${range.max}" width="${pixelsToExcelWidth(range.value.size??96)}"${range.value.size?' customWidth="1"':''}${range.value.hidden?' hidden="1"':''}/>`).join('')}</cols>`:'';
+}
 import {previewFormulaWorkbook} from '../../../../common/nbstore/src/spreadsheet-formula';
-import {sheetCellFormat,resolveSheetMerges,formatSheetValue,isDateNumberFormat,type SheetCellFormat} from '../../../../common/nbstore/src/spreadsheet-format';
+import {sheetCellFormat,resolveSheetMerges,formatSheetValue,isDateNumberFormat,parseSheetBorder,SHEET_BORDER_SIDES,SHEET_DEFAULT_FONT_SIZE,type SheetCellFormat} from '../../../../common/nbstore/src/spreadsheet-format';
 /** Collect distinct cell formats into a minimal styles part; style 0 stays the unformatted default. */
 function styleRegistry(){
- const fonts=['<font><sz val="11"/><name val="Calibri"/></font>'],fills=['<fill><patternFill patternType="none"/></fill>','<fill><patternFill patternType="gray125"/></fill>'],formats:string[]=[],xfs=['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'],index=new Map<string,number>();
+ const fonts=['<font><sz val="11"/><name val="Calibri"/></font>'],fills=['<fill><patternFill patternType="none"/></fill>','<fill><patternFill patternType="gray125"/></fill>'],borders=['<border><left/><right/><top/><bottom/><diagonal/></border>'],formats:string[]=[],xfs=['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'],index=new Map<string,number>();
  const add=(list:string[],xml:string)=>{const found=list.indexOf(xml);if(found>=0)return found;list.push(xml);return list.length-1;};
+ // CT_Border order is left, right, top, bottom, diagonal.
+ const side=(name:string,value:string|undefined)=>{const border=parseSheetBorder(value);return border?`<${name} style="${border.style}"><color rgb="FF${border.color}"/></${name}>`:`<${name}/>`;};
  return {
   style(format:SheetCellFormat|undefined){
    if(!format)return 0;const key=JSON.stringify(format),known=index.get(key);if(known!==undefined)return known;
-   const font=format.bold||format.italic||format.underline||format.color?add(fonts,`<font>${format.bold?'<b/>':''}${format.italic?'<i/>':''}${format.underline?'<u/>':''}<sz val="11"/>${format.color?`<color rgb="FF${format.color}"/>`:''}<name val="Calibri"/></font>`):0;
+   const font=format.bold||format.italic||format.underline||format.strike||format.color||format.fontSize?add(fonts,`<font>${format.bold?'<b/>':''}${format.italic?'<i/>':''}${format.strike?'<strike/>':''}${format.underline?'<u/>':''}<sz val="${format.fontSize??SHEET_DEFAULT_FONT_SIZE}"/>${format.color?`<color rgb="FF${format.color}"/>`:''}<name val="Calibri"/></font>`):0;
    const fill=format.fill?add(fills,`<fill><patternFill patternType="solid"><fgColor rgb="FF${format.fill}"/><bgColor indexed="64"/></patternFill></fill>`):0;
+   const border=SHEET_BORDER_SIDES.some(key=>format[key])?add(borders,`<border>${side('left',format.borderLeft)}${side('right',format.borderRight)}${side('top',format.borderTop)}${side('bottom',format.borderBottom)}<diagonal/></border>`):0;
    const numFmt=format.numberFormat==='@'?49:format.numberFormat?164+add(formats,format.numberFormat):0;
-   const xf=`<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="0" xfId="0"${numFmt?' applyNumberFormat="1"':''}${font?' applyFont="1"':''}${fill?' applyFill="1"':''}${format.align?` applyAlignment="1"><alignment horizontal="${format.align}"/></xf>`:'/>'}`;
+   const alignment=format.align||format.verticalAlign||format.wrap?`<alignment${format.align?` horizontal="${format.align}"`:''}${format.verticalAlign?` vertical="${format.verticalAlign==='middle'?'center':format.verticalAlign}"`:''}${format.wrap?' wrapText="1"':''}/>`:'';
+   const xf=`<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0"${numFmt?' applyNumberFormat="1"':''}${font?' applyFont="1"':''}${fill?' applyFill="1"':''}${border?' applyBorder="1"':''}${alignment?` applyAlignment="1">${alignment}</xf>`:'/>'}`;
    if(xfs.length>=64000)throw new Error('单元格样式组合超过 XLSX 上限');xfs.push(xf);index.set(key,xfs.length-1);return xfs.length-1;
   },
-  xml(dxfs=''){return '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+(formats.length?`<numFmts count="${formats.length}">${formats.map((code,i)=>`<numFmt numFmtId="${164+i}" formatCode="${xmlText(code)}"/>`).join('')}</numFmts>`:'')+`<fonts count="${fonts.length}">${fonts.join('')}</fonts><fills count="${fills.length}">${fills.join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>${dxfs}</styleSheet>`;},
+  xml(dxfs=''){return '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+(formats.length?`<numFmts count="${formats.length}">${formats.map((code,i)=>`<numFmt numFmtId="${164+i}" formatCode="${xmlText(code)}"/>`).join('')}</numFmts>`:'')+`<fonts count="${fonts.length}">${fonts.join('')}</fonts><fills count="${fills.length}">${fills.join('')}</fills><borders count="${borders.length}">${borders.join('')}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>${dxfs}</styleSheet>`;},
  };
 }
 
@@ -85,8 +95,10 @@ function exportXlsx(snapshot:Uint8Array,mode:'text'|'formula',cache=false){
    }
    if(!value&&style)return `<c r="${ref}"${s}/>`;return `<c r="${ref}"${s} t="s"><v>${stringIndex(value)}</v></c>`;
   };
+  const dimensions=sheetDimensions(doc,selected.id,selected.sheet);
   for(const [r,row]of rows.entries()){
-   const xml=`<row r="${r+1}">${row.toArray().map((value,c)=>cellXml(value,r,c)).join('')}</row>`;
+   const rowSize=dimensions.rows[r],rowAttributes=(rowSize?.size?` ht="${pixelsToPoints(rowSize.size)}" customHeight="1"`:'')+(rowSize?.hidden?' hidden="1"':'');
+   const xml=`<row r="${r+1}"${rowAttributes}>${row.toArray().map((value,c)=>cellXml(value,r,c)).join('')}</row>`;
    size+=strToU8(xml).length;if(size>8*1024*1024-512)throw new Error('工作表 XML 超过 8 MB');parts.push(xml);
   }
    const notes=sheetNotes(doc,selected),n=sheetIndex+1,sheetRelations:string[]=[];
@@ -104,8 +116,8 @@ function exportXlsx(snapshot:Uint8Array,mode:'text'|'formula',cache=false){
     noteTypes.push(`<Override PartName="/xl/comments${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>`);
    }
    if(sheetRelations.length)noteFiles[`xl/worksheets/_rels/sheet${n}.xml.rels`]=strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetRelations.join('')}</Relationships>`);
-   // CT_Worksheet order: sheetData, mergeCells, conditionalFormatting, …, drawing, legacyDrawing.
-   worksheetFiles[`xl/worksheets/sheet${n}.xml`]=strToU8('<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData>'+parts.join('')+'</sheetData>'+(merges.anchors.size?`<mergeCells count="${merges.anchors.size}">${[...merges.anchors.values()].map(m=>`<mergeCell ref="${column(m.column)+(m.row+1)}:${column(m.column+m.colSpan-1)+(m.row+m.rowSpan)}"/>`).join('')}</mergeCells>`:'')+conditional+(charts?'<drawing r:id="rIdDrawing"/>':'')+(notes.length?'<legacyDrawing r:id="rIdVml"/>':'')+'</worksheet>');
+   // CT_Worksheet order: sheetData, mergeCells, conditionalFormatting, dataValidations, …, drawing, legacyDrawing.
+   worksheetFiles[`xl/worksheets/sheet${n}.xml`]=strToU8('<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'+columnsXml(dimensions.columns)+'<sheetData>'+parts.join('')+'</sheetData>'+(merges.anchors.size?`<mergeCells count="${merges.anchors.size}">${[...merges.anchors.values()].map(m=>`<mergeCell ref="${column(m.column)+(m.row+1)}:${column(m.column+m.colSpan-1)+(m.row+m.rowSpan)}"/>`).join('')}</mergeCells>`:'')+conditional+validationXml(doc,selected.id,selected.sheet)+(charts?'<drawing r:id="rIdDrawing"/>':'')+(notes.length?'<legacyDrawing r:id="rIdVml"/>':'')+'</worksheet>');
   }
   const files={
    '[Content_Types].xml':strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+sheets.map((_,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('')+(noteTypes.length?'<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>':'')+noteTypes.join('')+objectTypes.join('')+'</Types>'),

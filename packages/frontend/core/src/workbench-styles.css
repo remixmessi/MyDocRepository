@@ -569,10 +569,6 @@ textarea:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accen
 .office-spreadsheet-editor .spreadsheet-scroll td:focus-within>.spreadsheet-result{display:none}
 .office-spreadsheet-editor .spreadsheet-scroll td [role=alert]{position:absolute;z-index:5;top:100%;left:0;min-width:220px;padding:8px;background:var(--panel,#fff);border:1px solid #f04438;border-radius:4px;box-shadow:0 4px 12px #1b263b26}
 .office-spreadsheet-editor .spreadsheet-scroll td small[role=status]{position:absolute;right:2px;bottom:0;font-size:10px}
-.office-spreadsheet-editor .spreadsheet-scroll[data-freeze-row=true] tbody tr:first-child>*{position:sticky;top:23px;z-index:2}
-.office-spreadsheet-editor .spreadsheet-scroll[data-freeze-row=true]:has(.spreadsheet-filter-row) tbody tr:first-child>*{top:51px}
-.office-spreadsheet-editor .spreadsheet-scroll[data-freeze-row=true] tbody tr:first-child>th{z-index:3}
-.office-spreadsheet-editor .spreadsheet-scroll[data-freeze-column=true] tbody td:nth-child(2){position:sticky;left:41px;z-index:1}
 .spreadsheet-sheet-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 8px;background:#f3f5f6;border-top:1px solid var(--line,#dce0e5);font-size:12px}
 .office-spreadsheet-editor .spreadsheet-sheet-bar nav[aria-label='工作表列表']{display:flex;gap:0;padding:0;border:0;background:transparent;overflow-x:auto}
 .office-spreadsheet-editor .spreadsheet-sheet-bar nav button{border:0;border-right:1px solid var(--line,#dce0e5);border-radius:0;padding:6px 16px;background:transparent;font-size:12px;color:var(--text)}
@@ -586,7 +582,6 @@ textarea:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accen
 /* Keep keyboard/scripted scrolling clear of the sticky column letters and row numbers. */
 .office-spreadsheet-editor .spreadsheet-scroll{scroll-padding:24px 0 0 41px}
 .office-spreadsheet-editor .spreadsheet-scroll:has(.spreadsheet-filter-row){scroll-padding-top:52px}
-.office-spreadsheet-editor .spreadsheet-scroll[data-freeze-row=true]{scroll-padding-top:48px}
 
 .office-ribbon-panel .ribbon-button-compact{width:29px;justify-content:center;padding:4px}
 .office-ribbon-panel .ribbon-group>.ribbon-control-row{max-width:340px}
@@ -781,3 +776,148 @@ textarea:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accen
 .word-review-text{overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
 .word-review-actions{display:inline-flex;gap:2px}.word-review-actions button{padding:3px}
 .word-status-revisions{border:0;background:none;color:inherit;font:inherit;padding:0 6px;cursor:pointer}.word-status-revisions:hover{text-decoration:underline}
+/* 演示：形状、拖动手柄、切换与放映 */
+.presentation-canvas,.presentation-thumb-canvas{container-type:inline-size}
+.presentation-object.presentation-triangle,.presentation-object.presentation-diamond,.presentation-object.presentation-rightArrow,.presentation-object.presentation-star5,.presentation-thumb-object.presentation-triangle,.presentation-thumb-object.presentation-diamond,.presentation-thumb-object.presentation-rightArrow,.presentation-thumb-object.presentation-star5{border-color:transparent;overflow:visible}
+.presentation-object svg,.presentation-thumb-object svg{display:block;pointer-events:none}
+.presentation-object:not(.presentation-text){cursor:move;touch-action:none}
+.presentation-object.presentation-text{overflow:visible}
+.presentation-thumb-object .presentation-text{padding:.4cqw;white-space:pre-wrap;overflow-wrap:anywhere;width:100%;height:100%;box-sizing:border-box}
+.presentation-move-handle{position:absolute;left:-1px;top:-20px;display:inline-flex;align-items:center;justify-content:center;width:20px;height:18px;background:#527cbe;color:#fff;border-radius:3px 3px 0 0;cursor:move;touch-action:none;z-index:3}
+.presentation-resize-handle{position:absolute;right:-6px;bottom:-6px;width:11px;height:11px;background:#fff;border:1.5px solid #527cbe;border-radius:2px;cursor:nwse-resize;touch-action:none;z-index:3}
+.presentation-object:focus-visible{outline:2px solid #527cbe;outline-offset:2px}
+.slide-transition-mark{margin-left:4px;color:#b94b2a;font-size:10px}
+.presentation-show{position:fixed;inset:0;z-index:200;background:#000;color:#fff;display:flex;align-items:center;justify-content:center;outline:none}
+.presentation-show-frame{position:relative;width:min(100vw,calc(100vh * var(--slide-ratio)));aspect-ratio:var(--slide-ratio);overflow:hidden;cursor:pointer}
+.presentation-show-layer,.presentation-show-current{position:absolute;inset:0}
+.presentation-show-layer .presentation-show-slide{width:100%;height:100%;border:0}
+.presentation-show-layer[data-leaving]{z-index:0;animation:presentation-hold .6s forwards}
+.presentation-show-current{z-index:1}
+.presentation-show-current [data-transition=fade]{animation:presentation-fade .6s ease-out}
+.presentation-show-current [data-transition=push]{animation:presentation-push-in .6s ease-out}
+.presentation-show-layer[data-leaving][data-transition=push]{animation:presentation-push-out .6s ease-out forwards}
+.presentation-show-current [data-transition=wipe]{animation:presentation-wipe .6s ease-out}
+.presentation-show-current [data-transition=cover]{animation:presentation-push-in .6s ease-out}
+.presentation-show-current [data-transition=zoom]{animation:presentation-zoom .6s ease-out}
+@keyframes presentation-hold{to{opacity:1}}
+@keyframes presentation-fade{from{opacity:0}}
+@keyframes presentation-push-in{from{transform:translateX(100%)}}
+@keyframes presentation-push-out{to{transform:translateX(-100%)}}
+@keyframes presentation-wipe{from{clip-path:inset(0 0 0 100%)}to{clip-path:inset(0)}}
+@keyframes presentation-zoom{from{transform:scale(.3);opacity:0}}
+@media (prefers-reduced-motion:reduce){.presentation-show-current [data-transition],.presentation-show-layer[data-leaving]{animation-duration:1ms}}
+.presentation-show-end{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#ddd;font-size:18px}
+.presentation-show-blank{position:absolute;inset:0;z-index:5}.presentation-show-black{background:#000}.presentation-show-white{background:#fff}
+.presentation-show-toolbar{position:fixed;left:16px;bottom:16px;z-index:10;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;background:#1f2329e6;color:#fff;font-size:12px;opacity:.15;transition:opacity .2s}
+.presentation-show-toolbar:hover,.presentation-show-toolbar:focus-within,.presentation-show-presenter .presentation-show-toolbar{opacity:1}
+.presentation-show-toolbar button{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:3px 8px;border:1px solid #ffffff40;border-radius:4px;background:transparent;color:#fff;font-size:12px}
+.presentation-show-toolbar button[aria-pressed=true]{background:#ffffff30}
+.presentation-show-toolbar button:disabled{opacity:.4}
+@media (hover:none){.presentation-show-toolbar{opacity:1}}
+.presentation-show-presenter{background:#16181d;align-items:stretch;justify-content:stretch}
+.presentation-presenter{display:grid;grid-template-columns:minmax(0,2fr) minmax(220px,1fr);gap:16px;padding:16px 16px 64px;width:100%;box-sizing:border-box}
+.presentation-presenter-main{display:flex;align-items:center;justify-content:center;min-width:0;container-type:size}
+.presentation-presenter-main .presentation-show-frame{width:min(100cqw,calc(100cqh * var(--slide-ratio)))}
+.presentation-presenter-side{display:flex;flex-direction:column;gap:12px;min-width:0;overflow:auto}
+.presentation-presenter-side h3{margin:0 0 6px;font-size:13px;color:#aab}
+.presentation-presenter-next{width:100%;aspect-ratio:var(--slide-ratio)}.presentation-presenter-next .presentation-show-slide{width:100%;border:0}
+.presentation-presenter-timer{display:flex;align-items:center;gap:10px;font-size:13px}.presentation-presenter-timer [role=timer]{font-size:26px;font-variant-numeric:tabular-nums}
+.presentation-presenter-timer button{display:inline-flex;align-items:center;gap:4px;border:1px solid #ffffff40;border-radius:4px;background:transparent;color:#fff;font-size:12px;padding:3px 8px}
+.presentation-presenter-notes{flex:1;min-height:80px}.presentation-presenter-notes p{margin:0;white-space:pre-wrap;font-size:16px;line-height:1.6;color:#eee}
+@media(max-width:700px){.presentation-presenter{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+.presentation-thumb-canvas{color:#222}
+/* 表格：冻结窗格、框线、换行、数据有效性 */
+.office-spreadsheet-editor .spreadsheet-scroll tr.spreadsheet-frozen-row>*{position:sticky;top:var(--freeze-top);z-index:2}
+.office-spreadsheet-editor .spreadsheet-scroll tr.spreadsheet-frozen-row>th{z-index:3}
+.office-spreadsheet-editor .spreadsheet-scroll td.spreadsheet-frozen-column{position:sticky;z-index:1}
+.office-spreadsheet-editor .spreadsheet-scroll tr.spreadsheet-frozen-row>td.spreadsheet-frozen-column{z-index:2}
+.office-spreadsheet-editor .spreadsheet-scroll tr:not(.spreadsheet-frozen-row)>td.spreadsheet-frozen-column.selected{z-index:1}
+.office-spreadsheet-editor .spreadsheet-scroll tr.spreadsheet-freeze-edge>*::after,.office-spreadsheet-editor .spreadsheet-scroll .spreadsheet-freeze-edge-column::before{content:'';position:absolute;pointer-events:none;background:#9aa4b2;z-index:3}
+.office-spreadsheet-editor .spreadsheet-scroll tr.spreadsheet-freeze-edge>*::after{left:0;right:0;bottom:-1px;height:2px}
+.office-spreadsheet-editor .spreadsheet-scroll .spreadsheet-freeze-edge-column::before{top:0;bottom:0;right:-1px;width:2px}
+.office-spreadsheet-editor .spreadsheet-scroll td>.spreadsheet-cell-border{position:absolute;top:-1px;left:-1px;right:-1px;bottom:-1px;pointer-events:none;z-index:2;border:0 none transparent}
+.office-spreadsheet-editor .spreadsheet-scroll td[data-wrap]>.spreadsheet-wrap-text{padding:3px 6px;font-size:13px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;width:max(96px,100%);max-width:320px;min-height:18px;box-sizing:border-box}
+.office-spreadsheet-editor .spreadsheet-scroll td[data-wrap]>input{position:absolute;inset:0;height:100%}
+.office-spreadsheet-editor .spreadsheet-scroll td[data-wrap]:not(:focus-within)>input{color:transparent}
+.office-spreadsheet-editor .spreadsheet-scroll td[data-wrap]:focus-within>.spreadsheet-wrap-text{visibility:hidden}
+.office-spreadsheet-editor .spreadsheet-scroll td[data-invalid]{outline:1.5px dashed #d92d20;outline-offset:-3px}
+.office-spreadsheet-editor .spreadsheet-scroll td>.spreadsheet-list-button{position:absolute;right:1px;top:50%;transform:translateY(-50%);z-index:3;width:18px;height:18px;padding:0;border:1px solid #c5ccd6;border-radius:2px;background:#fff;color:#4b5563;font-size:11px;line-height:1;cursor:pointer}
+.office-spreadsheet-editor .spreadsheet-scroll td>.spreadsheet-list{position:absolute;left:0;top:100%;z-index:6;min-width:100%;max-height:220px;overflow:auto;margin:0;padding:3px 0;list-style:none;background:var(--panel,#fff);border:1px solid #c5ccd6;border-radius:3px;box-shadow:0 4px 12px #1b263b26;font-size:13px}
+.office-spreadsheet-editor .spreadsheet-scroll td>.spreadsheet-list li{padding:4px 10px;cursor:pointer;white-space:nowrap}
+.office-spreadsheet-editor .spreadsheet-scroll td>.spreadsheet-list li[aria-selected=true],.office-spreadsheet-editor .spreadsheet-scroll td>.spreadsheet-list li:hover{background:#e6f2ea}
+.office-spreadsheet-editor .spreadsheet-scroll td:has(>.spreadsheet-list){z-index:6}
+.office-spreadsheet-editor .spreadsheet-scroll td>.spreadsheet-validation-prompt{position:absolute;left:0;top:100%;z-index:5;min-width:160px;max-width:260px;padding:6px 8px;background:#fffbe6;border:1px solid #f5c26b;border-radius:3px;font-size:12px;color:#5c4400;white-space:normal;pointer-events:none}
+.office-spreadsheet-editor .spreadsheet-scroll td:has(>.spreadsheet-validation-prompt){z-index:5}
+.office-menu-color{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;font-size:12px}
+.office-menu-list [role=menuitemradio][aria-checked=true]::before{content:'✓ '}
+/* Word 引用：注释、目录、水印 */
+.office-word-editor article.word-paper{isolation:isolate}
+.word-paper .word-note-ref{font-size:9pt;line-height:1;vertical-align:super;cursor:pointer;user-select:none;color:#1f5fbf;padding:0 1px}
+.word-paper .word-note-ref::after{content:attr(data-label)}
+.word-paper .word-note-glyph{font-size:0}
+.word-paper .word-note-ref[data-revision=ins]::after{color:var(--revision-color);text-decoration:underline}
+.word-paper .word-note-ref[data-revision=del]::after{color:var(--revision-color);text-decoration:line-through}
+.word-paper .word-note-stray{font-size:0}
+.word-notes{margin-top:28px;padding-top:8px;border-top:1px solid #9aa4b2;font-size:13px}
+.word-notes h4{margin:8px 0 4px;font-size:12px;color:#5b6472;font-weight:600}
+.word-notes ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.word-notes li{display:flex;align-items:flex-start;gap:6px}
+.word-notes li[data-deleted] .word-note-input{text-decoration:line-through;color:#8a93a0}
+.word-note-label{min-width:20px;text-align:right;color:#1f5fbf;text-decoration:none;font-size:12px;padding-top:3px}
+.word-note-input{flex:1;min-height:22px;field-sizing:content;resize:none;border:1px solid transparent;border-radius:3px;padding:2px 4px;font:inherit;font-size:13px;background:transparent;color:inherit}
+.word-note-input:hover{border-color:#d5dae1}.word-note-input:focus{outline:2px solid var(--app-accent,#2f6fdb);outline-offset:0;border-color:transparent;background:#fff}
+.word-note-print{display:none}.word-print-preview .word-note-print{display:inline}
+.office-word-toc{position:relative;margin:4px 0 18px;padding:6px 8px;border:1px dashed transparent;border-radius:3px}
+.office-word-toc:hover,.office-word-toc:focus-within{border-color:#b6bec9}.office-word-toc:focus{outline:2px solid var(--app-accent,#2f6fdb);outline-offset:2px}
+.word-toc-title{text-align:center;font-size:18px;margin:0 0 8px}
+.office-word-toc ol{list-style:none;margin:0;padding:0}
+.office-word-toc li{margin:2px 0}.office-word-toc li[data-level="2"]{padding-left:28px}.office-word-toc li[data-level="3"]{padding-left:56px}
+.office-word-toc li[data-level="1"]{font-weight:600}
+.office-word-toc a{display:flex;align-items:baseline;gap:4px;color:inherit;text-decoration:none}
+.office-word-toc a:hover .word-toc-text{text-decoration:underline;color:#1f5fbf}
+.word-toc-leader{flex:1;border-bottom:1px dotted #8a93a0;min-width:16px}
+.word-toc-page{font-variant-numeric:tabular-nums}
+.word-toc-empty{color:#7a828f;font-size:13px}
+.word-toc-tools{position:absolute;top:-34px;right:0;display:flex;gap:6px;align-items:center;padding:4px 6px;background:var(--panel,#fff);border:1px solid #d5dae1;border-radius:4px;box-shadow:0 2px 6px #1b263b1f;font-size:12px;z-index:3}
+.word-toc-tools button{display:inline-flex;align-items:center;gap:4px;font-size:12px}
+.word-watermark-layer{position:absolute;left:0;top:0;width:100%;height:0;overflow:visible;pointer-events:none;z-index:-1}
+.word-watermark{position:absolute;left:0;right:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.word-watermark>span{white-space:nowrap;opacity:.5;font-family:SimSun,'Songti SC',serif;line-height:1;user-select:none}
+.word-print-preview .word-watermark-print{display:none}
+.word-watermark-presets{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 10px}.word-watermark-presets button{font-size:12px;padding:3px 8px}.word-watermark-presets button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent)}
+/* PDF 页面管理、水印与签名 */
+.office-pdf-page{position:relative}
+.pdf-watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden;pointer-events:none;z-index:2}
+.pdf-watermark>span{white-space:nowrap;font-family:'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif;line-height:1;user-select:none}
+.pdf-blank-page{background:#fff;box-shadow:0 1px 4px #1b263b33}
+.pdf-thumbnail-item{position:relative}
+.pdf-thumbnail-item[data-selected] .pdf-thumbnail{outline:2px solid var(--app-accent,#2f6fdb);outline-offset:-2px}
+.pdf-thumbnail-check{position:absolute;top:6px;left:6px;z-index:1;width:16px;height:16px}
+.pdf-thumbnail-blank{display:block;width:84px;max-height:120px;background:#fff;border:1px solid #d5dae1}
+.pdf-side-hint{font-size:12px;color:#5b6472;margin:6px 8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}.pdf-side-hint button{font-size:12px}
+.pdf-place-hint{display:flex;align-items:center;gap:8px;justify-content:center;margin:4px 0;padding:4px 10px;background:#eef4ff;border:1px solid #c7d7f5;border-radius:4px;font-size:13px}
+svg[data-placing]{cursor:crosshair}
+.pdf-signature-pad{display:block;width:100%;max-width:480px;aspect-ratio:480/180;border:1px dashed #9aa4b2;border-radius:4px;background:#fff;cursor:crosshair}
+/* 表格：行高列宽拖动、隐藏行列标记、排序对话框 */
+.office-spreadsheet-editor .spreadsheet-scroll th .spreadsheet-resize-col{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:5;touch-action:none}
+.office-spreadsheet-editor .spreadsheet-scroll tbody th .spreadsheet-resize-row{position:absolute;left:0;bottom:-3px;width:100%;height:6px;cursor:row-resize;z-index:5;touch-action:none}
+.office-spreadsheet-editor .spreadsheet-scroll th .spreadsheet-resize-col:hover,.office-spreadsheet-editor .spreadsheet-scroll th .spreadsheet-resize-row:hover{background:var(--app-accent,#2f6fdb);opacity:.5}
+.office-spreadsheet-editor .spreadsheet-scroll thead th[data-hidden-before]{box-shadow:inset 3px 0 0 -1px #8a93a0}
+.office-spreadsheet-editor .spreadsheet-scroll thead th[data-hidden-after]{box-shadow:inset -3px 0 0 -1px #8a93a0}
+.office-spreadsheet-editor .spreadsheet-scroll tbody th[data-hidden-before]{box-shadow:inset 0 3px 0 -1px #8a93a0}
+.office-spreadsheet-editor .spreadsheet-scroll tbody th[data-hidden-after]{box-shadow:inset 0 -3px 0 -1px #8a93a0}
+.office-spreadsheet-editor .spreadsheet-scroll td[style*="max-width"]{overflow:hidden}
+.office-spreadsheet-editor .spreadsheet-scroll td[data-wrap]>.spreadsheet-wrap-text{width:100%;min-width:0}
+.sheet-sort-keys{list-style:none;padding:0;margin:8px 0;display:flex;flex-direction:column;gap:6px}.sheet-sort-keys li{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.sheet-sort-keys li>span{min-width:72px;font-size:13px}
+/* 演示：动画 */
+.presentation-animation-mark{position:absolute;top:-9px;left:-9px;z-index:3;min-width:16px;height:16px;padding:0 3px;border-radius:3px;background:#b94b2a;color:#fff;font:600 10px/16px sans-serif;text-align:center;pointer-events:none}
+.presentation-animation-pane{margin-bottom:12px;border-bottom:1px solid var(--line,#ddd);padding-bottom:8px}
+.presentation-animation-pane h3{margin:0 0 6px;font-size:13px}
+.presentation-animation-pane ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.presentation-animation-pane li{display:flex;align-items:center;gap:3px;flex-wrap:wrap;padding:3px;border-radius:3px}
+.presentation-animation-pane li[aria-current]{background:var(--accent-soft,#eef4ff)}
+.presentation-animation-item{flex:1;min-width:0;display:flex;align-items:center;gap:6px;border:0;background:transparent;text-align:left;font-size:12px;padding:2px}
+.presentation-animation-step{display:inline-block;min-width:16px;height:16px;border-radius:3px;background:#b94b2a;color:#fff;font:600 10px/16px sans-serif;text-align:center}
+.presentation-animation-pane select{font-size:11px;max-width:110px}
+.presentation-animation-pane li>button:not(.presentation-animation-item){padding:2px;border:1px solid var(--line,#ddd);border-radius:3px;background:var(--panel,#fff)}
+.presentation-show-steps{opacity:.75}

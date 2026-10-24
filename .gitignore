@@ -143,3 +143,8 @@ data/attachments/
 !tests/office-comments.test.ts
 
 !tests/sheet-structure.test.ts
+
+!/tests/spreadsheet-wps.test.ts
+!/tests/office-word-reference.test.ts
+!/tests/office-pdf-pages.test.ts
+!/tests/spreadsheet-dimensions.test.ts

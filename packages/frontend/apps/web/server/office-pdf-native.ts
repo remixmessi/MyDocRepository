@@ -18,7 +18,8 @@ export function readNativeAnnotations(pdf:PDFDocument){
   if(rect.length!==4||rect.some(n=>!Number.isFinite(n))){result.push({...base,reason:'批注缺少有效位置'});continue;}
   const [x1,y1,x2,y2]=rect,x=Math.min(x1,x2),y=Math.min(y1,y2),width=Math.abs(x2-x1),height=Math.abs(y2-y1);
   let annotation:PdfAnnotation;
-  if(type==='ink'){const strokes=entry.dict.lookup(PDFName.of('InkList'));const paths=strokes instanceof PDFArray?strokes.asArray().map(stroke=>numbers(stroke instanceof PDFRef?pdf.context.lookup(stroke):stroke)):[];if(paths.length!==1||paths[0].length<4||paths[0].length>2000||paths[0].length%2||paths[0].some(n=>!Number.isFinite(n))){result.push({...base,reason:'多笔画或超长手绘暂不能转为可编辑批注'});continue;}annotation={page:i+1,type,x,y,width:Math.max(width,1),height:Math.max(height,1),content,points:paths[0]};}
+  if(type==='ink'){const strokes=entry.dict.lookup(PDFName.of('InkList'));const paths=strokes instanceof PDFArray?strokes.asArray().map(stroke=>numbers(stroke instanceof PDFRef?pdf.context.lookup(stroke):stroke)):[];// Several strokes (a signature) keep their separate paths through `strokes`.
+   const flat=paths.flat();if(!paths.length||paths.length>100||paths.some(path=>path.length<4||path.length%2)||flat.length>2000||flat.some(n=>!Number.isFinite(n))){result.push({...base,reason:'超长手绘暂不能转为可编辑批注'});continue;}annotation={page:i+1,type,x,y,width:Math.max(width,1),height:Math.max(height,1),content,points:flat,...(paths.length>1?{strokes:paths.map(path=>path.length/2)}:{})};}
   else if(type==='highlight')annotation={page:i+1,type,x,y,width:Math.max(width,1),height:Math.max(height,1),content};
   else annotation={page:i+1,type,x:x1,y:y1,content};
   const w=annotation.width??20,h=annotation.height??20;

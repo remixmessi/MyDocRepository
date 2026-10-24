@@ -142,3 +142,109 @@ it('对象讨论导出为 PPTX 幻灯片批注：位于对象右上角、回复�
   const reopened=encodePptxPresentation(exportPptxPresentation(Y.encodeStateAsUpdate(doc)));try{expect(presentationSlides(reopened.doc)).toHaveLength(2);}finally{reopened.doc.destroy();}
  }finally{doc.destroy();}
 });
+
+it('文字格式、新形状、层次、背景与切换效果经 PPTX 副本往返，按层次顺序写出',async()=>{
+ const {presentationPaintOrder}=await import('../packages/common/nbstore/src/presentation-field');
+ const {setPresentationSlideSetting}=await import('../packages/common/nbstore/src/office-presentation');
+ const {readOfficePackage,readOfficeXml}=await import('../packages/frontend/apps/web/server/office-package');
+ const doc=legacy();try{
+  const text=doc.getArray<Y.Map<unknown>>('objects').get(0);text.set('text','标题\n第二行');for(const [key,value]of Object.entries({fontSize:32,bold:true,italic:true,underline:true,color:'C00000',align:'center'}))text.set(key,value);
+  const shapes=['roundRect','triangle','diamond','rightArrow','star5'].map(type=>{const object=createPresentationObject(type);object.set('fill','4472C4');doc.getArray<Y.Map<unknown>>('objects').push([object]);return object;});
+  // The text box is painted on top of every shape.
+  shapes.forEach((object,i)=>object.set('z',i));text.set('z',5);
+  setPresentationSlideSetting(doc,['first'],'background','fff2cc');setPresentationSlideSetting(doc,['first'],'transition','push');
+  const id=changePresentationSlide(doc,'add','first');expect(presentationSlides(doc)[1]).toMatchObject({background:'FFF2CC',transition:'push'});setPresentationSlideSetting(doc,[id],'transition','zoom');setPresentationSlideSetting(doc,[id],'background',undefined);
+  const update=Y.encodeStateAsUpdate(doc);validatePresentationUpdate(null,update);const bytes=exportPptxPresentation(update),files=readOfficePackage(bytes),first=readOfficeXml(files['ppt/slides/slide1.xml']);
+  expect(first).toContain('<p:bg><p:bgPr><a:solidFill><a:srgbClr val="FFF2CC"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>');expect(first).toContain('<p:transition spd="med"><p:push dir="l"/></p:transition>');expect(first).toContain('<a:pPr algn="ctr"/>');expect(first).toMatch(/sz="3200" b="1" i="1" u="sng"><a:solidFill><a:srgbClr val="C00000"\/>/);
+  expect(first.indexOf('prst="star5"')).toBeLessThan(first.indexOf('txBox="1"'));expect(readOfficeXml(files['ppt/slides/slide2.xml'])).toContain('<p:zoom/>');expect(readOfficeXml(files['ppt/slides/slide2.xml'])).not.toContain('<p:bg>');
+  const parsed=encodePptxPresentation(bytes);try{
+   const [one,two]=presentationSlides(parsed.doc);expect(one).toMatchObject({background:'FFF2CC',transition:'push'});expect(two.transition).toBe('zoom');expect(two.background).toBeUndefined();
+   const objects=presentationPaintOrder(one.objects.toArray()).map(entry=>entry.object.toJSON());expect(objects.map(object=>object.type)).toEqual(['roundRect','triangle','diamond','rightArrow','star5','text']);
+   expect(objects[5]).toMatchObject({text:'标题\n第二行',fontSize:32,bold:true,italic:true,underline:true,color:'C00000',align:'center'});expect(objects[0].fill).toBe('4472C4');
+  }finally{parsed.doc.destroy();}
+  const restored=new Y.Doc();try{Y.applyUpdate(restored,validateOfficeBackupModel('presentation',update));expect(presentationSlides(restored)[0].background).toBe('FFF2CC');}finally{restored.destroy();}
+ }finally{doc.destroy();}
+});
+
+it('导入：较新切换效果取 mc:Fallback，未知效果降为淡出，背景按幻灯片→版式→母版继承；空形状保留几何',()=>{
+ const encode=(data:Record<string,string>)=>zipSync(Object.fromEntries(Object.entries(data).map(([k,v])=>[k,strToU8(v)])));
+ const shape=(prst:string)=>`<p:sp><p:nvSpPr><p:cNvPr id="2" name="s"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:prstGeom prst="${prst}"/><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>`;
+ const files:Record<string,string>={
+  'ppt/presentation.xml':'<p:presentation><p:sldIdLst><p:sldId id="256" r:id="a"/><p:sldId id="257" r:id="b"/><p:sldId id="258" r:id="c"/></p:sldIdLst><p:sldSz cx="1000" cy="500"/></p:presentation>',
+  'ppt/_rels/presentation.xml.rels':'<Relationships><Relationship Id="a" Type="office/slide" Target="slides/slide1.xml"/><Relationship Id="b" Type="office/slide" Target="slides/slide2.xml"/><Relationship Id="c" Type="office/slide" Target="slides/slide3.xml"/></Relationships>',
+  'ppt/slides/slide1.xml':'<p:sld><p:cSld><p:spTree>'+shape('triangle')+shape('cloud')+'</p:spTree></p:cSld><mc:AlternateContent><mc:Choice Requires="p14"><p:transition spd="slow" p14:dur="2000"><p14:vortex dir="r"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="slow"><p:wipe/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>',
+  'ppt/slides/slide2.xml':'<p:sld><p:cSld><p:spTree/></p:cSld><p:transition><p14:prism/></p:transition></p:sld>',
+  'ppt/slides/slide3.xml':'<p:sld><p:cSld><p:bg><p:bgPr><a:gradFill/></p:bgPr></p:bg><p:spTree/></p:cSld></p:sld>',
+  'ppt/slides/_rels/slide1.xml.rels':'<Relationships><Relationship Id="l" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>',
+  'ppt/slides/_rels/slide2.xml.rels':'<Relationships><Relationship Id="l" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>',
+  'ppt/slides/_rels/slide3.xml.rels':'<Relationships><Relationship Id="l" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>',
+  'ppt/slideLayouts/slideLayout1.xml':'<p:sldLayout><p:cSld><p:spTree/></p:cSld></p:sldLayout>',
+  'ppt/slideLayouts/_rels/slideLayout1.xml.rels':'<Relationships><Relationship Id="m" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>',
+  'ppt/slideMasters/slideMaster1.xml':'<p:sldMaster><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="1f3864"/></a:solidFill></p:bgPr></p:bg><p:spTree/></p:cSld></p:sldMaster>',
+ };
+ const parsed=encodePptxPresentation(encode(files));try{
+  const [one,two,three]=presentationSlides(parsed.doc);expect(one.transition).toBe('wipe');expect(two.transition).toBe('fade');expect(three.transition).toBeUndefined();
+  expect(one.background).toBe('1F3864');expect(two.background).toBe('1F3864');expect(three.background).toBeUndefined();
+  expect(one.objects.toArray().map(object=>[object.get('type'),object.get('fill')])).toEqual([['triangle','FF0000']]);
+ }finally{parsed.doc.destroy();}
+});
+
+it('层次调整走语义接口：按层次修订检测竞争，新对象置顶，通用更新不能改层次；文字格式只用于文本框',async()=>{
+ const {presentationObjectIdentity,presentationFieldRevision,presentationArrangeRevision,presentationPaintOrder}=await import('../packages/common/nbstore/src/presentation-field');
+ const {setPresentationSlideSetting}=await import('../packages/common/nbstore/src/office-presentation');
+ const dir=mkdtempSync(join(tmpdir(),'mydoc-pptx-arrange-')),cloud=new CloudServer(join(dir,'cloud.sqlite')),doc=legacy();try{
+  cloud.database.append('cloud:space','slides',Buffer.from(Y.encodeStateAsUpdate(doc)));const call=(input:Parameters<typeof submitPresentationOperation>[4])=>{const result=submitPresentationOperation(cloud.database,'space','slides','actor',input);Y.applyUpdate(doc,result.update);return result;};
+  for(const type of ['rect','ellipse'] as const)call({action:'addObject',operationId:crypto.randomUUID(),slide:'first',type});
+  const objects=doc.getArray<Y.Map<unknown>>('objects'),ids=objects.toArray().map(object=>presentationObjectIdentity(object)),painted=()=>presentationPaintOrder(objects.toArray()).map(entry=>presentationObjectIdentity(entry.object));
+  expect(painted()).toEqual(ids);
+  const base=presentationArrangeRevision(objects.toArray()),back={action:'arrangeObject' as const,operationId:crypto.randomUUID(),slide:'first',object:ids[2],to:'back' as const,base};call(back);expect(painted()).toEqual([ids[2],ids[0],ids[1]]);
+  expect(submitPresentationOperation(cloud.database,'space','slides','actor',back).repeated).toBe(true);expect(()=>call({...back,operationId:crypto.randomUUID(),to:'front'})).toThrow('层次已被其他成员调整');
+  call({action:'arrangeObject',operationId:crypto.randomUUID(),slide:'first',object:ids[0],to:'forward',base:presentationArrangeRevision(objects.toArray())});expect(painted()).toEqual([ids[2],ids[1],ids[0]]);
+  // Once layers exist, a new object goes on top and ranks stay dense.
+  const added=call({action:'addObject',operationId:crypto.randomUUID(),slide:'first',type:'star5'});expect(painted()).toEqual([ids[2],ids[1],ids[0],added.object]);expect(objects.toArray().map(object=>object.get('z')).sort()).toEqual([0,1,2,3]);
+  expect(()=>call({action:'arrangeObject',operationId:crypto.randomUUID(),slide:'first',object:ids[0],to:'sideways' as never,base:''})).toThrow('无效');
+  const before=Y.encodeStateAsUpdate(doc),vector=Y.encodeStateVector(doc);objects.get(0).set('z',9);expect(()=>validatePresentationUpdate(before,Y.encodeStateAsUpdate(doc,vector))).toThrow('专用接口');objects.get(0).set('z',2);
+  const rect=objects.get(1);expect(()=>call({action:'setField',operationId:crypto.randomUUID(),slide:'first',object:ids[1],field:'bold',value:true,base:presentationFieldRevision(rect,'bold')})).toThrow('不是文本框');
+  const text=objects.get(0);expect(()=>call({action:'setField',operationId:crypto.randomUUID(),slide:'first',object:ids[0],field:'fontSize',value:2,base:presentationFieldRevision(text,'fontSize')})).toThrow('无效');
+  call({action:'setField',operationId:crypto.randomUUID(),slide:'first',object:ids[0],field:'bold',value:true,base:presentationFieldRevision(text,'bold')});call({action:'setField',operationId:crypto.randomUUID(),slide:'first',object:ids[0],field:'align',value:'right',base:presentationFieldRevision(text,'align')});expect(text.get('bold')).toBe(true);expect(text.get('align')).toBe('right');
+  // Background and transition are ordinary slide settings; invalid values are rejected.
+  const snapshot=Y.encodeStateAsUpdate(doc),at=Y.encodeStateVector(doc);setPresentationSlideSetting(doc,['first'],'transition','fade');expect(()=>validatePresentationUpdate(snapshot,Y.encodeStateAsUpdate(doc,at))).not.toThrow();
+  doc.getMap('presentation').set('background','red');expect(()=>validatePresentationUpdate(null,Y.encodeStateAsUpdate(doc))).toThrow('演示设置无效');doc.getMap('presentation').delete('background');
+  rect.set('fontSize',20);expect(()=>validatePresentationUpdate(null,Y.encodeStateAsUpdate(doc))).toThrow('文字格式');
+ }finally{doc.destroy();cloud.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+it('进入动画：按顺序与触发方式分步（单击开新步、同时共享开始、之后顺延），PPTX 写入 p:timing 主序列并能导入还原',async()=>{
+ const {presentationBuilds,PRESENTATION_ANIMATION_MS}=await import('../packages/common/nbstore/src/presentation-field');
+ const {readOfficePackage,readOfficeXml}=await import('../packages/frontend/apps/web/server/office-package');
+ const doc=legacy();try{
+  const objects=doc.getArray<Y.Map<unknown>>('objects'),title=objects.get(0);title.set('text','标题');
+  const shapes=['rect','ellipse','star5','triangle'].map(type=>{const object=createPresentationObject(type);objects.push([object]);return object;});
+  // Order: title (with, on entry) → rect (click) → ellipse (with) → star (after) → triangle (click).
+  const set=(object:Y.Map<unknown>,effect:string,trigger:string,order:number)=>{object.set('animation',effect);object.set('animationTrigger',trigger);object.set('animationOrder',order);};
+  set(title,'fade','with',1);set(shapes[0],'flyBottom','click',2);set(shapes[1],'zoom','with',3);set(shapes[2],'wipe','after',4);set(shapes[3],'appear','click',5);
+  expect(presentationBuilds(objects.toArray()).map(build=>[build.index,build.step,build.delay])).toEqual([[0,0,0],[1,1,0],[2,1,0],[3,1,PRESENTATION_ANIMATION_MS],[4,2,0]]);
+  const update=Y.encodeStateAsUpdate(doc);validatePresentationUpdate(null,update);const bytes=exportPptxPresentation(update),slide=readOfficeXml(readOfficePackage(bytes)['ppt/slides/slide1.xml']);
+  expect(slide).toContain('<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot">');expect(slide).toContain('presetID="10" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="withEffect"');expect(slide).toContain('presetID="2" presetClass="entr" presetSubtype="4" fill="hold" grpId="0" nodeType="clickEffect"');expect(slide).toContain('nodeType="afterEffect"');expect(slide).toContain('<p:attrName>style.visibility</p:attrName>');expect(slide).toContain('<p:bldP spid="2" grpId="0" animBg="1"/>');expect(slide.indexOf('</p:clrMapOvr>')).toBeLessThan(slide.indexOf('<p:timing>'));
+  const parsed=encodePptxPresentation(bytes);try{const back=presentationSlides(parsed.doc)[0].objects.toArray();expect(presentationBuilds(back).map(build=>[build.index,build.effect,build.trigger,build.step,build.delay])).toEqual([[0,'fade','with',0,0],[1,'flyBottom','click',1,0],[2,'zoom','with',1,0],[3,'wipe','after',1,PRESENTATION_ANIMATION_MS],[4,'appear','click',2,0]]);}finally{parsed.doc.destroy();}
+  title.set('animation','spin');expect(()=>validatePresentationUpdate(null,Y.encodeStateAsUpdate(doc))).toThrow('动画');
+ }finally{doc.destroy();}
+});
+
+it('进入动画：“之后”等待本步已开始的全部动画结束（出现为瞬时），连续“之后”在 PPTX 中各成一组，进入页即播的步骤以 onBegin 启动',async()=>{
+ const {presentationBuilds,PRESENTATION_ANIMATION_MS}=await import('../packages/common/nbstore/src/presentation-field');
+ const {readOfficePackage,readOfficeXml}=await import('../packages/frontend/apps/web/server/office-package');
+ const doc=legacy();try{
+  const objects=doc.getArray<Y.Map<unknown>>('objects');objects.get(0).set('text','标题');
+  for(const type of ['rect','ellipse','star5'])objects.push([createPresentationObject(type)]);
+  const set=(index:number,effect:string,trigger:string,order:number)=>{const object=objects.get(index);object.set('animation',effect);object.set('animationTrigger',trigger);object.set('animationOrder',order);};
+  // Step 0: appear (instant) → after starts at once; then with; then two afters in a row each wait for the longest so far.
+  set(0,'appear','after',1);set(1,'fade','after',2);set(2,'zoom','with',3);set(3,'wipe','after',4);
+  expect(presentationBuilds(objects.toArray()).map(build=>[build.index,build.step,build.delay])).toEqual([[0,0,0],[1,0,0],[2,0,0],[3,0,PRESENTATION_ANIMATION_MS]]);
+  set(3,'wipe','click',4);set(2,'zoom','after',3);
+  expect(presentationBuilds(objects.toArray()).map(build=>[build.index,build.delay])).toEqual([[0,0],[1,0],[2,PRESENTATION_ANIMATION_MS],[3,0]]);
+  const bytes=exportPptxPresentation(Y.encodeStateAsUpdate(doc)),slide=readOfficeXml(readOfficePackage(bytes)['ppt/slides/slide1.xml']);
+  expect(slide.match(/nodeType="afterEffect"/g)).toHaveLength(3);expect(slide).toContain('<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>');
+  const parsed=encodePptxPresentation(bytes);try{expect(presentationBuilds(presentationSlides(parsed.doc)[0].objects.toArray()).map(build=>[build.index,build.trigger,build.step,build.delay])).toEqual([[0,'after',0,0],[1,'after',0,0],[2,'after',0,PRESENTATION_ANIMATION_MS],[3,'click',1,0]]);}finally{parsed.doc.destroy();}
+ }finally{doc.destroy();}
+});
