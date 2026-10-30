@@ -4,3 +4,5 @@ const parser=await build({entryPoints:['packages/frontend/apps/web/server/office
 await build({entryPoints:['packages/frontend/apps/web/server/main.ts'],outfile:'packages/frontend/apps/web/server-dist/main.cjs',bundle:true,platform:'node',format:'cjs',target:'node22',external:['better-sqlite3'],define:{__MYDOC_OFFICE_PARSER_SOURCE__:JSON.stringify(parser.outputFiles[0].text)},sourcemap:true});
 // The PDF export Unicode font is read at runtime from fonts/ next to the bundle.
 await cp('packages/frontend/apps/web/server/fonts','packages/frontend/apps/web/server-dist/fonts',{recursive:true});
+
+await build({entryPoints:['packages/common/agent-host/src/worker-child.ts'],outfile:'packages/frontend/apps/web/server-dist/agent-worker.cjs',bundle:true,platform:'node',format:'cjs',target:'node22'});

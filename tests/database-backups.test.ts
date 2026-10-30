@@ -1,3 +1,4 @@
+import {SCHEMA_VERSION} from '../packages/common/nbstore/src/schema';
 import {it,expect} from 'vitest';import Database from 'better-sqlite3';import {mkdtempSync,rmSync,readFileSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createServer} from 'node:http';import * as Y from 'yjs';
 import {ProjectDatabase} from '../packages/frontend/apps/web/sqlite-server';import {DatabaseBackups} from '../packages/common/nbstore/server/backups';import {storageHandler} from '../packages/common/nbstore/server/http';
 function fixture(){const dir=mkdtempSync(join(tmpdir(),'mydoc-backups-')),db=new ProjectDatabase(join(dir,'mydoc.sqlite')),manager=new DatabaseBackups(db,path=>new Database(path));return {dir,db,manager,close(){manager.stop();db.close();rmSync(dir,{recursive:true,force:true});}};}
@@ -19,7 +20,7 @@ it('恢复只替换业务表，保留本机待提交队列与草稿；版本 1 �
  const f=fixture();
  try{
   write(f.db,'备份正文');const backup=await f.manager.create();
-  expect(backup.schemaVersion).toBe(4);
+  expect(backup.schemaVersion).toBe(SCHEMA_VERSION);
   write(f.db,'恢复前正文');
   // 本机未提交状态：恢复不得删除或覆盖。
   f.db.db.prepare('INSERT INTO pending_updates(scope,server,workspace,doc,data,created,generation) VALUES (?,?,?,?,?,?,?)').run('user:a','https://one.example','ws-1','doc:a',Buffer.from([7]),1,f.db.generation);

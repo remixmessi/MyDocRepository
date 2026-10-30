@@ -13,3 +13,5 @@ await cp(resolve(desktop,'resources/icon.png'),resolve(output,'icon.png'));
 await cp(resolve(root,'packages/frontend/apps/web/server/fonts'),resolve(output,'fonts'),{recursive:true});
 const feed=updateFeed(process.env.MYDOC_UPDATE_URL);await writeFile(resolve(output,'release-config.json'),JSON.stringify({enabled:process.env.MYDOC_SIGNED_RELEASE==='1'&&!!feed,channel:feed?'稳定版':'未配置'}));
 console.log('Desktop main, preload and renderer built.');
+
+await build({entryPoints:[resolve(root,'packages/common/agent-host/src/worker-child.ts')],outfile:resolve(output,'agent-worker.cjs'),bundle:true,platform:'node',format:'cjs',target:'node24'});

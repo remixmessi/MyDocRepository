@@ -1,0 +1,16 @@
+{
+  "name": "@mydoc/agent-host",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sqlite-store": "./src/sqlite-store.ts",
+    "./durable-host": "./src/durable-host.ts",
+    "./child-runtime": "./src/child-runtime.ts"
+  },
+  "dependencies": {
+    "@mydoc/agent-contracts": "workspace:*",
+    "@mydoc/agent-core": "workspace:*"
+  }
+}

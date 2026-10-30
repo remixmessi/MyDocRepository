@@ -870,6 +870,29 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@mydoc/agent-contracts@workspace:*, @mydoc/agent-contracts@workspace:packages/common/agent-contracts":
+  version: 0.0.0-use.local
+  resolution: "@mydoc/agent-contracts@workspace:packages/common/agent-contracts"
+  languageName: unknown
+  linkType: soft
+
+"@mydoc/agent-core@workspace:*, @mydoc/agent-core@workspace:packages/common/agent-core":
+  version: 0.0.0-use.local
+  resolution: "@mydoc/agent-core@workspace:packages/common/agent-core"
+  dependencies:
+    "@mydoc/agent-contracts": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
+"@mydoc/agent-host@workspace:packages/common/agent-host":
+  version: 0.0.0-use.local
+  resolution: "@mydoc/agent-host@workspace:packages/common/agent-host"
+  dependencies:
+    "@mydoc/agent-contracts": "workspace:*"
+    "@mydoc/agent-core": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
 "@mydoc/crdt@workspace:*, @mydoc/crdt@workspace:packages/common/crdt":
   version: 0.0.0-use.local
   resolution: "@mydoc/crdt@workspace:packages/common/crdt"

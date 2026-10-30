@@ -1,3 +1,4 @@
+import {AGENT_COLUMNS} from '../src/agent-schema';
 import {AttachmentFiles} from './attachment-files';
 import {randomUUID} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
@@ -45,7 +46,7 @@ export class SQLiteProjectDatabase {
     if(version>=4&&!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_files'").get()&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assets'").get()&&this.db.prepare('SELECT 1 FROM assets LIMIT 1').get())throw new Error('附件文件索引缺失，拒绝生成空附件，请恢复完整备份');
     // Keep exact original values inside the same write transaction, including
     // binary Yjs updates and attachments. A destructive migration must roll back.
-    const retained=retainRows(this.db,{...Object.fromEntries(BUSINESS_TABLES),...protection.preserve});
+    const retained=retainRows(this.db,{...Object.fromEntries(BUSINESS_TABLES),...AGENT_COLUMNS,...protection.preserve});
     for(let next=version+1;next<=this.schemaVersion;next++){
      const migration=SCHEMA_MIGRATIONS[next];
      if(!migration)throw new Error('缺少数据库结构迁移步骤 '+next);

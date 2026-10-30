@@ -211,6 +211,8 @@
 
 ## 四、AI 能力（Copilot，可选）
 
+MyDocAgent 专项：[实现设计方案](./MyDocAgent实现设计方案.md) · [执行清单](./MyDocAgent-Codex-TODO.md)。目前 A0 底层框架已通过本地技术验收；A1 真实模型及业务接入未完成，以下功能不提前勾选。
+
 ### 4.1 模型与接入
 - [ ] 多模型供应商（OpenAI / Anthropic / Gemini / Cloudflare / 图像模型）
 - [ ] 自带密钥 BYOK（Bring Your Own Key）

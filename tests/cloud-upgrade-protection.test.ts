@@ -1,3 +1,4 @@
+import {SCHEMA_VERSION} from '../packages/common/nbstore/src/schema';
 import {it,expect} from 'vitest';
 import Database from 'better-sqlite3';
 import {existsSync,mkdtempSync,readdirSync,rmSync,writeFileSync} from 'node:fs';
@@ -17,7 +18,7 @@ const protection=(path:string)=>({beforeMigration:(db:SQLiteConnection)=>snapsho
 it('升级前快照包含尚在 WAL 的正文及附件，保留旧结构供旧镜像回滚；重复启动不重复备份',()=>{
  const f=fixture();try{
   const open=()=>new SQLiteProjectDatabase(f.path,path=>new Database(path,{fileMustExist:true}),upgradeCloudDatabase,protection(f.path));
-  let db=open();expect(db.schemaVersion).toBe(4);db.close();
+  let db=open();expect(db.schemaVersion).toBe(SCHEMA_VERSION);db.close();
   let files=readdirSync(join(f.dir,'upgrade-backups')).filter(file=>file.endsWith('.sqlite'));expect(files).toHaveLength(1);
   const snapshot=new Database(join(f.dir,'upgrade-backups',files[0]),{readonly:true,fileMustExist:true});
   expect(snapshot.pragma('user_version',{simple:true})).toBe(2);expect(snapshot.pragma('quick_check',{simple:true})).toBe('ok');
