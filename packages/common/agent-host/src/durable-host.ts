@@ -6,6 +6,8 @@ export interface RuntimePort {run(options:RunOptions):Promise<RunResult>}
 /** Trusted account host. Admission is persisted before execution; never auto-replays interrupted writes. */
 export class DurableAgentHost {
  private closing=false;
+ /** Count of skipped compaction/retention passes (fenced restore, storage errors); exposed for diagnostics. */
+ housekeepingFailures=0;
  private active=new Map<string,{controller:AbortController;done:Promise<void>}>();
  constructor(private readonly store:SQLiteAgentStore,private readonly runtime:RuntimePort={run:runAgent},private readonly retainRuns=50){}
  enqueue(session:string,id:string,key:string,input:string){if(this.closing)throw new Error('Host closing');return this.store.enqueue(session,id,key,input);}
@@ -25,8 +27,9 @@ export class DurableAgentHost {
    this.store.interrupt(lease);
   }catch(error){this.store.interrupt(lease);throw error;}
   finally{
-   // Retention is housekeeping: a failure here must not mask the run's own outcome.
-   try{this.store.compact(lease.runId);this.store.prune(session,this.retainRuns);}catch{/* retried after the next run */}
+   // Housekeeping must not mask the run's outcome; prune is session-wide and retried after the next run.
+   try{this.store.compact(lease.runId);}catch{this.housekeepingFailures++;}
+   try{this.store.prune(session,this.retainRuns,lease.runId);}catch{this.housekeepingFailures++;}
    this.active.delete(lease.runId);finish();
   }
   return true;

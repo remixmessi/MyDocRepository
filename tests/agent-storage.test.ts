@@ -77,3 +77,18 @@ it('compacts terminal text deltas, prunes old runs and reports unconfirmed calls
   store.deleteSession('s');expect(db.db.prepare('SELECT count(*) n FROM agent_tool_calls').get()).toEqual({n:0});
  }finally{db.close();f.clean();}
 });
+it('keeps unsaved text of interrupted runs, never reuses cursors and validates retention',async()=>{
+ const f=fixture(),db=f.open();try{
+  const store=new SQLiteAgentStore(db,'a');store.createSession('s','w','test');
+  const append=(lease:ReturnType<typeof store.claim>,seq:number,payload:Parameters<ReturnType<typeof store.events>['append']>[0]['payload'])=>store.events(lease).append({protocolVersion:1,sessionId:'s',runId:lease.runId,seq,timestamp:1,payload});
+  store.enqueue('s','crash','k1','x',100);let lease=store.claim('crash');await append(lease,1,{type:'status',status:'preparing'});await append(lease,2,{type:'status',status:'streaming'});await append(lease,3,{type:'text',text:'partial answer'});
+  store.interrupt(lease);store.compact('crash');expect(JSON.stringify(store.replay('s'))).toContain('partial answer');
+  // Clock moved backwards: the later run has the smaller created time but owns the newest cursor.
+  store.enqueue('s','late','k2','x',50);lease=store.claim('late');await append(lease,1,{type:'status',status:'preparing'});store.interrupt(lease);
+  const top=Math.max(...(store.replay('s') as {cursor:number}[]).map(row=>row.cursor));
+  store.prune('s',1);expect(store.load('crash')).toBeNull();expect(store.load('late')).not.toBeNull();
+  store.enqueue('s','next','k3','x');lease=store.claim('next');await append(lease,1,{type:'status',status:'preparing'});
+  expect((store.replay('s',top) as {cursor:number}[]).map(row=>row.cursor)).toEqual([top+1]);
+  expect(()=>store.prune('s',0)).toThrow('Invalid retention');db.restoring=true;expect(()=>store.prune('s',1)).toThrow('generation');expect(()=>store.compact('late')).toThrow();db.restoring=false;
+ }finally{db.close();f.clean();}
+});

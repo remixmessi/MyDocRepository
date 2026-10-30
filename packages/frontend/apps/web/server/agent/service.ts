@@ -59,7 +59,7 @@ export class AgentService {
     if(input.clear===true)this.config.clear();else this.config.save(input);
     json({model:this.config.publicView()??null});return;
    }
-   if(route==='/sessions/delete'){if(typeof input.id!=='string')throw new Error('Invalid session');store.deleteSession(input.id);json({deleted:true});return;}
+   if(route==='/sessions/delete'){if(typeof input.id!=='string')throw new Error('Invalid session');try{store.deleteSession(input.id);}catch(error){if(error instanceof Error&&error.message==='Session still running'){json({error:'会话仍在运行，请先停止'},409);return;}throw error;}json({deleted:true});return;}
    if(route==='/cancel'){if(!store.load(input.id))throw new Error('Run unavailable');json({cancelled:host.cancel(input.id)});return;}
    if(route==='/runs'){
     let provider:ModelGateway|undefined;

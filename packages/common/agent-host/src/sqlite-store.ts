@@ -1,8 +1,8 @@
 import {canTransition} from '@mydoc/agent-core';
 import type {SQLiteProjectDatabase} from '../../nbstore/server/database';
 import {validateEvent,TERMINAL_STATUSES,UNCONFIRMED_RESULT} from '@mydoc/agent-contracts';
-const TERMINAL_SQL=TERMINAL_STATUSES.map(status=>`'${status}'`).join(',');
 import type {AgentEvent,AgentRun,EventPort,ToolCall} from '@mydoc/agent-contracts';
+const TERMINAL_SQL=TERMINAL_STATUSES.map(status=>`'${status}'`).join(',');
 function text(value:string,max=200){if(typeof value!=='string'||!value.length||value.length>max)throw new Error('Invalid Agent field');}
 /** One trusted account scope. Never accept scope from a model or HTTP request. */
 export class SQLiteAgentStore {
@@ -31,7 +31,7 @@ export class SQLiteAgentStore {
  claim(id:string):AgentRun{
   return this.database.db.transaction(()=>{
    const run=this.load(id);if(!run||run.status!=='queued')throw new Error('Run not queued');
-   const active=this.database.db.prepare("SELECT 1 FROM agent_runs WHERE scope=? AND session=? AND status NOT IN ('queued','completed','cancelled','failed','budget_exhausted','interrupted')").get(this.scope,run.sessionId);if(active)throw new Error('Session already running');
+   const active=this.database.db.prepare(`SELECT 1 FROM agent_runs WHERE scope=? AND session=? AND status NOT IN ('queued',${TERMINAL_SQL})`).get(this.scope,run.sessionId);if(active)throw new Error('Session already running');
    this.fence(run);this.database.db.prepare("UPDATE agent_runs SET status='preparing',generation=generation+1 WHERE scope=? AND id=?").run(this.scope,id);return this.load(id)!;
   }).immediate();
  }
@@ -82,24 +82,27 @@ export class SQLiteAgentStore {
  replay(session:string,after=0){this.session(session);if(!Number.isSafeInteger(after)||after<0)throw new Error('Invalid cursor');return this.database.db.prepare('SELECT cursor,payload FROM agent_events WHERE scope=? AND session=? AND cursor>? ORDER BY cursor LIMIT 200').all(this.scope,session,after);}
  /** Only the authoritative host startup owner may recover its abandoned runs. Not every DB open. */
  recoverActive(){return this.database.db.transaction(()=>{
-  const runs=this.database.db.prepare("SELECT id FROM agent_runs WHERE scope=? AND status NOT IN ('queued','completed','cancelled','failed','budget_exhausted','interrupted')").all(this.scope) as {id:string}[];
+  const runs=this.database.db.prepare(`SELECT id FROM agent_runs WHERE scope=? AND status NOT IN ('queued',${TERMINAL_SQL})`).all(this.scope) as {id:string}[];
   for(const {id} of runs)this.interrupt(this.load(id)!);
   this.database.db.prepare('DELETE FROM agent_approvals WHERE scope=?').run(this.scope);
  }).immediate();}
- /** Started calls without a confirmed result; recovery inspects their domain receipts instead of replaying. */
+ /** Calls without a confirmed result (started or not: the journal has no start marker yet); recovery inspects domain receipts instead of replaying. */
  unconfirmed(run:string){
   const rows=this.database.db.prepare('SELECT id,payload,result FROM agent_tool_calls WHERE scope=? AND run=? ORDER BY rowid').all(this.scope,run) as {id:string;payload:string;result:string|null}[];
   return rows.filter(row=>{if(!row.result)return true;const result=JSON.parse(row.result) as {status:string;text:string};return result.status==='error'&&result.text.startsWith(UNCONFIRMED_RESULT);}).map(row=>JSON.parse(row.payload) as ToolCall);
  }
- /** Terminal runs keep messages; streamed text deltas are redundant with the saved assistant message. */
+ /** Terminal runs drop text deltas already folded into a saved assistant message; trailing unsaved text (worker crash) is kept. */
  compact(run:string){this.database.db.transaction(()=>{
   const current=this.load(run);if(!current||!TERMINAL_STATUSES.includes(current.status as never))return;
-  this.database.db.prepare("DELETE FROM agent_events WHERE scope=? AND run=? AND json_extract(payload,'$.payload.type')='text'").run(this.scope,run);
+  this.fence(current);
+  this.database.db.prepare("DELETE FROM agent_events WHERE scope=? AND run=? AND json_extract(payload,'$.payload.type')='text' AND run_seq<(SELECT COALESCE(MAX(run_seq),0) FROM agent_events WHERE scope=? AND run=? AND json_extract(payload,'$.payload.type')='message' AND json_extract(payload,'$.payload.message.role')='assistant')").run(this.scope,run,this.scope,run);
  }).immediate();}
- /** Bounded history: keep the newest terminal runs; cursors stay monotonic because only older rows go. */
- prune(session:string,keep=50){this.database.db.transaction(()=>{
-  this.session(session);
-  const old=this.database.db.prepare(`SELECT id FROM agent_runs WHERE scope=? AND session=? AND status IN (${TERMINAL_SQL}) ORDER BY created DESC,id DESC LIMIT -1 OFFSET ?`).all(this.scope,session,keep) as {id:string}[];
+ /** Bounded history: keep the terminal runs holding the newest cursors, so the session cursor never moves backwards. */
+ prune(session:string,keep=50,fenceRun?:string){if(!Number.isSafeInteger(keep)||keep<1)throw new Error('Invalid retention');this.database.db.transaction(()=>{
+  this.session(session);if(this.database.restoring)throw new Error('Database generation changed');
+  // A host finishing a run from before a restore must not prune the restored history.
+  if(fenceRun){const run=this.load(fenceRun);if(!run)throw new Error('Run unavailable');this.fence(run);}
+  const old=this.database.db.prepare(`SELECT id FROM agent_runs r WHERE scope=? AND session=? AND status IN (${TERMINAL_SQL}) ORDER BY (SELECT MAX(cursor) FROM agent_events e WHERE e.scope=r.scope AND e.session=r.session AND e.run=r.id) DESC,created DESC,id DESC LIMIT -1 OFFSET ?`).all(this.scope,session,keep) as {id:string}[];
   for(const {id} of old){
    for(const table of ['agent_tool_calls','agent_approvals'])this.database.db.prepare(`DELETE FROM ${table} WHERE scope=? AND run=?`).run(this.scope,id);
    for(const table of ['agent_events','agent_messages'])this.database.db.prepare(`DELETE FROM ${table} WHERE scope=? AND session=? AND run=?`).run(this.scope,session,id);

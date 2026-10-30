@@ -4,7 +4,9 @@
 
 ## 配置与构建
 
-宿主启动前设置 `MYDOC_AGENT_ENDPOINT`（完整 chat/completions 地址）、`MYDOC_AGENT_MODEL`，可选 `MYDOC_AGENT_API_KEY`。密钥只用于宿主请求，不写数据库或传给子进程。模型配置源目前只有宿主环境，不支持 renderer 任意指定地址；未配置时 status.enabled=false，运行接口返回 503。
+共享服务端只用管理员环境配置：`MYDOC_AGENT_ENDPOINT`（完整 chat/completions 地址）、`MYDOC_AGENT_MODEL`，可选 `MYDOC_AGENT_API_KEY`、`MYDOC_AGENT_MAX_OUTPUT_TOKENS`（默认 2048）、`MYDOC_AGENT_CONTEXT_WINDOW`（默认 32000）、`MYDOC_AGENT_TOOLS=1`、`MYDOC_AGENT_USAGE=1`，以及逗号分隔的 `MYDOC_AGENT_ALLOWED_HOSTS`（设置后环境地址不在列表内则启动失败）。用户不能在服务端保存模型。
+
+桌面可经 `POST /api/agent/model` 保存本机模型；设置了环境模型时以环境为准并拒绝修改。非密钥字段存于 `preferences` 的 `agent-config` scope，密钥用 Electron safeStorage 加密写入 userData/agent-secrets，数据库只存 secretRef。系统加密不可用时拒绝保存密钥。备份不含密钥，换机恢复后显示密钥不可用、需重新输入。保留旧密钥时更换主机必须重新输入。未配置时 status.enabled=false，运行接口返回 503。
 
 公网地址必须 HTTPS，HTTP 仅允许明确配置的回环模型服务。当前单次输出上限 2048、输入预算 24000、运行限时 120 秒、并发会话上限 4、账户最多 100 个会话/100 个排队任务。真实供应商能力与系统密钥存储仍待后续验收。
 
@@ -16,15 +18,21 @@
 
 | 方法与路径 | 行为 |
 | --- | --- |
-| GET /status | 是否配置模型及当前范围，不返回密钥 |
+| GET /status | 是否配置模型、是否管理员托管、能否用户配置、系统加密是否可用、公共模型字段（hasKey/keyAvailable）、外发说明；不返回密钥或 secretRef |
+| POST /model | 仅桌面：`{endpoint,model,maxOutputTokens,contextWindow,supportsTools,includeUsage,apiKey?|keepKey?}` 保存，`{clear:true}` 清除 |
 | GET /sessions | 当前账户个人会话，最多 100 条 |
 | POST /sessions | `{title}`，创建个人会话，返回 id |
 | POST /runs | `{session,requestKey,prompt}`，先持久入队再调度，返回 202；同 key 同内容复用 Run |
-| GET /runs?id=… | 本账户运行状态；其他账户返回不可用 |
+| GET /runs?id=… | 本账户运行状态及 `unconfirmed`（结果未确认的调用 id/name，重试前须核对领域回执）；其他账户返回不可用 |
 | POST /cancel | `{id}`，取消本账户活动/排队 Run |
+| POST /sessions/delete | `{id}`，删除会话及其 Run/事件/消息/调用/变更集；有活动 Run 时 409，排队中的一并删除 |
 | GET /events?session=…&after=… | 按会话 cursor 递增返回最多 200 条，客户端推进 cursor；当前是 JSON 分页而非 SSE |
 
 输入不能指定 user/scope、worker 路径、供应商地址或工具。运行中每次模型调用/输出都检查原 Cookie 会话，并定时检查注销/过期；失效取消活动 Run。已发往模型的内容无法撤回。不会把原 Cookie 或 API key 传给 worker。
+
+## 保留与幂等
+
+每个会话保留持有最新 cursor 的 50 个终态 Run，更早的 Run 连同事件、消息、调用、批准一并删除；会话 cursor 不回退。终态 Run 已并入 assistant 消息的文本 delta 会删除，崩溃前未保存的尾部文本保留。requestKey 去重只覆盖仍保留的 Run：被清理的旧 key 重试会产生新 Run。模型错误只在首个事件前对限流/5xx/网络/首包超时最多重试 2 次，不切换供应商。
 
 ## 生命周期与恢复
 

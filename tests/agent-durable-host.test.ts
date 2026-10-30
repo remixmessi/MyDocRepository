@@ -62,3 +62,12 @@ it('bounds an unresponsive worker without relying on its cancellation handler',a
   await expect(host.runNext('s',()=>({...config(),limits:{timeoutMs:20}}))).rejects.toThrow('deadline');expect(f.store.load('r')?.status).toBe('interrupted');await host.close();
  }finally{f.close();}
 });
+it('compacts and prunes after each run without masking the run outcome',async()=>{
+ const f=fixture();try{
+  const host=new DurableAgentHost(f.store,undefined,2);
+  for(const id of ['r1','r2','r3']){host.enqueue('s',id,'k'+id,'say');expect(await host.runNext('s',config)).toBe(true);}
+  expect(f.store.load('r1')).toBeNull();expect(f.store.load('r3')?.status).toBe('completed');
+  const rows=f.store.replay('s') as {payload:string}[];expect(rows.some(row=>JSON.parse(row.payload).payload.type==='text')).toBe(false);expect(rows.some(row=>row.payload.includes('"role":"assistant"'))).toBe(true);
+  expect(host.housekeepingFailures).toBe(0);await host.close();
+ }finally{f.close();}
+});
