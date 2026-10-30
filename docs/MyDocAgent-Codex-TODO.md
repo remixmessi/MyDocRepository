@@ -61,8 +61,8 @@
 
 - [~] A1-08 实现 Node AgentHost 与受控子进程、绑定当前连接实例/run/generation 的 RPC 白名单，worker 无直接数据库、密钥和任意工具执行入口。
 - [~] A1-09 装配 Web 与 Electron 宿主；复用现有数据库服务，覆盖 worker 启动失败、异常退出、主程序关闭与资源释放。
-- [~] A1-10 实现兼容模型适配器与 ModelGateway：能力显式配置、流式响应、用量、超时、错误分类和有界重试；不自动切换供应商。
-- [ ] A1-11 实现模型配置与 secretRef；Electron 检查系统加密可用性，服务端使用秘密存储/环境配置，界面与日志脱敏；不可安全保存时明确报错。
+- [x] A1-10 实现兼容模型适配器与 ModelGateway：能力显式配置、流式响应、用量、超时、错误分类和有界重试；不自动切换供应商。
+- [~] A1-11 实现模型配置与 secretRef；Electron 检查系统加密可用性，服务端使用秘密存储/环境配置，界面与日志脱敏；不可安全保存时明确报错。
 - [~] A1-12 模型出站地址来自用户/管理员配置，限制目标与重定向，不接受模型参数指定任意地址；首次配置说明内容发送范围。
 - [ ] A1-13 实现 `workspace.list`、`resource.search`、`resource.read`、`selection.read`、`run.ask_user`；宿主解析真实账户和资源范围，禁止工具自报 userId/role。
 - [ ] A1-14 从获准资源构建全文检索候选及片段；搜索、数量、摘要、引用定位和附件读取均不得泄露其他账户内容。
@@ -279,3 +279,12 @@
 - 新增 `UNCONFIRMED_RESULT` 协议常量，核心与宿主中断共用；`unconfirmed(run)` 列出已启动但结果未确认的调用，`GET /api/agent/runs` 返回该列表供回执核对，不自动重放。领域回执本身在 A2 提供。
 - 删除会话前拒绝活动 Run，排队中的可删；新增 `POST /api/agent/sessions/delete`。
 - 无 SQL 结构变更。验证：`corepack yarn test:agent` 57 项通过（新增存储保留/压缩/未确认 1 项），`corepack yarn typecheck` 通过。
+
+
+### 2026-10-30：A1 第五部分——模型配置、密钥引用与有界重试
+
+- 新增 `agent-host/src/model-config.ts`。SecretPort 只向数据库写 secretRef：服务端 `EnvSecrets` 只读管理员环境变量、拒绝保存；桌面 `EncryptedFileSecrets` 用 Electron safeStorage 加密后写到 userData/agent-secrets（0600），系统加密不可用时明确报错，不降级明文。
+- 模型配置存于 `preferences` 的独立 `agent-config` scope，不经 `/api/storage/status` 返回 renderer；公共视图只给 hasKey/keyAvailable。保留旧密钥时更换主机必须重新输入，密钥不会转发到新地址。备份携带 secretRef 不带密钥，换机恢复显示“密钥不可用”。
+- 出站：地址只来自宿主配置，HTTPS 或显式回环 HTTP，禁止凭据/查询串；`MYDOC_AGENT_ALLOWED_HOSTS` 限定主机，环境模型不在列表时启动失败。共享服务端只允许管理员环境配置（`POST /api/agent/model` 返回 403）；桌面单用户可经 API 保存。`/status` 返回外发说明文案，界面在 A1-20 展示。
+- ResilientModel：仅在首个事件前对 429/5xx/网络/首包超时重试，默认 2 次指数退避；认证与 4xx 不重试，已有输出后不重试，不切换供应商；错误分类为 auth/rate_limited/unavailable/network/timeout/invalid_response/cancelled，不回传供应商正文。首包超时同时竞速读取，不依赖适配器响应 abort。
+- 无 SQL 结构变更。验证：`corepack yarn test:agent` 63 项通过（新增模型配置 4、服务 2），`corepack yarn typecheck` 通过，桌面 main esbuild 打包通过。A1-11/12 的 Electron 实机 safeStorage 与配置界面待 A1-20/22，保持进行中；A1-10 真实供应商验证并入 A1-23。

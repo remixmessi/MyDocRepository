@@ -4,7 +4,8 @@ import {createDesktopUpdates} from './update-runtime';
 import {DocumentLinkQueue,commandLineLinks} from './deep-links';
 import {OpenFileQueue,commandLineFiles,OPEN_FILE_EXTENSIONS} from './open-files';
 import {OFFICE_IMPORT_EXTENSIONS} from '../../../../common/nbstore/src/office';
-import {app,BrowserWindow,Menu,ipcMain,dialog,shell,net} from 'electron';
+import {app,BrowserWindow,Menu,ipcMain,dialog,shell,net,safeStorage} from 'electron';
+import {EncryptedFileSecrets} from '../../../../common/agent-host/src/model-config';
 import {dirname,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {mkdirSync} from 'node:fs';
@@ -115,7 +116,7 @@ if(!app.requestSingleInstanceLock())app.quit();else{
   if(app.isPackaged)app.setAsDefaultProtocolClient('mydoc');
   if(process.platform==='darwin')app.dock?.setIcon(appIcon);
   while(!database){try{const path=!app.isPackaged&&process.env.MYDOC_DESKTOP_DB_PATH?resolve(process.env.MYDOC_DESKTOP_DB_PATH):desktopDatabasePath(app.isPackaged,resolve(__dirname,'../../../../..'),app.getPath('userData'));if(app.isPackaged)migrateLegacyDesktopDatabase(dirname(app.getPath('exe')),app.getPath('userData'));database=new SQLiteProjectDatabase(path,connectDesktopDatabase,upgradeCloudDatabase,{backupExtension:LOCAL_OFFICE_BACKUP});}catch(error){const result=await dialog.showMessageBox({type:'error',title:'数据库打开失败',message:'无法打开本地数据库',detail:error instanceof Error?error.message:String(error),buttons:['重试','退出'],defaultId:0,cancelId:1});if(result.response===1){allowingQuit=true;app.quit();return;}}}
-  try{server=await startDesktopServer(join(__dirname,'renderer'),database,electronCloudRequest,(url,options)=>net.fetch(url instanceof URL?url.href:url,options));updater=createDesktopUpdates({
+  try{server=await startDesktopServer(join(__dirname,'renderer'),database,electronCloudRequest,(url,options)=>net.fetch(url instanceof URL?url.href:url,options),new EncryptedFileSecrets(join(app.getPath('userData'),'agent-secrets'),safeStorage));updater=createDesktopUpdates({
    notify:state=>{if(state.phase==='installing'){allowingQuit=true;if(database){database.restoring=true;updateOwnsDatabaseLock=true;}}window?.webContents.send('mydoc:update-state',state);},
    release:()=>{if(!updateOwnsClose)return;updateOwnsClose=false;allowingQuit=false;closing=false;if(updateOwnsDatabaseLock&&database)database.restoring=false;updateOwnsDatabaseLock=false;window?.webContents.send('mydoc:update-unlock');},
    prepare:async()=>{if(closing||!server||!window)throw new Error('正在处理其他操作，请稍后安装更新。');updateOwnsClose=true;closing=true;if(!await saveBeforeClose(true))throw new Error('保存未完成，已保留当前窗口，请完成保存后重试。');await server.backups.create('before-update');},

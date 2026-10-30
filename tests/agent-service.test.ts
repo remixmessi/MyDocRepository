@@ -43,3 +43,33 @@ it('desktop service requires its existing bearer token and binds the main local 
   expect((await fetch(desktop.origin+'/api/agent/sessions',{headers:{...headers,Origin:'https://evil.example'}})).status).toBe(403);
  }finally{await desktop.close();cloud.close();rmSync(dir,{recursive:true,force:true});}
 });
+it('desktop saves its own model through the API with encrypted keys; managed env config locks it',async()=>{
+ const {startDesktopServer}=await import('../packages/frontend/apps/desktop/src/server');
+ const {EncryptedFileSecrets}=await import('../packages/common/agent-host/src/model-config');
+ const dir=mkdtempSync(join(tmpdir(),'mydoc-agent-desktop-model-')),cloud=new CloudServer(join(dir,'db.sqlite'));
+ const cipher={isEncryptionAvailable:()=>true,encryptString:(v:string)=>Buffer.from([...v].reverse().join('')),decryptString:(b:Buffer)=>[...b.toString()].reverse().join('')};
+ const desktop=await startDesktopServer(dir,cloud.database,undefined,fetch,new EncryptedFileSecrets(join(dir,'secrets'),cipher));
+ try{
+  const headers={Authorization:'Bearer '+desktop.token,'X-Mydoc-Generation':cloud.database.generation,'X-Mydoc-Account':'main'};
+  const status=async()=>(await fetch(desktop.origin+'/api/agent/status',{headers})).json();
+  expect(await status()).toMatchObject({enabled:false,userConfig:true,secureStorage:true,disclosure:expect.stringContaining('发送')});
+  const save=(body:unknown)=>fetch(desktop.origin+'/api/agent/model',{method:'POST',headers,body:JSON.stringify(body)});
+  expect((await save({endpoint:'http://10.1.1.1/v1',model:'m',maxOutputTokens:10,contextWindow:100,supportsTools:false,includeUsage:false})).status).toBe(400);
+  const saved=await save({endpoint:'https://models.example.com/v1/chat/completions',model:'m',maxOutputTokens:10,contextWindow:100,supportsTools:false,includeUsage:false,apiKey:'desktop-secret'});
+  expect(saved.status).toBe(200);const text=JSON.stringify(await saved.json())+JSON.stringify(await status());expect(text).not.toContain('desktop-secret');expect(text).toContain('"hasKey":true');
+  expect(JSON.stringify(cloud.database.db.prepare('SELECT * FROM preferences').all())).not.toContain('desktop-secret');
+  expect((await save({clear:true})).status).toBe(200);expect(await status()).toMatchObject({enabled:false});
+ }finally{await desktop.close();cloud.close();rmSync(dir,{recursive:true,force:true});}
+});
+it('shared server rejects user model configuration and validates the managed endpoint allow-list',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'mydoc-agent-managed-')),cloud=new CloudServer(join(dir,'db.sqlite'));
+ try{
+  expect(()=>new AgentService(cloud.database,'w',()=>undefined,{MYDOC_AGENT_ENDPOINT:'https://evil.example.com/v1',MYDOC_AGENT_MODEL:'m',MYDOC_AGENT_ALLOWED_HOSTS:'models.example.com'})).toThrow('ALLOWED_HOSTS');
+  const agents=new AgentService(cloud.database,'w',()=>({id:'u',scope:'user:u'}),{MYDOC_AGENT_ENDPOINT:'https://models.example.com/v1',MYDOC_AGENT_MODEL:'m',MYDOC_AGENT_API_KEY:'server-secret'});
+  const server=createServer((req,res)=>void agents.handler(req,res));await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const root='http://127.0.0.1:'+(server.address() as {port:number}).port;
+  try{
+   const body=await (await fetch(root+'/api/agent/status')).text();expect(body).not.toContain('server-secret');expect(JSON.parse(body)).toMatchObject({enabled:true,managed:true,userConfig:false});
+   expect((await fetch(root+'/api/agent/model',{method:'POST',headers:{'X-Mydoc-Generation':cloud.database.generation},body:JSON.stringify({clear:true})})).status).toBe(403);
+  }finally{await agents.close();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+ }finally{cloud.close();rmSync(dir,{recursive:true,force:true});}
+});

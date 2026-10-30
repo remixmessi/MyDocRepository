@@ -1,4 +1,5 @@
 import {AgentService} from '../../web/server/agent/service';
+import type {SecretPort} from '../../../../common/agent-host/src/model-config';
 import {join} from 'node:path';
 import {CloudServer} from '../../web/server/cloud';
 import {createGitHubReleaseFallback} from './github-release-fallback';
@@ -13,12 +14,12 @@ import {clipperHandler} from '../../web/clipper-server';
 import {staticFile} from './policy';
 import {proxyCloudRequest,type CloudRequestFactory} from './cloud-proxy';
 const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon'};
-export async function startDesktopServer(root:string,database:SQLiteProjectDatabase,requestCloud?:CloudRequestFactory,requestGitHub:typeof fetch=fetch){
+export async function startDesktopServer(root:string,database:SQLiteProjectDatabase,requestCloud?:CloudRequestFactory,requestGitHub:typeof fetch=fetch,agentSecrets?:SecretPort){
  const office=new CloudServer(database.path,{database});
  const githubFallback=createGitHubReleaseFallback(requestGitHub);
  const backups=new DatabaseBackups(database,database.connect);backups.start();
  const token=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
- const agents=new AgentService(database,join(root,'..','agent-worker.cjs'),req=>req.headers.authorization==='Bearer '+token?{id:'main',scope:'main'}:undefined);
+ const agents=new AgentService(database,join(root,'..','agent-worker.cjs'),req=>req.headers.authorization==='Bearer '+token?{id:'main',scope:'main'}:undefined,process.env,{secrets:agentSecrets,userConfig:true});
  const server=createServer(async(req,res)=>{
   try{
    const url=new URL(req.url??'/','http://local');
