@@ -32,7 +32,7 @@ export class AgentService {
    if(route==='/status'&&req.method==='GET'){json({enabled:!!this.provider,scope:'personal-prompt-only',worker:true});return;}
    if(route==='/sessions'&&req.method==='GET'){json(store.listSessions('personal'));return;}
    if(route==='/events'&&req.method==='GET'){json(store.replay(url.searchParams.get('session')??'',Number(url.searchParams.get('after')??0)));return;}
-   if(route==='/runs'&&req.method==='GET'){const run=store.load(url.searchParams.get('id')??'');json(run??{error:'Run unavailable'},run?200:404);return;}
+   if(route==='/runs'&&req.method==='GET'){const run=store.load(url.searchParams.get('id')??'');json(run?{...run,unconfirmed:store.unconfirmed(run.runId).map(call=>({id:call.id,name:call.name}))}:{error:'Run unavailable'},run?200:404);return;}
    if(req.method!=='POST'){json({error:'接口不存在'},404);return;}
    const generation=this.database.generation;
    if(req.headers['x-mydoc-generation']!==generation){json({error:'请重新载入后重试'},409);return;}
@@ -43,6 +43,7 @@ export class AgentService {
     const count=this.database.db.prepare('SELECT count(*) n FROM agent_sessions WHERE scope=?').get(principal.scope) as {n:number};if(count.n>=100)throw new Error('Session limit reached');
     const id=randomUUID();store.createSession(id,'personal',input.title);json({id},201);return;
    }
+   if(route==='/sessions/delete'){if(typeof input.id!=='string')throw new Error('Invalid session');store.deleteSession(input.id);json({deleted:true});return;}
    if(route==='/cancel'){if(!store.load(input.id))throw new Error('Run unavailable');json({cancelled:host.cancel(input.id)});return;}
    if(route==='/runs'){
     if(!this.provider){json({error:'管理员尚未配置模型'},503);return;}

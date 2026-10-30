@@ -1,7 +1,8 @@
 import {canTransition} from '@mydoc/agent-core';
 import type {SQLiteProjectDatabase} from '../../nbstore/server/database';
-import {validateEvent,TERMINAL_STATUSES} from '@mydoc/agent-contracts';
-import type {AgentEvent,AgentRun,EventPort} from '@mydoc/agent-contracts';
+import {validateEvent,TERMINAL_STATUSES,UNCONFIRMED_RESULT} from '@mydoc/agent-contracts';
+const TERMINAL_SQL=TERMINAL_STATUSES.map(status=>`'${status}'`).join(',');
+import type {AgentEvent,AgentRun,EventPort,ToolCall} from '@mydoc/agent-contracts';
 function text(value:string,max=200){if(typeof value!=='string'||!value.length||value.length>max)throw new Error('Invalid Agent field');}
 /** One trusted account scope. Never accept scope from a model or HTTP request. */
 export class SQLiteAgentStore {
@@ -42,7 +43,7 @@ export class SQLiteAgentStore {
   const last=this.database.db.prepare('SELECT COALESCE(MAX(run_seq),0) n FROM agent_events WHERE scope=? AND run=?').get(this.scope,run.runId) as {n:number};
   let seq=last.n;
   const pending=this.database.db.prepare('SELECT id FROM agent_tool_calls WHERE scope=? AND run=? AND result IS NULL').all(this.scope,run.runId) as {id:string}[];
-  for(const call of pending)this.append(run,{protocolVersion:1,runId:run.runId,sessionId:run.sessionId,seq:++seq,timestamp:Date.now(),payload:{type:'message',message:{role:'tool',callId:call.id,status:'error',text:'Runtime interrupted; execution outcome unconfirmed, inspect domain receipt before retry'}}});
+  for(const call of pending)this.append(run,{protocolVersion:1,runId:run.runId,sessionId:run.sessionId,seq:++seq,timestamp:Date.now(),payload:{type:'message',message:{role:'tool',callId:call.id,status:'error',text:UNCONFIRMED_RESULT+'; runtime interrupted, inspect domain receipt before retry'}}});
   this.append(run,{protocolVersion:1,runId:run.runId,sessionId:run.sessionId,seq:++seq,timestamp:Date.now(),payload:{type:'status',status:'interrupted'}});
   this.database.db.prepare('UPDATE agent_runs SET generation=generation+1 WHERE scope=? AND id=?').run(this.scope,run.runId);
  }).immediate();}
@@ -85,8 +86,29 @@ export class SQLiteAgentStore {
   for(const {id} of runs)this.interrupt(this.load(id)!);
   this.database.db.prepare('DELETE FROM agent_approvals WHERE scope=?').run(this.scope);
  }).immediate();}
+ /** Started calls without a confirmed result; recovery inspects their domain receipts instead of replaying. */
+ unconfirmed(run:string){
+  const rows=this.database.db.prepare('SELECT id,payload,result FROM agent_tool_calls WHERE scope=? AND run=? ORDER BY rowid').all(this.scope,run) as {id:string;payload:string;result:string|null}[];
+  return rows.filter(row=>{if(!row.result)return true;const result=JSON.parse(row.result) as {status:string;text:string};return result.status==='error'&&result.text.startsWith(UNCONFIRMED_RESULT);}).map(row=>JSON.parse(row.payload) as ToolCall);
+ }
+ /** Terminal runs keep messages; streamed text deltas are redundant with the saved assistant message. */
+ compact(run:string){this.database.db.transaction(()=>{
+  const current=this.load(run);if(!current||!TERMINAL_STATUSES.includes(current.status as never))return;
+  this.database.db.prepare("DELETE FROM agent_events WHERE scope=? AND run=? AND json_extract(payload,'$.payload.type')='text'").run(this.scope,run);
+ }).immediate();}
+ /** Bounded history: keep the newest terminal runs; cursors stay monotonic because only older rows go. */
+ prune(session:string,keep=50){this.database.db.transaction(()=>{
+  this.session(session);
+  const old=this.database.db.prepare(`SELECT id FROM agent_runs WHERE scope=? AND session=? AND status IN (${TERMINAL_SQL}) ORDER BY created DESC,id DESC LIMIT -1 OFFSET ?`).all(this.scope,session,keep) as {id:string}[];
+  for(const {id} of old){
+   for(const table of ['agent_tool_calls','agent_approvals'])this.database.db.prepare(`DELETE FROM ${table} WHERE scope=? AND run=?`).run(this.scope,id);
+   for(const table of ['agent_events','agent_messages'])this.database.db.prepare(`DELETE FROM ${table} WHERE scope=? AND session=? AND run=?`).run(this.scope,session,id);
+   this.database.db.prepare('DELETE FROM agent_runs WHERE scope=? AND id=?').run(this.scope,id);
+  }
+ }).immediate();}
  deleteSession(id:string){this.database.db.transaction(()=>{
   this.session(id);
+  if(this.database.db.prepare(`SELECT 1 FROM agent_runs WHERE scope=? AND session=? AND status NOT IN ('queued',${TERMINAL_SQL})`).get(this.scope,id))throw new Error('Session still running');
   for(const table of ['agent_tool_calls','agent_approvals'])this.database.db.prepare(`DELETE FROM ${table} WHERE scope=? AND run IN (SELECT id FROM agent_runs WHERE scope=? AND session=?)`).run(this.scope,this.scope,id);
   for(const table of ['agent_events','agent_messages','agent_changesets','agent_runs'])this.database.db.prepare(`DELETE FROM ${table} WHERE scope=? AND session=?`).run(this.scope,id);
   this.database.db.prepare('DELETE FROM agent_sessions WHERE scope=? AND id=?').run(this.scope,id);

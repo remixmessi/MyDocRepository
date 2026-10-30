@@ -11,6 +11,8 @@ export interface RunStore {load(runId:string):Promise<AgentRun|null>;save(run:Ag
 export interface ResultPage {text:string;nextOffset:number|null}
 export interface ResultPages {put(id:string,text:string):Promise<void>;read(id:string,offset:number,limit:number):Promise<ResultPage>}
 export const TERMINAL_STATUSES:readonly TerminalStatus[]=['completed','cancelled','failed','budget_exhausted','interrupted'];
+/** Prefix of a started call whose outcome is unknown; hosts query domain receipts before any retry. */
+export const UNCONFIRMED_RESULT='Execution outcome unconfirmed';
 export function recoverRun(run:AgentRun):AgentRun {
  validateRun(run);
  return TERMINAL_STATUSES.includes(run.status as TerminalStatus)?{...run}:{...run,status:'interrupted',generation:run.generation+1};

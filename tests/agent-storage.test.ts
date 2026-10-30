@@ -56,3 +56,24 @@ it('partial Agent structure fails startup without advancing the version',()=>{
   expect(()=>f.open()).toThrow();const check=new Database(f.path);expect(check.pragma('user_version',{simple:true})).toBe(4);expect(check.prepare("SELECT name FROM sqlite_master WHERE name='agent_runs'").get()).toBeUndefined();check.close();
  }finally{f.clean();}
 });
+it('compacts terminal text deltas, prunes old runs and reports unconfirmed calls for receipt checks',async()=>{
+ const f=fixture(),db=f.open();try{
+  const store=new SQLiteAgentStore(db,'a');store.createSession('s','w','test');
+  for(const id of ['r1','r2','r3']){
+   store.enqueue('s',id,'k'+id,'say');const lease=store.claim(id);
+   await runAgent({sessionId:'s',runId:id,prompt:'say',tools:[],provider:{async *stream(){yield {type:'text',text:'he'};yield {type:'text',text:'llo'};yield {type:'done'};}},gateway:{async execute(){return {status:'ok',text:''};}},clock:{now:()=>1},events:store.events(lease)});
+   expect(store.replay('s').filter(row=>JSON.parse((row as {payload:string}).payload).payload.type==='text')).toHaveLength(2);
+   store.compact(id);store.prune('s',2);
+  }
+  const rows=store.replay('s') as {cursor:number;payload:string}[];expect(rows.some(row=>JSON.parse(row.payload).payload.type==='text')).toBe(false);
+  expect(store.load('r1')).toBeNull();expect(store.load('r3')?.status).toBe('completed');expect(rows.every(row=>JSON.parse(row.payload).runId!=='r1')).toBe(true);
+  expect(rows.find(row=>JSON.parse(row.payload).payload.message?.role==='assistant')).toMatchObject({payload:expect.stringContaining('hello')});
+  const before=Math.max(...rows.map(row=>row.cursor));store.enqueue('s','r4','k4','tool');const lease=store.claim('r4');
+  await store.events(lease).append({protocolVersion:1,sessionId:'s',runId:'r4',seq:1,timestamp:1,payload:{type:'status',status:'preparing'}});
+  await store.events(lease).append({protocolVersion:1,sessionId:'s',runId:'r4',seq:2,timestamp:1,payload:{type:'message',message:{role:'assistant',text:'',calls:[{id:'w',name:'write',arguments:{}},{id:'ok',name:'read',arguments:{}}]}}});
+  await store.events(lease).append({protocolVersion:1,sessionId:'s',runId:'r4',seq:3,timestamp:1,payload:{type:'message',message:{role:'tool',callId:'ok',status:'ok',text:'done'}}});
+  expect(()=>store.deleteSession('s')).toThrow('still running');
+  store.interrupt(lease);expect(store.unconfirmed('r4').map(call=>call.id)).toEqual(['w']);expect(store.replay('s',before).length).toBeGreaterThan(0);
+  store.deleteSession('s');expect(db.db.prepare('SELECT count(*) n FROM agent_tool_calls').get()).toEqual({n:0});
+ }finally{db.close();f.clean();}
+});

@@ -9,7 +9,7 @@ import type {ContextPolicy} from './context';
 import {executeBatch} from './batch';
 export {ContextManager,estimateContext} from './context';
 export type {ContextPolicy} from './context';
-import {AGENT_PROTOCOL_VERSION,DEFAULT_RUN_LIMITS,validateCall,validateLimits,validateTools,validateUsage} from '@mydoc/agent-contracts';
+import {AGENT_PROTOCOL_VERSION,DEFAULT_RUN_LIMITS,UNCONFIRMED_RESULT,validateCall,validateLimits,validateTools,validateUsage} from '@mydoc/agent-contracts';
 import type {Clock,EventPayload,EventPort,Message,ProviderPort,RunIdentity,RunLimits,RunStatus,TerminalStatus,ToolCall,ToolGateway,ToolSpec,InteractionPort,ResultPages,TokenUsage} from '@mydoc/agent-contracts';
 export interface RunOptions extends RunIdentity {
  prompt:string;provider:ProviderPort;gateway:ToolGateway;tools:readonly ToolSpec[];
@@ -155,7 +155,7 @@ export async function runAgent(options:RunOptions):Promise<RunResult>{
   if(error instanceof EventWriteError)throw error;
   // Preserve accepted calls and pair every unexecuted call, even on a partial stream.
   await saveAssistant();
-  for(const call of [...pending])await answer(call,{status:started.has(call.id)?'error':'skipped',text:started.has(call.id)?'Execution outcome unconfirmed; inspect operation receipt before retry':'Not executed: run stopped'});
+  for(const call of [...pending])await answer(call,{status:started.has(call.id)?'error':'skipped',text:started.has(call.id)?UNCONFIRMED_RESULT+'; inspect operation receipt before retry':'Not executed: run stopped'});
   const reason=signal.aborted?signal.reason:error;
   const terminal=reason instanceof BudgetError?'budget_exhausted':signal.aborted?'cancelled':'failed';
   await emit({type:'error',message:reason instanceof Error?reason.message:'Agent failed'});

@@ -7,7 +7,7 @@ export interface RuntimePort {run(options:RunOptions):Promise<RunResult>}
 export class DurableAgentHost {
  private closing=false;
  private active=new Map<string,{controller:AbortController;done:Promise<void>}>();
- constructor(private readonly store:SQLiteAgentStore,private readonly runtime:RuntimePort={run:runAgent}){}
+ constructor(private readonly store:SQLiteAgentStore,private readonly runtime:RuntimePort={run:runAgent},private readonly retainRuns=50){}
  enqueue(session:string,id:string,key:string,input:string){if(this.closing)throw new Error('Host closing');return this.store.enqueue(session,id,key,input);}
  async runNext(session:string,configure:(lease:AgentRun)=>Omit<RunOptions,'sessionId'|'runId'|'prompt'|'events'|'signal'>):Promise<boolean>{
   if(this.closing)return false;
@@ -24,7 +24,11 @@ export class DurableAgentHost {
    // A runtime must commit a terminal event before reporting success.
    this.store.interrupt(lease);
   }catch(error){this.store.interrupt(lease);throw error;}
-  finally{this.active.delete(lease.runId);finish();}
+  finally{
+   // Retention is housekeeping: a failure here must not mask the run's own outcome.
+   try{this.store.compact(lease.runId);this.store.prune(session,this.retainRuns);}catch{/* retried after the next run */}
+   this.active.delete(lease.runId);finish();
+  }
   return true;
  }
  cancel(id:string){const active=this.active.get(id);if(active){active.controller.abort();return true;}return this.store.cancelQueued(id);}
