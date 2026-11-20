@@ -6,12 +6,15 @@ import {SCHEMA_VERSION} from '../../packages/common/nbstore/src/schema';
 // without touching the user's SQLite database or requiring an Electron build.
 async function fixture(page:Page,desktop:boolean,unavailable=false,admin=true){
  const documents=new Map<string,Uint8Array>();
+ const failures={unavailable,registryRead:false,writes:false};
  await page.route('**/api/hosting',route=>route.fulfill({json:{hosted:false}}));
  await page.route('**/api/storage/**',async route=>{
   const request=route.request(),url=new URL(request.url()),path=url.pathname.slice('/api/storage'.length);
   if(path==='/status')return route.fulfill({json:{initialized:true,schemaVersion:SCHEMA_VERSION,generation:'test',preferences:{'cloud-server-url':'https://team.example','cloud-servers':JSON.stringify([{url:'https://team.example',name:'team.example'}])}}});
   if(path==='/document'){
    const id=url.searchParams.get('id')!;
+   if(failures.registryRead&&id==='registry:local'&&request.method()==='GET')return route.fulfill({status:503,json:{error:'测试本地注册表读取失败'}});
+   if(failures.writes&&request.method()==='POST')return route.fulfill({status:503,json:{error:'测试保存失败'}});
    if(request.method()==='POST'){
     const update=new Uint8Array(request.postDataBuffer()!),previous=documents.get(id);
     documents.set(id,previous?mergeUpdates([previous,update]):update);
@@ -25,7 +28,7 @@ async function fixture(page:Page,desktop:boolean,unavailable=false,admin=true){
  });
  await page.route('**/api/cloud/**',route=>{
   const pathname=new URL(route.request().url()).pathname,path=pathname.slice(pathname.lastIndexOf('/api/cloud/')+'/api/cloud'.length);
-  if(unavailable)return route.fulfill({status:503,json:{error:'测试服务器暂不可用'}});
+  if(failures.unavailable)return route.fulfill({status:503,json:{error:'测试服务器暂不可用'}});
   if(path==='/session')return route.fulfill({json:{user:{id:'member',name:'团队成员',email:'member@example.com',serverAdmin:admin}}});
   if(path==='/workspaces')return route.fulfill({json:[{id:'joined-team',name:'已加入的团队空间',role:'member',createdAt:1},{id:'other-team',name:'另一个团队空间',role:'owner',createdAt:2}]});
   if(path==='/admin/users')return route.fulfill({json:{users:[{id:'test-user',name:new URL(route.request().url()).searchParams.get('workspace')==='joined-team'?'所选空间用户':'另一个空间用户',email:'user@example.com',verified:1,createdAt:1,serverAdmin:0,defaultAdmin:0}],total:1,offset:0,limit:100}});
@@ -35,15 +38,17 @@ async function fixture(page:Page,desktop:boolean,unavailable=false,admin=true){
  });
  if(desktop)await page.addInitScript(()=>{
   const idle=()=>()=>{};
+  const close=window as Window&{prepareClose?:()=>Promise<void>};
   window.mydocDesktop={checkServerUpdates:async server=>{(window as Window&{serverUpdateAddress?:string}).serverUpdateAddress=server;return {version:'1.0.0',source:'server',serverUrl:server,enabled:true,phase:'up-to-date',automaticChecks:false,channel:'测试'};},platform:'darwin',arch:'arm64',
    storage:async request=>{
     const response=await fetch('/api/storage'+request.path,{method:request.method,body:request.body?new Uint8Array(request.body):undefined});
     return {status:response.status,contentType:response.headers.get('Content-Type')??'',body:new Uint8Array(await response.arrayBuffer())};
    },updateStatus:async()=>({version:'1.0.0',enabled:false,phase:'disabled',automaticChecks:false,channel:'test'}),updateAction:async()=>{throw new Error('Disabled in fixture');},setAutomaticUpdateChecks:async()=>{throw new Error('Disabled in fixture');},onUpdate:idle,onShowUpdates:idle,
    chooseBackupDirectory:async()=>undefined,openBackupDirectory:async()=>{},acknowledgeDocumentLink:async()=>{},acknowledgeOpenFiles:async()=>{},
-   onPrepareClose:idle,onDocumentLink:idle,onOpenFiles:idle,takeDocumentLink:async()=>undefined,takeOpenFiles:async()=>undefined,
+   onPrepareClose(callback){close.prepareClose=callback;return()=>{if(close.prepareClose===callback)delete close.prepareClose;};},onDocumentLink:idle,onOpenFiles:idle,takeDocumentLink:async()=>undefined,takeOpenFiles:async()=>undefined,
   };
  });
+ return {documents,failures};
 }
 
 for(const desktop of [false,true])test(`${desktop?'桌面':'Web'}连接后自动发现已加入的空间，刷新后仍可选择`,async({page})=>{
@@ -63,6 +68,109 @@ test('团队服务器不可用时保留本地工作区并显示加载失败提�
  await page.goto('/');
  await expect(page.getByLabel('当前工作区',{exact:true})).toHaveValue('local');
  await expect(page.getByRole('status').filter({hasText:'团队工作空间加载失败：测试服务器暂不可用'})).toBeVisible();
+});
+
+async function prepareClose(page:Page){
+ return page.evaluate(async()=>{
+  const close=(window as Window&{prepareClose?:()=>Promise<void>}).prepareClose;
+  if(!close)return '关闭检查未注册';
+  try{await close();return null;}catch(error){return error instanceof Error?error.message:String(error);}
+ });
+}
+
+for(const recover of [false,true])test(`已选团队空间离线启动后可${recover?'切回本地编辑并在重启后恢复':'直接通过关闭检查'}`,async({page})=>{
+ const {failures}=await fixture(page,true);
+ await page.goto('/');
+ const picker=page.getByLabel('当前工作区',{exact:true});
+ await expect(picker.locator('option[value="joined-team"]')).toHaveCount(1);
+ await picker.selectOption('joined-team');
+ await expect(picker).toHaveValue('joined-team');
+ failures.unavailable=true;
+ await page.reload();
+ await expect(page.getByRole('alert').filter({hasText:'工作区打开失败：测试服务器暂不可用'})).toBeVisible();
+ await expect(picker).toBeEnabled();
+ await expect(picker).toHaveValue('');
+ expect(await prepareClose(page)).toBeNull();
+ if(!recover)return;
+ await picker.selectOption('local');
+ await expect(picker).toHaveValue('local');
+ await expect(page.locator('.error-banner')).toHaveCount(0);
+ await page.getByRole('button',{name:'新建文件',exact:true}).first().click();
+ const dialog=page.getByRole('dialog',{name:'新建文件',exact:true});
+ await dialog.getByLabel('文件类型',{exact:true}).selectOption('note');
+ await dialog.getByRole('button',{name:'创建',exact:true}).click();
+ await page.getByLabel('文档标题',{exact:true}).fill('离线恢复后的本地文档');
+ await page.getByRole('textbox',{name:'文档正文',exact:true}).fill('团队服务器离线时仍可编辑并保存本地内容');
+ expect(await prepareClose(page)).toBeNull();
+ await page.reload();
+ await expect(picker).toHaveValue('local');
+ await expect(page.getByLabel('文档标题',{exact:true})).toHaveValue('离线恢复后的本地文档');
+ await expect(page.getByRole('textbox',{name:'文档正文',exact:true})).toContainText('团队服务器离线时仍可编辑并保存本地内容');
+});
+
+test('团队空间离线启动失败后可重新打开原团队空间',async({page})=>{
+ const {failures}=await fixture(page,true);
+ await page.goto('/');
+ const picker=page.getByLabel('当前工作区',{exact:true});
+ await expect(picker.locator('option[value="joined-team"]')).toHaveCount(1);
+ await picker.selectOption('joined-team');
+ await expect(picker).toHaveValue('joined-team');
+ failures.unavailable=true;
+ await page.reload();
+ await expect(page.getByRole('alert').filter({hasText:'工作区打开失败：测试服务器暂不可用'})).toBeVisible();
+ failures.unavailable=false;
+ let releaseStartup!:()=>void;
+ const startupGate=new Promise<void>(resolve=>{releaseStartup=resolve;});
+ await page.route(url=>url.pathname==='/api/storage/document'&&url.searchParams.get('id')==='registry:local',async route=>{
+  await startupGate;
+  await route.fallback();
+ });
+ await page.getByRole('button',{name:'重新打开',exact:true}).click();
+ try{
+  await expect(picker).toBeDisabled();
+  await expect(page.locator('.error-banner')).toHaveCount(0);
+  expect(await prepareClose(page)).toBe('工作区尚未打开，请重试打开后再关闭。');
+  failures.registryRead=true;
+ }finally{releaseStartup();}
+ await expect(page.getByRole('alert').filter({hasText:'工作区打开失败：SQLite 文档读取失败'})).toBeVisible();
+ await expect(picker).toBeDisabled();
+ expect(await prepareClose(page)).toBeNull();
+ failures.registryRead=false;
+ await page.getByRole('button',{name:'重新打开',exact:true}).click();
+ await expect(picker).toHaveValue('joined-team');
+ await expect(page.locator('.error-banner')).toHaveCount(0);
+ expect(await prepareClose(page)).toBeNull();
+});
+
+test('本地注册表读取失败后关闭检查读取最新错误状态，重试可恢复',async({page})=>{
+ const {failures}=await fixture(page,true);
+ failures.registryRead=true;
+ await page.goto('/');
+ await expect(page.getByRole('alert').filter({hasText:'工作区打开失败：SQLite 文档读取失败'})).toBeVisible();
+ await expect(page.getByLabel('当前工作区',{exact:true})).toBeDisabled();
+ expect(await prepareClose(page)).toBeNull();
+ failures.registryRead=false;
+ await page.getByRole('button',{name:'重新打开',exact:true}).click();
+ await expect(page.getByLabel('当前工作区',{exact:true})).toHaveValue('local');
+ expect(await prepareClose(page)).toBeNull();
+});
+
+test('真实本地保存失败仍阻止关闭',async({page})=>{
+ const {failures}=await fixture(page,true);
+ await page.goto('/');
+ await expect(page.getByLabel('当前工作区',{exact:true})).toHaveValue('local');
+ await page.getByRole('button',{name:'新建文件',exact:true}).first().click();
+ const dialog=page.getByRole('dialog',{name:'新建文件',exact:true});
+ await dialog.getByLabel('文件类型',{exact:true}).selectOption('note');
+ await dialog.getByRole('button',{name:'创建',exact:true}).click();
+ const editor=page.getByRole('textbox',{name:'文档正文',exact:true});
+ await expect(editor).toBeVisible();
+ expect(await prepareClose(page)).toBeNull();
+ failures.writes=true;
+ await editor.fill('保存失败时必须保留的正文');
+ await expect(page.getByRole('button',{name:'重试保存',exact:true}).first()).toBeVisible();
+ expect(await prepareClose(page)).toBe('测试保存失败');
+ await expect(editor).toContainText('保存失败时必须保留的正文');
 });
 
 for(const selected of [false,true])test(`用户管理${selected?'默认选择当前团队空间':'在本地工作区时先选择团队空间'}`,async({page})=>{

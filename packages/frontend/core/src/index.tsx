@@ -111,11 +111,12 @@ export function App() {
   useLayoutEffect(()=>{if(!workspace)return; const clean=reconcileWorkbench(bench,workspace.resourceIds()); if(clean!==bench){setBench(clean);return;} workspace.uiPreferences.set('workbench',bench);},[workspace,bench,workspace?[...workspace.resourceIds()].join(','):'']);
 
   useEffect(() => {
-    let active = true; const manager = new WorkspaceRegistry(new SQLiteStorage(),new SQLiteAssetStorage());
-    void manager.open().then(async () => {if(!window.mydocDesktop||cloudServerUrl())await manager.refreshCloud().catch(error=>{if(active)setNotice('团队工作空间加载失败：'+(error instanceof Error?error.message:'请检查服务器连接后重试'));}); const params = new URLSearchParams(location.hash.slice(1)); const requested = params.get('workspace'); let ws = await manager.select(manager.list().some(entry => entry.id === requested) ? requested! : manager.activeId);
+    setRegistry(null); setError('');
+    let active = true, registryOpened = false; const manager = new WorkspaceRegistry(new SQLiteStorage(),new SQLiteAssetStorage());
+    void manager.open().then(async () => {registryOpened = true;if(!window.mydocDesktop||cloudServerUrl())await manager.refreshCloud().catch(error=>{if(active)setNotice('团队工作空间加载失败：'+(error instanceof Error?error.message:'请检查服务器连接后重试'));}); const params = new URLSearchParams(location.hash.slice(1)); const requested = params.get('workspace'); let ws = await manager.select(manager.list().some(entry => entry.id === requested) ? requested! : manager.activeId);
       if (!requested && params.get('doc') && !ws.documents.has(params.get('doc')!) && manager.entries.has('local')) { const legacy = await manager.get('local'); if (legacy.documents.has(params.get('doc')!)) ws = await manager.select('local'); }
       if (active) { setRegistry(manager); activate(ws, params.get('doc')); setError(''); }
-    }).catch(error => { if (active) setError(`本地工作区打开失败：${error instanceof Error ? error.message : '存储初始化失败'}。请重试。`); });
+    }).catch(error => { if (active) { if (registryOpened) setRegistry(manager); setError(`工作区打开失败：${error instanceof Error ? error.message : '存储初始化失败'}。请重试或选择其他工作区。`); } });
     return () => { active = false; void manager.destroy(); };
   }, [retry]);
   useEffect(()=>window.mydocDesktop?.onPrepareClose(async()=>{
@@ -128,7 +129,7 @@ export function App() {
     window.dispatchEvent(new Event('mydoc-before-close'));
     await registry.flush();
     await projectPreferences.flush();
-  }),[registry,busy,importBusy]);
+  }),[registry,busy,importBusy,error]);
   useEffect(() => registry?.subscribe(refresh), [registry]); useEffect(() => workspace?.subscribe(refresh), [workspace]);
   useEffect(() => { const openOverview = () => setOverviewOpen(true); window.addEventListener('open-all-documents', openOverview); return () => window.removeEventListener('open-all-documents', openOverview); }, []);
   useEffect(()=>{const warn=(event:BeforeUnloadEvent)=>{if(workspace?.sync&&workspace.pendingDraft){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[workspace]);
@@ -174,7 +175,7 @@ export function App() {
   };
   const create = (folderId?: string) => {if(workspace&&!workspace.readOnly)setNewFile({folderId});};
   const toggleFavorite = (id: string) => void run(async () => { if (!workspace) return; if (workspace.persistence.state === 'error') await workspace.persistence.retry(); const before = !!workspace.fileMeta(id)?.favorite; workspace.setFileFavorite(id, !before); try { await workspace.persistence.flush(); } catch (error) { workspace.setFileFavorite(id, before); throw error; } });
-  const selectWorkspace = (id: string) => run(async () => { if (!registry || !workspace) return; await workspace.flush(); activate(await registry.select(id)); });
+  const selectWorkspace = (id: string) => run(async () => { if (!registry) return; await workspace?.flush(); activate(await registry.select(id)); });
   const refreshCloudWorkspace = async () => {
     if (!registry) return;
     await registry.flush();
