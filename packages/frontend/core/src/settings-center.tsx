@@ -1,5 +1,6 @@
+import {AgentSettings} from './agent/settings';
 import {useCallback,useEffect,useState} from 'react';
-import {ChevronDown,Palette,UserRound,Users,Package,Tags} from 'lucide-react';
+import {MessageSquare,ChevronDown,Palette,UserRound,Users,Package,Tags} from 'lucide-react';
 import {cloudJson,cloudServerUrl,type CloudAccount,type CloudMailStatus,type CloudWorkspace} from '../../../common/nbstore/src/cloud';
 import {Modal} from './dialogs';
 import {ServerConnections} from './server-connections';
@@ -13,7 +14,7 @@ import type {ThemeMode} from './theme';
 import type {LocalWorkspace} from './workspace';
 import {OrganizationPanel} from './organization-ui';
 
-export type SettingsTab='local'|'server'|'appearance'|'organization'|'users'|'spaces'|'releases';
+export type SettingsTab='local'|'server'|'appearance'|'organization'|'users'|'spaces'|'releases'|'agent';
 export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,onThemeSave,workspaces,activeWorkspaceId,workspace,initialTab='local'}:{onClose:()=>void;onRefresh:()=>Promise<void>;onCloudSessionChanged?:()=>Promise<void>;theme:ThemeMode;onThemeSave:(mode:ThemeMode)=>Promise<void>;workspaces:CloudWorkspace[];activeWorkspaceId?:string;workspace?:LocalWorkspace|null;initialTab?:SettingsTab}){
  const [tab,setTab]=useState<SettingsTab>(initialTab),[expanded,setExpanded]=useState(true),[user,setUser]=useState<CloudAccount|null>(),[mail,setMail]=useState<CloudMailStatus>({configured:false}),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [sessionError,setSessionError]=useState('');
@@ -27,6 +28,7 @@ export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,on
    <button className="settings-nav-group" aria-expanded={expanded} aria-controls="settings-account-options" onClick={()=>setExpanded(!expanded)}><UserRound size={17}/><span>账号</span><ChevronDown size={15} className={expanded?'expanded':''}/></button>
    <div id="settings-account-options" hidden={!expanded} className="settings-nav-children"><button aria-current={tab==='local'?'page':undefined} disabled={busy} onClick={()=>select('local')}>本地账号</button><button aria-current={tab==='server'?'page':undefined} disabled={busy} onClick={()=>select('server')}>服务器账号</button></div>
    <button aria-current={tab==='appearance'?'page':undefined} disabled={busy} onClick={()=>select('appearance')}><Palette size={17}/><span>外观</span></button>
+   <button aria-current={tab==='agent'?'page':undefined} disabled={busy} onClick={()=>select('agent')}><MessageSquare size={17}/><span>Agent</span></button>
    <p className="settings-nav-label">管理</p>
    <button aria-current={tab==='organization'?'page':undefined} disabled={busy||!workspace||workspace.readOnly} onClick={()=>select('organization')}><Tags size={17}/><span>标签与集合</span></button>
    <button aria-current={tab==='users'?'page':undefined} disabled={busy} onClick={()=>select('users')}><Users size={17}/><span>用户管理</span></button>
@@ -37,6 +39,7 @@ export function SettingsDialog({onClose,onRefresh,onCloudSessionChanged,theme,on
   <div className="settings-body" aria-busy={busy}>
    {error&&<p className="form-error" role="alert">{error}</p>}
    {tab==='local'&&<LocalAccountPanel/>}
+   {tab==='agent'&&<AgentSettings onBusyChange={setBusy}/>}
    {tab==='appearance'&&<AppearancePanel mode={theme} save={onThemeSave}/>}
    {tab==='organization'&&<section><h2>标签与集合</h2><p className="organization-help">维护当前工作区的标签和集合。文档筛选仍在侧栏中进行。</p>{!workspace?<p role="status">正在打开当前工作区…</p>:workspace.readOnly?<p role="status">当前工作区为只读，无法维护标签与集合。</p>:<OrganizationPanel key={workspace.id} workspace={workspace} onBusyChange={setBusy}/>}</section>}
    {tab==='server'&&<>

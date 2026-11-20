@@ -148,3 +148,12 @@ data/attachments/
 !/tests/office-word-reference.test.ts
 !/tests/office-pdf-pages.test.ts
 !/tests/spreadsheet-dimensions.test.ts
+!/tests/e2e/agent.spec.ts
+
+# Agent UI source (override personal global directory exclusions).
+!/packages/
+!/packages/frontend/core/src/agent/
+!/packages/frontend/core/src/agent/**
+
+local-agent-secrets/
+!/tests/agent-local-identity.test.ts

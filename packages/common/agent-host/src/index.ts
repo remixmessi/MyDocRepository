@@ -1,3 +1,4 @@
+export {createModelProvider} from './model-provider';
 export {CompatibleProvider} from './compatible-provider';
 export type {CompatibleModelConfig} from './compatible-provider';
 import {runAgent} from '@mydoc/agent-core';

@@ -56,3 +56,49 @@ it('retries only transient failures before the first event, then classifies erro
  expect(classifyModelError(new Error('Model HTTP status 429'))).toMatchObject({code:'rate_limited',retryable:true});
  expect(classifyModelError(new Error('Model HTTP status 400 body secret'))).toMatchObject({code:'invalid_response'});expect(classifyModelError(new Error('x')).message).not.toContain('x');
 });
+it('preserves native API types, defaults legacy settings to chat, and rejects unknown API types',async()=>{
+ const f=fixture();try{
+  f.store.save(settings);expect(f.store.provider()).toBeDefined();
+  for(const apiType of ['openai-responses','anthropic-messages'] as const){f.store.save({...settings,apiType});expect(f.store.publicView()?.apiType).toBe(apiType);expect(f.store.provider()).toBeDefined();
+   const end=apiType==='openai-responses'?[{type:'response.completed',response:{status:'completed',output:[]}}]:[{type:'message_start',message:{usage:{input_tokens:0,output_tokens:0}}},{type:'message_delta',delta:{stop_reason:'end_turn'},usage:{output_tokens:0}},{type:'message_stop'}];
+   let body:Record<string,unknown>={};const provider=f.store.provider(async(_url,init)=>{body=JSON.parse(init!.body as string);return new Response(end.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});})!;
+   expect((await collect(provider)).at(-1)).toEqual({type:'done'});expect(body).toHaveProperty(apiType==='openai-responses'?'input':'messages');}
+  expect(()=>f.store.save({...settings,apiType:'unknown' as never})).toThrow('API type');expect(f.store.publicView()?.apiType).toBe('anthropic-messages');
+ }finally{f.close();}
+});
+it('upgrades a legacy connection on first edit, keeps its key and routes the chosen default model',async()=>{
+ const f=fixture();try{
+  f.store.save({...settings,apiKey:'original-secret'});const ref=f.store.load()!.secretRef;
+  expect(f.store.publicConnections()).toMatchObject({connections:[{id:'legacy',name:'原有模型连接',models:['m'],hasKey:true}],defaultModel:{connectionId:'legacy',model:'m'}});
+  expect(f.db.db.prepare("SELECT 1 FROM preferences WHERE key='agent.connections'").get()).toBeUndefined();
+  const second=f.store.saveConnection({...settings,name:'第二服务',models:['m','other'],enabled:true,endpoint:'https://other.example.com/v1/responses',apiType:'openai-responses',apiKey:'second-secret'});
+  expect(f.store.load()!.secretRef).toBe(ref);expect(f.store.connections().connections).toHaveLength(2);
+  const {secretRef:secondRef,...secondInput}=f.store.connections().connections.find(c=>c.id===second)!;
+  f.store.saveConnection({...secondInput,name:'第二服务（编辑）',enabled:false,keepKey:true});expect(()=>f.store.setDefault(second,'other')).toThrow('不可用');
+  f.store.saveConnection({...secondInput,enabled:true,keepKey:true});expect(f.store.connections().connections.find(c=>c.id===second)?.secretRef).toBe(secondRef);
+  f.store.setDefault(second,'other');expect(f.store.publicView()).toMatchObject({model:'other',endpoint:'https://other.example.com/v1/responses',apiType:'openai-responses'});
+  let sent:Record<string,unknown>={};const provider=f.store.provider(async(_url,init)=>{sent=JSON.parse(init!.body as string);return new Response('data: '+JSON.stringify({type:'response.completed',response:{status:'completed',output:[]}})+'\n\n',{headers:{'Content-Type':'text/event-stream'}});})!;
+  await collect(provider);expect(sent.model).toBe('other');
+  expect(JSON.stringify(f.store.publicConnections())).not.toMatch(/original-secret|second-secret|safe:/);
+  const again=new ModelConfigStore(f.db,f.secrets);expect(again.publicConnections()).toEqual(f.store.publicConnections());
+  expect(()=>f.store.deleteConnection(second)).toThrow('其他默认');
+  expect(()=>f.store.setDefault(second,'missing')).toThrow('不可用');
+  const connection=f.store.connections().connections.find(c=>c.id===second)!;const {secretRef,...input}=connection;
+  expect(()=>f.store.saveConnection({...input,enabled:false,keepKey:true})).toThrow('其他默认');
+  expect(()=>f.store.saveConnection({...input,models:['m'],keepKey:true})).toThrow('其他默认');
+  f.store.setDefault('legacy','m');f.store.deleteConnection(second);expect(f.store.connections().connections).toHaveLength(1);expect(readdirSync(join(f.dir,'secrets'))).toHaveLength(1);
+  f.store.save({...settings,model:'updated',keepKey:true});expect(f.store.publicView()?.model).toBe('updated');expect(f.store.connections().connections[0].models).toContain('updated');
+ }finally{f.close();}
+});
+it('isolates collections by account and rolls back collection/default writes and new secrets on failure',()=>{
+ const f=fixture();try{
+  f.store.save({...settings,apiKey:'old-secret'});const before=f.store.publicConnections();
+  const other=new ModelConfigStore(f.db,f.secrets,undefined,'other-account');expect(other.connections().connections).toEqual([]);
+  other.saveConnection({...settings,name:'Other',enabled:true,models:['m']});expect(f.store.publicConnections()).toEqual(before);
+  const original=f.db.preference.bind(f.db);f.db.preference=(scope,key,value)=>{if(key==='agent.model')throw new Error('disk failed');return original(scope,key,value);};
+  expect(()=>f.store.saveConnection({...settings,name:'broken',enabled:true,models:['m'],apiKey:'new-secret'})).toThrow('disk failed');
+  expect(f.store.publicConnections()).toEqual(before);expect(readdirSync(join(f.dir,'secrets'))).toHaveLength(1);
+  f.db.preference=original;
+  expect(()=>f.store.saveConnection({...settings,name:'bad',enabled:true,models:['m','m']})).toThrow('无效');
+ }finally{f.close();}
+});

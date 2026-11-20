@@ -1,3 +1,6 @@
+import {AgentLauncher,useAgentLauncherVisibility} from './agent/launcher';
+import {setAgentMode} from './agent/client';
+import {AgentPanel} from './agent/panel';
 import {downloadTeamWorkspaceBackup,TeamWorkspaceRestoreDialog} from './team-workspace-backup-ui';
 import {isCloudWorkspaceArchive,type CloudWorkspaceArchive} from '../../../common/nbstore/src/workspace-archive';
 import {NewFileDialog} from './new-file-dialog';
@@ -86,6 +89,8 @@ function DocumentEditor({ item, meta, workspace, onDelete, busy, name, onMove, o
 export function App() {
   const desktopUpdate=useDesktopUpdates();
   const appearance=useAppearance(),[themeOpen,setThemeOpen]=useState(false);
+  const [agentOpen,setAgentOpen]=useState(false);
+  const {visible:agentIconVisible}=useAgentLauncherVisibility();
   const [cloudOpen,setCloudOpen]=useState(false);
   const [settingsOpen,setSettingsOpen]=useState(false); const [settingsTab,setSettingsTab]=useState<SettingsTab>('local');
   const [registry, setRegistry] = useState<WorkspaceRegistry | null>(null); const [workspace, setWorkspace] = useState<LocalWorkspace | null>(null);
@@ -130,6 +135,8 @@ export function App() {
     await registry.flush();
     await projectPreferences.flush();
   }),[registry,busy,importBusy,error]);
+  useEffect(()=>{const change=()=>{if(!workspace?.sync){setAgentOpen(false);if(settingsTab==='agent')setSettingsOpen(false);}};window.addEventListener('mydoc-local-account-changed',change);return()=>window.removeEventListener('mydoc-local-account-changed',change);},[workspace?.sync,settingsTab]);
+  useEffect(()=>{setAgentMode(workspace?.sync?'server':'local');setAgentOpen(false);if(settingsTab==='agent')setSettingsOpen(false);},[workspace?.id]);
   useEffect(() => registry?.subscribe(refresh), [registry]); useEffect(() => workspace?.subscribe(refresh), [workspace]);
   useEffect(() => { const openOverview = () => setOverviewOpen(true); window.addEventListener('open-all-documents', openOverview); return () => window.removeEventListener('open-all-documents', openOverview); }, []);
   useEffect(()=>{const warn=(event:BeforeUnloadEvent)=>{if(workspace?.sync&&workspace.pendingDraft){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[workspace]);
@@ -189,6 +196,7 @@ export function App() {
   const editorAction=(kind:'find'|'export'|'markdown')=>{if(selected)setEditorCommand({docId:selected,pane:bench.activePane,kind,tick:++commandTick.current});};
   const changeDocumentMode=async(mode:'page'|'board')=>{if(!selected||!workspace)return;const pane=bench.activePane,item=await workspace.openDocument(selected);readDocument(item.store);item.store.history.stopCapturing();setBench(state=>changeTabMode(state,pane,selected,mode));};
   const commands:PaletteCommand[]=workspace?[
+    {id:'agent',label:'打开 Agent 助手',keywords:'AI 问答 助手',run:()=>setAgentOpen(true)},
     {id:'navigation-history',label:'打开导航历史',keywords:'history navigation 最近访问',disabled:docs.length?undefined:'请先创建文档',run:()=>{window.dispatchEvent(new CustomEvent('open-document-navigation',{detail:workspace.id}));}},
     {id:'navigation-back',label:'导航后退',keywords:'back previous 返回',disabled:(bench[bench.activePane].history?.cursor??-1)>0?undefined:'没有更早的访问记录',run:()=>setBench(state=>navigateHistory(state,state.activePane,(state[state.activePane].history?.cursor??0)-1))},
     {id:'navigation-forward',label:'导航前进',keywords:'forward next',disabled:(bench[bench.activePane].history?.cursor??-1)>=0&&(bench[bench.activePane].history?.cursor??0)<(bench[bench.activePane].history?.entries.length??0)-1?undefined:'没有后续访问记录',run:()=>setBench(state=>navigateHistory(state,state.activePane,(state[state.activePane].history?.cursor??0)+1))},
@@ -221,6 +229,8 @@ export function App() {
       {!workspace && !error ? <div className="empty-state" role="status">正在打开本地工作区…</div> : workspace ? <>{(!!docs.length || !!workspace.officeResources.size) && <Workbench workspace={workspace} state={bench} onChange={setBench} onCloseTab={(pane,id)=>void run(async()=>{await workspace.flushResource(id);setBench(state=>closeTab(state,pane,id));})} busy={busy} render={(opened, tab, pane)=>{ const entry=workspace.documents.get(tab.docId); if(!entry)return null;return <DocumentEditor onAttachFiles={createAttachmentDocument} loadWorkspace={id=>registry!.get(id)} key={`${workspace.id}:${pane}:${tab.docId}`} item={opened} meta={entry} workspace={workspace} name={workspaceName} active={bench.activePane===pane} tab={tab} onMode={mode=>setBench(state=>changeTabMode(state,pane,tab.docId,mode))} boardRequest={tab.frameId?{frameId:tab.frameId,tick:tab.tick??0}:undefined} onNavigate={(id, targetWorkspace, frameId, other)=>{ const targetPane:PaneId=other?(pane==='left'?'right':'left'):pane; if(targetWorkspace===workspace.id){if(!workspace.documents.has(id)){setError('引用的文档已删除，正文内容已保留。');return;}setBench(state=>openTab(state,id,targetPane,frameId));setConfirmDelete(false);}else void run(async()=>{if(!registry||!registry.entries.has(targetWorkspace))throw new Error('引用的工作区不存在，正文内容已保留。');const target=await registry.get(targetWorkspace);if(!target.documents.has(id))throw new Error('引用的文档已删除，正文内容已保留。');await workspace.flush();activate(await registry.select(targetWorkspace),id);});}} onMove={folder=>void run(async()=>{workspace.moveDocument(entry.id,folder||null);await workspace.persistence.flush();})} busy={busy} onCommandHandled={()=>setEditorCommand(undefined)} commandRequest={editorCommand?.docId===entry.id&&editorCommand.pane===pane?editorCommand:undefined} onSaveTemplate={()=>setTemplateDialog({saveDocId:entry.id})} onDelete={()=>setConfirmDelete(true)}/>;}} />}{!docs.length && !workspace.officeResources.size && busy && <div className="empty-state" role="status">正在保存变更…</div>}{!docs.length && !workspace.officeResources.size && !busy && <div className="empty-state"><FileText size={32}/><h1>开始你的第一篇文档</h1><p>{registry?.entries.get(workspace.id)?.cloud?'文档会同步到工作空间，与成员共同编辑。':'记录想法与资料，内容自动保存到本机。'}</p><button className="primary" disabled={busy} onClick={()=>void create()}>新建文档</button></div>}</> : null}
       {confirmDelete && <div className="delete-confirm" role="alert"><span>删除“{meta?.title || '无标题文档'}”？将移入回收站，可随时恢复。</span><button onClick={() => setConfirmDelete(false)}>取消</button><button className="danger" onClick={() => void remove()}>确认删除</button></div>}
     </main>
+    <AgentLauncher visible={!!workspace&&!agentOpen&&agentIconVisible} onOpen={()=>setAgentOpen(true)}/>
+    {agentOpen&&<AgentPanel key={workspace?.id??"personal"} onClose={()=>setAgentOpen(false)} onOpenSettings={()=>{setSettingsTab('agent');setSettingsOpen(true);}}/>}
     {overviewOpen && workspace && <div className="document-overview-layer"><DocumentOverview workspace={workspace} busy={busy || importBusy} onCreate={() => void create()} onSelect={id => setSelected(id)} onFavorite={toggleFavorite} onAction={(id, kind) => setDocumentAction({ id, kind })} /></div>}
     {clipperOpen&&workspace&&<WebClipperDialog key={workspace.id} workspace={workspace} onClose={()=>setClipperOpen(false)} onFinish={id=>{setClipperOpen(false);setSelected(id);}} onTrash={()=>{setClipperOpen(false);setTrashOpen(true);}}/>}
     {importDialog&&workspace&&<DocumentImportDialog onBusyChange={setImportBusy} key={workspace.id} workspace={workspace} initialKind={importDialog.kind} initialFiles={importDialog.files} initialFolderId={importDialog.folderId} onOfficeFiles={workspace.officeAvailable?files=>{setImportDialog(null);officeFiles(files);}:undefined} onClose={()=>setImportDialog(null)} onFinish={id=>{setImportDialog(null);if(id)setSelected(id);}}/>}

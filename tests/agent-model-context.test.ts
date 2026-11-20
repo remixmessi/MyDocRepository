@@ -68,3 +68,59 @@ describe('model capabilities and usage',()=>{
   await expect((async()=>{for await(const _ of provider.stream([],[{name:'read',effect:'read',description:''}],signal())){} })()).rejects.toThrow('does not support tools');
  });
 });
+
+describe('native API transports',()=>{
+ const config={endpoint:'https://models.example.com/v1/endpoint',model:'m',maxOutputTokens:128,supportsTools:true};
+ const sse=(events:unknown[])=>events.map(event=>'data: '+JSON.stringify(event)+'\r\n\r\n').join('');
+ const tool={name:'read',effect:'read' as const,description:'read'};
+ async function native(type:'openai-responses'|'anthropic-messages',events:unknown[],messages:import('@mydoc/agent-contracts').Message[]=[],tools:import('@mydoc/agent-contracts').ToolSpec[]=[]){
+  const {createModelProvider}=await import('../packages/common/agent-host/src/model-provider');let request:RequestInit|undefined;
+  const bytes=new TextEncoder().encode(sse(events));
+  const provider=createModelProvider({...config,apiType:type,apiKey:'private-key'},async(_url,init)=>{request=init;return new Response(new ReadableStream({start(controller){for(const byte of bytes)controller.enqueue(Uint8Array.of(byte));controller.close();}}),{headers:{'Content-Type':'text/event-stream'}});});
+  const out=[];for await(const event of provider.stream(messages,tools,signal()))out.push(event);
+  return {out,body:JSON.parse(request!.body as string),headers:request!.headers,request};
+ }
+ const completed=(output:unknown[]=[])=>({type:'response.completed',response:{status:'completed',output,usage:{input_tokens:3,output_tokens:2,total_tokens:5}}});
+ const start={type:'message_start',message:{usage:{input_tokens:3,output_tokens:1,cache_read_input_tokens:4}}};
+ const finish=(reason='end_turn')=>[{type:'message_delta',delta:{stop_reason:reason},usage:{output_tokens:2}},{type:'message_stop'}];
+ it('Responses maps system, assistant calls, tool results and usage with fragmented UTF-8',async()=>{
+  const result=await native('openai-responses',[{type:'response.output_text.delta',delta:'中文'},completed([{type:'function_call',call_id:'c2',name:'read',arguments:'{"id":2}'}])],[{role:'system',text:'policy'},{role:'assistant',text:'reading',calls:[{id:'c1',name:'read',arguments:{id:1}}]},{role:'tool',callId:'c1',status:'ok',text:'result'}],[tool]);
+  expect(result.out).toEqual([{type:'text',text:'中文'},{type:'usage',usage:{inputTokens:3,outputTokens:2,totalTokens:5}},{type:'tool',call:{id:'c2',name:'read',arguments:{id:2}}},{type:'done'}]);
+  expect(result.body).toMatchObject({stream:true,store:false,max_output_tokens:128,input:[{role:'system',content:'policy'},{role:'assistant',content:'reading'},{type:'function_call',call_id:'c1',name:'read',arguments:'{"id":1}'},{type:'function_call_output',call_id:'c1',output:'result'}],tools:[{type:'function',name:'read'}]});
+  expect(result.body).not.toHaveProperty('messages');expect(result.headers).toMatchObject({Authorization:'Bearer private-key'});expect(result.request?.redirect).toBe('error');
+ });
+ it('Messages maps system separately, batches tool results and parses native text/usage',async()=>{
+  const result=await native('anthropic-messages',[start,{type:'content_block_start',index:0,content_block:{type:'text',text:''}},{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'中文'}},{type:'content_block_stop',index:0},...finish()],[{role:'system',text:'policy'},{role:'assistant',text:'',calls:[{id:'c1',name:'read',arguments:{}},{id:'c2',name:'read',arguments:{}}]},{role:'tool',callId:'c1',status:'ok',text:'one'},{role:'tool',callId:'c2',status:'error',text:'two'}],[tool]);
+  expect(result.out).toEqual([{type:'text',text:'中文'},{type:'usage',usage:{inputTokens:7,outputTokens:2,totalTokens:9}},{type:'done'}]);
+  expect(result.body).toMatchObject({system:'policy',max_tokens:128,messages:[{role:'assistant',content:[{type:'tool_use',id:'c1'},{type:'tool_use',id:'c2'}]},{role:'user',content:[{type:'tool_result',tool_use_id:'c1',is_error:false},{type:'tool_result',tool_use_id:'c2',is_error:true}]}],tools:[{name:'read',input_schema:{type:'object'}}]});
+  expect(result.headers).toMatchObject({'x-api-key':'private-key','anthropic-version':'2023-06-01'});expect(result.headers).not.toHaveProperty('Authorization');
+ });
+ it('Messages accumulates tool JSON and emits calls only after a complete message',async()=>{
+  const result=await native('anthropic-messages',[start,{type:'content_block_start',index:0,content_block:{type:'tool_use',id:'c',name:'read',input:{}}},{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:'{"id":'}},{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:'"文档"}'}},{type:'content_block_stop',index:0},...finish('tool_use')]);
+  expect(result.out).toContainEqual({type:'tool',call:{id:'c',name:'read',arguments:{id:'文档'}}});
+ });
+ it.each(['openai-responses','anthropic-messages'] as const)('%s rejects truncated streams, vendor errors and HTTP secret bodies',async type=>{
+  await expect(native(type,[])).rejects.toThrow('truncated');
+  await expect(native(type,[{type:'error',error:{message:'private-key'}}])).rejects.not.toThrow('private-key');
+  const {createModelProvider}=await import('../packages/common/agent-host/src/model-provider');
+  const provider=createModelProvider({...config,apiType:type},async()=>new Response('private-key',{status:401}));
+  await expect((async()=>{for await(const _ of provider.stream([],[],signal())){}})()).rejects.toThrow('Model HTTP status 401');
+  expect(()=>createModelProvider({...config,apiType:type,endpoint:'http://external.example.com'})).toThrow('HTTPS');
+ });
+ it('rejects incomplete Responses, malformed and duplicate tool calls',async()=>{
+  await expect(native('openai-responses',[{type:'response.incomplete'}])).rejects.toThrow('incomplete');
+  await expect(native('openai-responses',[completed([{type:'function_call',call_id:'c',name:'read',arguments:'bad-secret'}])])).rejects.toThrow('Invalid model tool JSON');
+  await expect(native('openai-responses',[completed([1,2].map(()=>({type:'function_call',call_id:'c',name:'read',arguments:'{}'})))])).rejects.toThrow('Duplicate');
+ });
+ it('rejects Messages length limit and unfinished content blocks',async()=>{
+  await expect(native('anthropic-messages',[start,...finish('max_tokens')])).rejects.toThrow('incomplete');
+  await expect(native('anthropic-messages',[start,{type:'content_block_start',index:0,content_block:{type:'text',text:''}},...finish()])).rejects.toThrow();
+ });
+ it.each(['openai-responses','anthropic-messages'] as const)('%s cancels a pending reader and refuses unsupported tools',async apiType=>{
+  const {createModelProvider}=await import('../packages/common/agent-host/src/model-provider');const controller=new AbortController();let cancelled=false;
+  const provider=createModelProvider({...config,apiType},async()=>new Response(new ReadableStream({cancel(){cancelled=true;}}),{headers:{'Content-Type':'text/event-stream'}}));
+  const pending=(async()=>{for await(const _ of provider.stream([],[],controller.signal)){}})();await new Promise(resolve=>setTimeout(resolve,5));controller.abort();await expect(pending).rejects.toThrow('cancelled');expect(cancelled).toBe(true);
+  const noTools=createModelProvider({...config,apiType,supportsTools:false},async()=>{throw new Error('must not request');});
+  await expect((async()=>{for await(const _ of noTools.stream([],[tool],signal())){}})()).rejects.toThrow('does not support tools');
+ });
+});

@@ -28,6 +28,7 @@ it('production service uses real cookie identity, fences requests and executes a
   expect(state.status).toBe('completed');expect((await call('/runs?id='+run.runId,'GET',undefined,b)).status).toBe(404);
   const events=await (await call('/events?session='+id)).json();expect(events.some((event:{payload:string})=>event.payload.includes('模型答复'))).toBe(true);
   const retry=await (await call('/runs','POST',{session:id,requestKey:'k',prompt:'你好'})).json();expect(retry.runId).toBe(run.runId);
+  const stream=await call('/subscribe?session='+id);expect(stream.headers.get('content-type')).toContain('text/event-stream');const reader=stream.body!.getReader();let received='';while(!received.includes('data: ')){const part=await reader.read();received+=new TextDecoder().decode(part.value);}expect(received).toContain('id: ');await reader.cancel();
   await fetch(root+'/logout',{method:'POST',headers:{Cookie:a.cookie}});expect((await call('/sessions')).status).toBe(401);
  }finally{await agents.close();await new Promise<void>(resolve=>server.close(()=>resolve()));await new Promise<void>(resolve=>model.close(()=>resolve()));cloud.close();rmSync(dir,{recursive:true,force:true});}
 });
@@ -59,6 +60,7 @@ it('desktop saves its own model through the API with encrypted keys; managed env
   expect(saved.status).toBe(200);const text=JSON.stringify(await saved.json())+JSON.stringify(await status());expect(text).not.toContain('desktop-secret');expect(text).toContain('"hasKey":true');
   expect(JSON.stringify(cloud.database.db.prepare('SELECT * FROM preferences').all())).not.toContain('desktop-secret');
   expect((await save({clear:true})).status).toBe(200);expect(await status()).toMatchObject({enabled:false});
+  const {SQLiteAgentStore}=await import('../packages/common/agent-host/src/sqlite-store');const store=new SQLiteAgentStore(cloud.database,'main');store.createSession('locked','personal','排队测试');store.enqueue('locked','queued','q','hi');expect((await save({clear:true})).status).toBe(409);
  }finally{await desktop.close();cloud.close();rmSync(dir,{recursive:true,force:true});}
 });
 it('shared server rejects user model configuration and validates the managed endpoint allow-list',async()=>{
@@ -72,4 +74,12 @@ it('shared server rejects user model configuration and validates the managed end
    expect((await fetch(root+'/api/agent/model',{method:'POST',headers:{'X-Mydoc-Generation':cloud.database.generation},body:JSON.stringify({clear:true})})).status).toBe(403);
   }finally{await agents.close();await new Promise<void>(resolve=>server.close(()=>resolve()));}
  }finally{cloud.close();rmSync(dir,{recursive:true,force:true});}
+});
+it('Vite development mounts the same authenticated Agent service with an isolated database',async()=>{
+ const {createServer:devServer}=await import('vite');const {cloudPlugin}=await import('../packages/frontend/apps/web/cloud-plugin');
+ const dir=mkdtempSync(join(tmpdir(),'mydoc-agent-dev-test-'));const saved={db:process.env.MYDOC_CLOUD_DB_PATH,config:process.env.MYDOC_CONFIG_PATH,test:process.env.MYDOC_TEST_STORAGE};
+ process.env.MYDOC_CLOUD_DB_PATH=join(dir,'cloud.sqlite');process.env.MYDOC_CONFIG_PATH=join(dir,'absent.json');delete process.env.MYDOC_TEST_STORAGE;
+ let server:Awaited<ReturnType<typeof devServer>>|undefined;
+ try{server=await devServer({configFile:false,plugins:[cloudPlugin()],server:{host:'127.0.0.1',port:0}});await server.listen();const root='http://127.0.0.1:'+(server.httpServer!.address() as {port:number}).port;expect((await fetch(root+'/api/agent/status')).status).toBe(401);}
+ finally{await server?.close();for(const [key,value] of [['MYDOC_CLOUD_DB_PATH',saved.db],['MYDOC_CONFIG_PATH',saved.config],['MYDOC_TEST_STORAGE',saved.test]])if(value===undefined)delete process.env[key!];else process.env[key!]=value;rmSync(dir,{recursive:true,force:true});}
 });

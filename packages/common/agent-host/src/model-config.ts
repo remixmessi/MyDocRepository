@@ -3,7 +3,8 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import type {Message,ModelGateway,ProviderEvent,ToolSpec} from '@mydoc/agent-contracts';
 import type {SQLiteProjectDatabase} from '../../nbstore/server/database';
-import {CompatibleProvider} from './compatible-provider';
+import {createModelProvider} from './model-provider';
+import type {ModelApiType} from '@mydoc/agent-contracts';
 /** Secrets never enter SQLite, backups, renderer responses, logs or the worker; only a reference does. */
 export interface SecretPort {readonly available:boolean;get(ref:string):string|undefined;put(value:string):string;delete(ref:string):void}
 /** Server deployments: references name environment variables an administrator provisioned. */
@@ -28,10 +29,13 @@ export class EncryptedFileSecrets implements SecretPort {
  }
  delete(ref:string){if(ref.startsWith('safe:'))rmSync(this.file(ref),{force:true});}
 }
-export interface ModelSettings {endpoint:string;model:string;maxOutputTokens:number;contextWindow:number;supportsTools:boolean;includeUsage:boolean;secretRef?:string}
+export interface ModelSettings {apiType?:ModelApiType;endpoint:string;model:string;maxOutputTokens:number;contextWindow:number;supportsTools:boolean;includeUsage:boolean;secretRef?:string}
 export interface PublicModelSettings extends Omit<ModelSettings,'secretRef'> {hasKey:boolean;keyAvailable:boolean}
 /** Shown on first configuration: exactly what leaves the device. */
 export const MODEL_DISCLOSURE='启用后，提问内容、所选上下文、获准读取的资料片段和工具结果会发送到你配置的模型地址；密钥只保存在本机系统加密存储，不会写入数据库、备份或日志。';
+export interface ModelConnection extends ModelSettings {id:string;name:string;models:string[];enabled:boolean}
+export interface ModelConnections {version:1;connections:ModelConnection[];defaultModel?:{connectionId:string;model:string}}
+const COLLECTION='agent.connections';
 const KEY='agent.model',SCOPE='agent-config';
 function host(endpoint:string){return new URL(endpoint).hostname.toLowerCase();}
 export function validateSettings(value:unknown,allowedHosts?:readonly string[]):asserts value is ModelSettings {
@@ -40,32 +44,75 @@ export function validateSettings(value:unknown,allowedHosts?:readonly string[]):
  if(!Number.isSafeInteger(s.maxOutputTokens)||s.maxOutputTokens<1||s.maxOutputTokens>1_000_000||!Number.isSafeInteger(s.contextWindow)||s.contextWindow>10_000_000)throw new Error('Invalid model limits');
  if(s.secretRef!==undefined&&(typeof s.secretRef!=='string'||s.secretRef.length>300))throw new Error('Invalid secret reference');
  // Constructing validates protocol, loopback-only HTTP and the context window.
- new CompatibleProvider({...s,apiKey:undefined});
+ createModelProvider({...s,apiKey:undefined});
  if(allowedHosts&&!allowedHosts.includes(host(s.endpoint)))throw new Error('模型地址不在允许列表中');
 }
 /** Host-owned configuration. The model and untrusted content can never choose an endpoint. */
 export class ModelConfigStore {
- constructor(private readonly database:SQLiteProjectDatabase,private readonly secrets:SecretPort,private readonly allowedHosts?:readonly string[]){}
- load():ModelSettings|undefined{
-  const row=this.database.db.prepare('SELECT value FROM preferences WHERE scope=? AND key=?').get(SCOPE,KEY) as {value:string}|undefined;if(!row)return undefined;
+ constructor(private readonly database:SQLiteProjectDatabase,private readonly secrets:SecretPort,private readonly allowedHosts?:readonly string[],private readonly scope=SCOPE){}
+ private legacyLoad():ModelSettings|undefined{
+  const row=this.database.db.prepare('SELECT value FROM preferences WHERE scope=? AND key=?').get(this.scope,KEY) as {value:string}|undefined;if(!row)return undefined;
   try{const value=JSON.parse(row.value);validateSettings(value,this.allowedHosts);return value;}catch{return undefined;}
  }
+ connections():ModelConnections{
+  const row=this.database.db.prepare('SELECT value FROM preferences WHERE scope=? AND key=?').get(this.scope,COLLECTION) as {value:string}|undefined;
+  if(row){const value=JSON.parse(row.value) as ModelConnections;if(value.version!==1||!Array.isArray(value.connections))throw new Error('Unsupported model configuration');return value;}
+  const old=this.legacyLoad();return {version:1,connections:old?[{...old,id:'legacy',name:'原有模型连接',models:[old.model],enabled:true}]:[],...(old?{defaultModel:{connectionId:'legacy',model:old.model}}:{})};
+ }
+ load():ModelSettings|undefined{
+  const collection=this.connections(),selected=collection.defaultModel;
+  const connection=collection.connections.find(item=>item.id===selected?.connectionId&&item.enabled&&item.models.includes(selected.model));
+  if(!connection||!selected)return undefined;
+  const {id,name,models,enabled,...settings}=connection;validateSettings(settings,this.allowedHosts);return {...settings,model:selected.model};
+ }
+ publicConnections(){const value=this.connections();return {...value,connections:value.connections.map(({secretRef,...item})=>({...item,hasKey:!!secretRef,keyAvailable:!secretRef||this.secrets.get(secretRef)!==undefined}))};}
+ private writeConnections(value:ModelConnections){
+  const selected=value.defaultModel,connection=value.connections.find(item=>item.id===selected?.connectionId);
+  this.database.db.transaction(()=>{
+   this.database.preference(this.scope,COLLECTION,JSON.stringify(value));
+   if(connection&&selected){const {id,name,models,enabled,...settings}=connection;this.database.preference(this.scope,KEY,JSON.stringify({...settings,model:selected.model}));}
+   else this.database.db.prepare('DELETE FROM preferences WHERE scope=? AND key=?').run(this.scope,KEY);
+  }).immediate();
+ }
+ saveConnection(input:Omit<ModelConnection,'id'|'secretRef'>&{id?:string;apiKey?:string;keepKey?:boolean}){
+  if(Object.hasOwn(input,'secretRef'))throw new Error('密钥引用只能由宿主生成');
+  const value=this.connections(),old=value.connections.find(item=>item.id===input.id);
+  if(input.id&&!old)throw new Error('连接不存在');
+  if(typeof input.name!=='string'||!input.name.trim()||input.name.length>100||typeof input.enabled!=='boolean'||!Array.isArray(input.models)||!input.models.length||input.models.length>100||input.models.some(m=>typeof m!=='string'||!m.trim()||m.length>200)||new Set(input.models).size!==input.models.length||!input.models.includes(input.model))throw new Error('连接名称或模型列表无效');
+  if(!old&&value.connections.length>=30)throw new Error('连接数量已达上限');
+  const {id,name,models,enabled,apiKey,keepKey,...settings}=input;
+  validateSettings(settings,this.allowedHosts);
+  if(apiKey!==undefined&&(typeof apiKey!=='string'||apiKey.length>4096||/\s/.test(apiKey)))throw new Error('Invalid API key');
+  if(keepKey&&old?.secretRef&&host(old.endpoint)!==host(settings.endpoint))throw new Error('更换模型地址时需要重新输入密钥');
+  if(value.defaultModel&&value.defaultModel.connectionId===id&&(!enabled||!models.includes(value.defaultModel.model)))throw new Error('请先选择其他默认模型');
+  const secretRef=apiKey?this.secrets.put(apiKey):keepKey?old?.secretRef:undefined;
+  const connection:ModelConnection={...settings,id:old?.id??randomUUID(),name:name.trim(),models:[...models],enabled,...(secretRef?{secretRef}:{})};
+  value.connections=old?value.connections.map(item=>item.id===old.id?connection:item):[...value.connections,connection];
+  if(!value.defaultModel&&enabled)value.defaultModel={connectionId:connection.id,model:connection.model};
+  try{this.writeConnections(value);}catch(error){if(secretRef&&secretRef!==old?.secretRef)this.secrets.delete(secretRef);throw error;}
+  if(old?.secretRef&&old.secretRef!==secretRef)this.secrets.delete(old.secretRef);
+  return connection.id;
+ }
+ setDefault(connectionId:string,model:string){const value=this.connections();if(!value.connections.some(item=>item.id===connectionId&&item.enabled&&item.models.includes(model)))throw new Error('默认模型不可用');value.defaultModel={connectionId,model};this.writeConnections(value);}
+ deleteConnection(id:string){const value=this.connections(),old=value.connections.find(item=>item.id===id);if(!old)throw new Error('连接不存在');if(value.defaultModel?.connectionId===id)throw new Error('请先选择其他默认模型');value.connections=value.connections.filter(item=>item.id!==id);this.writeConnections(value);if(old.secretRef)this.secrets.delete(old.secretRef);}
  publicView():PublicModelSettings|undefined{const s=this.load();if(!s)return undefined;const {secretRef,...rest}=s;return {...rest,hasKey:!!secretRef,keyAvailable:!secretRef||this.secrets.get(secretRef)!==undefined};}
  save(input:Omit<ModelSettings,'secretRef'>&{apiKey?:string;keepKey?:boolean}){
+  if(this.database.db.prepare('SELECT 1 FROM preferences WHERE scope=? AND key=?').get(this.scope,COLLECTION)){const value=this.connections(),old=value.connections.find(item=>item.id===value.defaultModel?.connectionId);if(!old)throw new Error('请通过连接管理添加模型');const {secretRef,...publicOld}=old;this.saveConnection({...publicOld,...input,models:[...new Set([...old.models,input.model])]});this.setDefault(old.id,input.model);return;}
+  if(Object.hasOwn(input,'secretRef'))throw new Error('密钥引用只能由宿主生成');
   const {apiKey,keepKey,...settings}=input,old=this.load();
   if(apiKey!==undefined&&(typeof apiKey!=='string'||apiKey.length>4096||/\s/.test(apiKey)))throw new Error('Invalid API key');
   validateSettings(settings,this.allowedHosts);
   // A kept key is bound to its original host; changing the endpoint never forwards it elsewhere.
   if(keepKey&&old?.secretRef&&host(old.endpoint)!==host(settings.endpoint))throw new Error('更换模型地址时需要重新输入密钥');
   const secretRef=apiKey?this.secrets.put(apiKey):keepKey?old?.secretRef:undefined;
-  this.database.preference(SCOPE,KEY,JSON.stringify({...settings,...(secretRef?{secretRef}:{})}));
+  this.database.preference(this.scope,KEY,JSON.stringify({...settings,...(secretRef?{secretRef}:{})}));
   if(old?.secretRef&&old.secretRef!==secretRef)this.secrets.delete(old.secretRef);
  }
- clear(){const old=this.load();this.database.db.prepare('DELETE FROM preferences WHERE scope=? AND key=?').run(SCOPE,KEY);if(old?.secretRef)this.secrets.delete(old.secretRef);}
+ clear(){const refs=this.connections().connections.map(item=>item.secretRef);this.database.db.prepare('DELETE FROM preferences WHERE scope=? AND key IN (?,?)').run(this.scope,KEY,COLLECTION);for(const ref of refs)if(ref)this.secrets.delete(ref);}
  provider(transport?:typeof fetch):ModelGateway|undefined{
   const s=this.load();if(!s)return undefined;
   const apiKey=s.secretRef?this.secrets.get(s.secretRef):undefined;if(s.secretRef&&apiKey===undefined)throw new ModelError('auth','模型密钥不可用，请重新配置');
-  return new ResilientModel(new CompatibleProvider({...s,apiKey},transport));
+  return new ResilientModel(createModelProvider({...s,apiKey},transport));
  }
 }
 export type ModelErrorCode='auth'|'rate_limited'|'unavailable'|'network'|'timeout'|'invalid_response'|'cancelled';

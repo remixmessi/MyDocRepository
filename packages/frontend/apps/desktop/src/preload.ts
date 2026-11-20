@@ -23,6 +23,7 @@ const bridge:DesktopBridge={
  takeOpenFiles:()=>ipcRenderer.invoke('mydoc:take-open-files'),
  acknowledgeOpenFiles:id=>ipcRenderer.invoke('mydoc:ack-open-files',id),
  onOpenFiles(callback){const listener=()=>callback();ipcRenderer.on('mydoc:open-files-available',listener);return()=>ipcRenderer.removeListener('mydoc:open-files-available',listener);},
+ agent:request=>ipcRenderer.invoke('mydoc:agent',request),
  storage:request=>ipcRenderer.invoke('mydoc:storage',request),
  onPrepareClose(callback){prepareClose=callback;return()=>{if(prepareClose===callback)prepareClose=async()=>{};};},
 };

@@ -1,3 +1,5 @@
+export const MODEL_API_TYPES = ['openai-chat-completions','openai-responses','anthropic-messages'] as const;
+export type ModelApiType = (typeof MODEL_API_TYPES)[number];
 export * from './lifecycle';
 import type {TokenUsage} from './lifecycle';
 /** Portable contracts: no platform, storage or UI dependencies. */

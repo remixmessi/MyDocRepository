@@ -35,6 +35,13 @@ ipcMain.handle('mydoc:update-status',event=>{if(!trusted(event)||!updater)throw 
 ipcMain.handle('mydoc:update-action',(event,action:unknown)=>{if(!trusted(event)||!updater||typeof action!=='string'||!['check','check-github','download','install'].includes(action))throw new Error('更新请求无效');return action==='check-github'?updater.checkGitHub():action==='check'?updater.updates.check():action==='download'?updater.updates.download():updater.updates.install();});
 ipcMain.handle('mydoc:update-server',(event,address:unknown)=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.checkServer(address);});
 ipcMain.handle('mydoc:update-settings',(event,value:unknown)=>{if(!trusted(event)||!updater)throw new Error('更新请求无效');return updater.updates.configure(value);});
+ipcMain.handle('mydoc:agent',async(event,input):Promise<DesktopStorageReply>=>{
+ if(!trusted(event)||!server||!input||typeof input.path!=='string'||input.path.length>2000)throw new Error('Agent 请求无效');
+ const url=new URL(input.path,'http://agent');const allowed:Record<string,string[]>={'/status':['GET'],'/sessions':['GET','POST'],'/sessions/delete':['POST'],'/events':['GET'],'/runs':['GET','POST'],'/cancel':['POST'],'/model':['POST']};
+ if(url.origin!=='http://agent'||url.hash||!allowed[url.pathname]?.includes(input.method)||input.body!==undefined&&(!(input.body instanceof Uint8Array)||input.body.length>110000)||input.generation!==undefined&&(typeof input.generation!=='string'||input.generation.length>100))throw new Error('Agent 请求无效');
+ const response=await fetch(server.origin+'/api/agent'+url.pathname+url.search,{method:input.method,headers:{Authorization:'Bearer '+server.token,'Content-Type':'application/json',...(input.generation?{'X-Mydoc-Generation':input.generation}:{})},body:input.body?.slice().buffer});
+ return {status:response.status,contentType:'application/json',body:new Uint8Array(await response.arrayBuffer())};
+});
 ipcMain.handle('mydoc:storage',async(event,input):Promise<DesktopStorageReply>=>{
  if(!trusted(event)||!validStorageRequest(input)||!server)throw new Error('桌面存储请求无效');
  const response=await fetch(server.origin+'/api/storage'+input.path,{method:input.method,headers:{Authorization:'Bearer '+server.token,...(input.generation?{'X-Mydoc-Generation':input.generation}:{}),...(input.officeGeneration?{'X-Mydoc-Office-Generation':input.officeGeneration}:{}),...(input.contentType?{'Content-Type':input.contentType}:{})},body:input.body?.slice().buffer});

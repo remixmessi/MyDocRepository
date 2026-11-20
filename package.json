@@ -34,7 +34,7 @@
     "test:cloud": "playwright test --config playwright.cloud.config.ts",
     "desktop:dist:mac:x64": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac --x64 --publish never",
     "desktop:dist:mac:arm64": "yarn desktop:build && yarn workspace @mydoc/desktop dist:mac --arm64 --publish never",
-    "test:agent": "vitest run tests/agent-framework.test.ts tests/agent-model-context.test.ts tests/agent-storage.test.ts tests/agent-durable-host.test.ts tests/agent-service.test.ts tests/agent-model-config.test.ts"
+    "test:agent": "vitest run tests/agent-framework.test.ts tests/agent-model-context.test.ts tests/agent-storage.test.ts tests/agent-durable-host.test.ts tests/agent-service.test.ts tests/agent-model-config.test.ts tests/agent-local-identity.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.1",

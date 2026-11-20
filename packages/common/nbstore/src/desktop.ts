@@ -2,6 +2,7 @@ export interface DesktopStorageRequest {path:string;method:string;body?:Uint8Arr
 export interface DesktopStorageReply {status:number;contentType:string;officeGeneration?:string;body:Uint8Array;}
 export interface DesktopOpenFiles {id:string;files:{name:string;bytes:Uint8Array;modified:number}[];errors:string[];}
 export interface DesktopBridge {
+ agent?(request:DesktopStorageRequest):Promise<DesktopStorageReply>;
  readonly platform:string;
  readonly arch:string;
  updateStatus():Promise<import('./updates').DesktopUpdateState>;
@@ -34,3 +35,5 @@ export async function sqliteFetch(path:string,init?:RequestInit):Promise<Respons
  const reply=await window.mydocDesktop.storage({path,method:init?.method??'GET',body,generation:storageGeneration,contentType,officeGeneration});
  return new Response([204,304].includes(reply.status)?null:reply.body.slice().buffer,{status:reply.status,headers:{'Content-Type':reply.contentType,...(reply.officeGeneration?{'X-Mydoc-Office-Generation':reply.officeGeneration}:{})}});
 }
+
+export function getStorageGeneration(){return storageGeneration;}

@@ -6,7 +6,7 @@ import type {SQLiteProjectDatabase} from './database';
 const localAuthAttempts=new WeakMap<SQLiteProjectDatabase,Map<string,{count:number;until:number}>>();
 function key(value:string|null){if(!value||value.length>1000||value.includes('\0'))throw new Error('存储标识无效');return value;}
 async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let size=0;for await(const part of req){size+=part.length;if(size>max)throw new Error('存储请求超过大小限制');chunks.push(Buffer.from(part));}return Buffer.concat(chunks);}
-export function storageHandler(database:SQLiteProjectDatabase,testMode=false,backups?:DatabaseBackups,scopeOverride?:string,office?:(req:IncomingMessage,res:ServerResponse,scope:string,check:()=>void)=>Promise<void>){return async(req:IncomingMessage,res:ServerResponse)=>{try{
+export function storageHandler(database:SQLiteProjectDatabase,testMode=false,backups?:DatabaseBackups,scopeOverride?:string,office?:(req:IncomingMessage,res:ServerResponse,scope:string,check:()=>void)=>Promise<void>,cookieOnlyLocalAccount=false){return async(req:IncomingMessage,res:ServerResponse)=>{try{
  const requestGeneration=database.generation;const checkGeneration=()=>{if(database.restoring)throw new Error('数据库正在恢复，请稍后重试');if(database.generation!==requestGeneration||req.headers['x-mydoc-generation']&&req.headers['x-mydoc-generation']!==database.generation)throw new Error('数据库已恢复或服务已重启，请重新载入页面；尚未保存的内容请先复制。');};const mutate=<T>(action:()=>T)=>database.db.transaction(()=>{checkGeneration();return action();}).immediate();const readBody=async(max:number)=>{const result=await body(req,max);checkGeneration();return result;};
  const origin=req.headers.origin;if(origin&&new URL(origin).host!==req.headers.host){res.writeHead(403);res.end('禁止跨站存储访问');return;}
  const scope=scopeOverride??(testMode?String(req.headers['x-mydoc-test-scope']??'test'): 'main');key(scope);const url=new URL(req.url??'/','http://local'),route=url.pathname;res.setHeader('Cache-Control','no-store');const json=(value:unknown,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
@@ -20,10 +20,12 @@ export function storageHandler(database:SQLiteProjectDatabase,testMode=false,bac
    const ip=req.socket.remoteAddress??'local',now=Date.now();for(const [key,value] of attempts)if(value.until<now)attempts.delete(key);
    const attempt=attempts.get(ip)??{count:0,until:now+60000};attempts.set(ip,attempt);if(++attempt.count>15){json({error:'尝试过于频繁，请稍后重试'},429);return;}
   }
+  const localCookie=req.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith('mydoc_local_session='))?.slice('mydoc_local_session='.length);
+  const setLocalCookie=(token:string)=>res.setHeader('Set-Cookie',`mydoc_local_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token?604800:0}${req.headers['x-forwarded-proto']==='https'?'; Secure':''}`);
   const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
   if(['session','logout'].includes(input.action)){
-   const token=typeof input.token==='string'?input.token:'';
-   if(input.action==='logout'){database.db.prepare('DELETE FROM local_account_sessions WHERE token=?').run(digest(token));json({user:null});return;}
+   const token=localCookie||(!cookieOnlyLocalAccount&&typeof input.token==='string'?input.token:'');
+   if(input.action==='logout'){database.db.prepare('DELETE FROM local_account_sessions WHERE token=?').run(digest(token));setLocalCookie('');json({user:null});return;}
    const user=database.db.prepare('SELECT u.id,u.email,u.name FROM local_accounts u JOIN local_account_sessions s ON u.id=s.user WHERE s.token=? AND s.expires>?').get(digest(token),Date.now());json({user:user??null});return;
   }
   const email=typeof input.email==='string'?input.email.trim().toLowerCase():'',password=typeof input.password==='string'?input.password:'';
@@ -36,11 +38,12 @@ export function storageHandler(database:SQLiteProjectDatabase,testMode=false,bac
    mutate(()=>database.db.prepare('INSERT INTO local_accounts VALUES (?,?,?,?,?)').run(row!.id,email,name,salt,row!.password));
   }else if(input.action!=='login'){json({error:'无效的账号操作'},400);return;}
   if(!row||!timingSafeEqual(scryptSync(password,row.salt,64),Buffer.from(row.password,'hex'))){json({error:'邮箱或密码不正确'},401);return;}
-  const token=randomBytes(32).toString('hex');mutate(()=>database.db.prepare('INSERT INTO local_account_sessions VALUES (?,?,?)').run(digest(token),row!.id,Date.now()+7*86400000));
-  json({user:{id:row.id,email:row.email,name:row.name},token});return;
+  if(input.action==='login'&&input.verifyOnly===true){json({user:{id:row.id,email:row.email,name:row.name}});return;}
+  const token=randomBytes(32).toString('hex');mutate(()=>{if(localCookie)database.db.prepare('DELETE FROM local_account_sessions WHERE token=?').run(digest(localCookie));database.db.prepare('INSERT INTO local_account_sessions VALUES (?,?,?)').run(digest(token),row!.id,Date.now()+7*86400000);});
+  setLocalCookie(token);json({user:{id:row.id,email:row.email,name:row.name},...(!cookieOnlyLocalAccount?{token}:{})});return;
  }
  if(route.startsWith('/backups')&&backups&&!testMode){if(route==='/backups'&&req.method==='GET'){json(backups.status());return;}if(route==='/backups/create'&&req.method==='POST'){checkGeneration();json(await backups.create());return;}if(route==='/backups/settings'&&req.method==='PUT'){json(backups.configure(JSON.parse((await readBody(4096)).toString())));return;}if(route==='/backups/preview'&&req.method==='GET'){json(await backups.preview(key(url.searchParams.get('id'))));return;}if(route==='/backups/restore'&&req.method==='POST'){checkGeneration();json(await backups.restore(key(url.searchParams.get('id'))));return;}}
- if(route==='/status'&&req.method==='GET'){json({accountId:scopeOverride?.startsWith('user:')?scopeOverride.slice(5):undefined,generation:database.generation,storage:'sqlite',initialized:true,schemaVersion:database.schemaVersion,empty:!database.db.prepare('SELECT 1 FROM documents WHERE scope=? LIMIT 1').get(scope),assetCount:(database.db.prepare('SELECT count(*) count FROM assets WHERE scope=?').get(scope) as {count:number}).count,preferences:Object.fromEntries((database.db.prepare('SELECT key,value FROM preferences WHERE scope=?').all(scope) as {key:string;value:string}[]).map(p=>[p.key,p.value]))});return;}
+ if(route==='/status'&&req.method==='GET'){json({accountId:scopeOverride?.startsWith('user:')?scopeOverride.slice(5):undefined,generation:database.generation,storage:'sqlite',initialized:true,schemaVersion:database.schemaVersion,empty:!database.db.prepare('SELECT 1 FROM documents WHERE scope=? LIMIT 1').get(scope),assetCount:(database.db.prepare('SELECT count(*) count FROM assets WHERE scope=?').get(scope) as {count:number}).count,preferences:Object.fromEntries((database.db.prepare('SELECT key,value FROM preferences WHERE scope=?').all(scope) as {key:string;value:string}[]).filter(p=>!cookieOnlyLocalAccount||p.key!=='local-account-session').map(p=>[p.key,p.value]))});return;}
  if(route==='/sync-drafts'&&req.method==='GET'){const entries=database.db.prepare("SELECT id,server,workspace,doc,data,created,generation FROM drafts WHERE scope=? AND doc LIKE 'doc:%' ORDER BY created DESC LIMIT 1000").all(scope) as {id:string;server:string;workspace:string;doc:string;data:Uint8Array;created:number;generation:string}[];if(entries.reduce((n,row)=>n+row.data.length,0)>32*1024*1024)throw new Error('暂存草稿总量超过读取限制，请分批处理');json(entries.map(entry=>({...entry,data:Buffer.from(entry.data).toString('base64')})));return;}
  if(route==='/sync-queue'){
   const target={scope,server:key(url.searchParams.get('server')),workspace:key(url.searchParams.get('workspace')),doc:key(url.searchParams.get('id'))};
